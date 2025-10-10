@@ -4,7 +4,6 @@ import "base:intrinsics"
 import "base:runtime"
 import "core:dynlib"
 import "core:log"
-import "core:math"
 import "core:mem"
 import "core:slice"
 import "core:strings"
@@ -25,6 +24,7 @@ ENABLE_VALIDATION_LAYERS :: #config(ENABLE_VALIDATION_LAYERS, ODIN_DEBUG)
 MAX_FRAMES_IN_FLIGHT :: 2
 
 SHADER_PULSE_ECHO_COMP :: #load("../shaders/pulse_echo.comp.spv")
+SHADER_PULSE_ECHO_CUM_COMP :: #load("../shaders/pulse_echo_cum.comp.spv")
 
 @(private = "file")
 debugLogger: log.Logger
@@ -175,8 +175,6 @@ vkCreateSimulator :: proc(settings: SimulationSettings, simulator: ^vkSimulator)
 	if (!settings.headless) {
 		must(vkCreateSwapchain(simulator^, &simulator.swapchain))
 		must(vkCreateRenderPass(simulator^, &simulator.renderPass))
-		// createFramebuffers
-		// createGraphicsPipeline
 	}
 
 	must(vkCreateComputePipeline(simulator^, &simulator.computePipeline))
