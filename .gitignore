@@ -17,6 +17,7 @@
 
 # Debugger Files
 *.pdb
+*.rdi
 
 # Compiled Dynamic libraries
 *.so
@@ -44,3 +45,6 @@
 
 # fieldII
 +fieldII/
+
+# Render Doc Captures
+*.rdc
