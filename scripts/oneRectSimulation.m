@@ -18,9 +18,9 @@ impulseResponse = 1;
 % excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
 excitation = 1;
 
-scatterPosition = [0, 0, 20e-3]*4;
+% scatterPosition = [0, 0, 20e-3]*4;
 % scatterPosition = [0, 5e-3, 20e-3]*1;
-% scatterPosition = [5e-3, 5e-3, 20e-3]*1;
+scatterPosition = [5e-3, 5e-3, 20e-3]*1;
 % scatterPosition = [10e-3, 5e-3, 20e-3]*1;
 
 diePositionT = [0, 0, 0]*1e-3;
@@ -109,14 +109,14 @@ minReceiveDistance = inf;
 maxReceiveDistance = 0;
 
 for i = 1:numel(scatters)
-    for j= 1:numel(transmitElements) 
+    for j= 1:numel(transmitElements)
         delta = norm(scatters(i).Position - transmitElements(j).Position, 2);
         elementDelta = norm(transmitElements(j).Size/2, 2);
         minTransmitDistance = min(minTransmitDistance, delta - elementDelta);
         maxTransmitDistance = max(maxTransmitDistance, delta + elementDelta);
     end
 
-    for j= 1:numel(receiveElements) 
+    for j= 1:numel(receiveElements)
         delta = norm(scatters(i).Position - receiveElements(j).Position, 2);
         elementDelta = norm(receiveElements(j).Size/2, 2);
         minReceiveDistance = min(minReceiveDistance, delta - elementDelta);
@@ -146,7 +146,7 @@ transmitSamples = transmitTimes*fs;
 receiveSampleCount = ceil((maxReceiveTime - minReceiveTime)/dt);
 receiveTimes = minReceiveTime - dt*sampleCountPadding/4 + dt*(0:(receiveSampleCount + sampleCountPadding));
 receiveSamples = receiveTimes*fs;
- 
+
 transmitValues = zeros(size(transmitSamples));
 for i = 1:numel(transmitTimes)
     transmitValues(i) = sample_rect_aperture(transmitSamples(i), nRectT);
@@ -182,6 +182,7 @@ minN = int32(0);
 maxN = int32(manVkSampleCount-1);
 
 manualConvRf = zeros(1, manVkSampleCount, 'single');
+manVkTimes = manualStartTime + (0:(manVkSampleCount-1))/fs;
 nRectROff = nRectR - manualStartTime*fs;
 
 for n = minN:maxN
@@ -203,38 +204,38 @@ for n = minN:maxN
 end
 
 function value = sample_rect_aperture(n, rectSamples)
-    qDelta = rectSamples(4) - rectSamples(1) < 1; % Delta
-    qRect = ~qDelta && (rectSamples(2) - rectSamples(1) < 1); % Rectangle
-    qTri = ~qDelta && (rectSamples(3) - rectSamples(2) < 1); % Triangle
-    qTrap = ~(qDelta | qRect | qTri); % Trapezoid
+qDelta = rectSamples(4) - rectSamples(1) < 1; % Delta
+qRect = ~qDelta && (rectSamples(2) - rectSamples(1) < 1); % Rectangle
+qTri = ~qDelta && (rectSamples(3) - rectSamples(2) < 1); % Triangle
+qTrap = ~(qDelta | qRect | qTri); % Trapezoid
 
-    qRectLeft = (n >= rectSamples(2) - 0.5) & (n <= rectSamples(2) + 0.5); % Left Rectangle Edge
-    qRectCenter = (n > rectSamples(2) + 0.5) & (n <= rectSamples(3) - 0.5); % Rectangle
-    qRectRight = (n > rectSamples(3) - 0.5) & (n <= rectSamples(3) + 0.5); % Right Rectangle Edge
+qRectLeft = (n >= rectSamples(2) - 0.5) & (n <= rectSamples(2) + 0.5); % Left Rectangle Edge
+qRectCenter = (n > rectSamples(2) + 0.5) & (n <= rectSamples(3) - 0.5); % Rectangle
+qRectRight = (n > rectSamples(3) - 0.5) & (n <= rectSamples(3) + 0.5); % Right Rectangle Edge
 
-    qTriLeft = (n >= rectSamples(1)) & (n <= rectSamples(2)); % Left Triangle
-    qTriRight = (n > rectSamples(3)) & (n <= rectSamples(4)); % Right Triangle
+qTriLeft = (n >= rectSamples(1)) & (n <= rectSamples(2)); % Left Triangle
+qTriRight = (n > rectSamples(3)) & (n <= rectSamples(4)); % Right Triangle
 
-    qTrapLeft = qTriLeft; % Left Trapezoid
-    qTrapCenter = (n > rectSamples(2)) & (n <= rectSamples(3)); % Center Trapezoid
-    qTrapRight = qTriRight; % Right Trapezoid
+qTrapLeft = qTriLeft; % Left Trapezoid
+qTrapCenter = (n > rectSamples(2)) & (n <= rectSamples(3)); % Center Trapezoid
+qTrapRight = qTriRight; % Right Trapezoid
 
 
-    sDelta = 1 - abs(n - rectSamples(1)); % Delta
+sDelta = 1 - abs(n - rectSamples(1)); % Delta
 
-    sRectLeft = n - (rectSamples(2) - 0.5); % Left Rectangle Edge
-    sRectCenter = 1; % Rectangle
-    sRectRight = 1 - (n - (rectSamples(3) - 0.5)); % Right Rectangle Edge
+sRectLeft = n - (rectSamples(2) - 0.5); % Left Rectangle Edge
+sRectCenter = 1; % Rectangle
+sRectRight = 1 - (n - (rectSamples(3) - 0.5)); % Right Rectangle Edge
 
-    sTriLeft = (n - rectSamples(1)) ./ (rectSamples(2) - rectSamples(1) + eps); % Left Triangle
-    sTriRight = 1 - ((n - rectSamples(3)) ./ (rectSamples(4) - rectSamples(3) + eps)); % Right Triangle
+sTriLeft = (n - rectSamples(1)) ./ (rectSamples(2) - rectSamples(1) + eps); % Left Triangle
+sTriRight = 1 - ((n - rectSamples(3)) ./ (rectSamples(4) - rectSamples(3) + eps)); % Right Triangle
 
-    sTrapLeft = sTriLeft; % Left Trapezoid
-    sTrapCenter = sRectCenter; % Center Trapezoid
-    sTrapRight = sTriRight; % Right Trapezoid
+sTrapLeft = sTriLeft; % Left Trapezoid
+sTrapCenter = sRectCenter; % Center Trapezoid
+sTrapRight = sTriRight; % Right Trapezoid
 
-    value = qDelta*sDelta + qRect*(qRectLeft*sRectLeft + qRectCenter*sRectCenter + qRectRight*sRectRight) + qTri*(qTriLeft*sTriLeft + qTriRight*sTriRight) +  qTrap*(qTrapLeft*sTrapLeft + qTrapCenter*sTrapCenter + qTrapRight*sTrapRight);
-    value = saturate(value);
+value = qDelta*sDelta + qRect*(qRectLeft*sRectLeft + qRectCenter*sRectCenter + qRectRight*sRectRight) + qTri*(qTriLeft*sTriLeft + qTriRight*sTriRight) +  qTrap*(qTrapLeft*sTrapLeft + qTrapCenter*sTrapCenter + qTrapRight*sTrapRight);
+value = saturate(value);
 
     function v = saturate(a)
         v = min(1, max(0, a));
@@ -244,7 +245,54 @@ end
 manualConvRf = conv(manualConvRf, single(impulseResponse))*single(dt);
 manualConvRf = conv(manualConvRf, single(impulseResponse))*single(dt);
 manualConvRf = conv(manualConvRf, single(excitation))*single(dt);
-manVkTimes = manualStartTime + (0:(numel(manualConvRf)-1))/fs;
+
+%% Cumulative Loop
+
+manualCumConvRf = zeros(1, manVkSampleCount, 'single');
+for n = minN:maxN
+    minK = int32(max(floor(nRectT(1) - 0.5), double(n) - ceil(nRectROff(4) + 0.5)));
+    maxK = int32(min(ceil(nRectT(4) + 0.5), double(n) - floor(nRectROff(1) - 0.5)));
+
+    summ = single(0);
+    for j = minK:maxK
+        tT = double(j);
+        tR = double(n - j);
+        vT = sample_rect_aperture_cum(tT, nRectT) - sample_rect_aperture_cum(tT - 1, nRectT);
+        vR = sample_rect_aperture_cum(tR + 1, nRectROff) - sample_rect_aperture_cum(tR, nRectROff);
+        summ = summ  + single(vT*vR);
+    end
+    summ = summ * single(powerT * powerR * scatters(1).Amplitude*dt);
+    if (n >= 0 && n < manVkSampleCount)
+        manualCumConvRf(n + 1) = summ;
+    end
+end
+
+function value = sample_rect_aperture_cum(n, rectSamples)
+qDelta = rectSamples(1) == rectSamples(4); % Delta
+qRect = ~qDelta && (rectSamples(1) == rectSamples(2)); % Rectangle
+qTri = ~qDelta && (rectSamples(2) == rectSamples(3)); % Triangle
+qTrap = ~(qDelta | qRect | qTri); % Trapezoid
+
+sDelta = n >= rectSamples(1); % Delta
+
+sRect = (rectSamples(3) - rectSamples(2)) * saturate((n - rectSamples(2)) / (rectSamples(3) - rectSamples(2)));
+
+sTriLeft = 0.5 * (rectSamples(2) - rectSamples(1)) * saturate((n - rectSamples(1)) / (rectSamples(2) - rectSamples(1)))^2;
+sTriRight = 0.5 * (rectSamples(4) - rectSamples(3))*(1 - saturate((rectSamples(4) - n) / (rectSamples(4) - rectSamples(3)))^2);
+
+value = qDelta * sDelta ...
+    + qRect * sRect ...
+    + qTri  * (sTriLeft + sTriRight) ...
+    + qTrap * (sTriLeft + sRect + sTriRight);
+
+    function v = saturate(a)
+        v = min(1, max(0, a));
+    end
+end
+
+manualCumConvRf = conv(manualCumConvRf, single(impulseResponse))*single(dt);
+manualCumConvRf = conv(manualCumConvRf, single(impulseResponse))*single(dt);
+manualCumConvRf = conv(manualCumConvRf, single(excitation))*single(dt);
 
 %% vkField
 
@@ -263,13 +311,14 @@ f1 = figure(); ax1 = axes(); hold(ax1, "on");
 p1(1) = plot(ax1, times*1e6, fullRF, '-');
 p1(2) = plot(ax1, fraunTimes*1e6, fraun, '-');
 p1(3) = plot(ax1, manVkTimes*1e6, manualConvRf, '-');
-p1(4) = plot(ax1, vkTimes*1e6, pulseEcho, '-');
-legend(ax1, "FieldII", "Manual Fraunhoffer", "Manual Fraounhoffer with Manual Convolution", "vkField");
+p1(4) = plot(ax1, manVkTimes*1e6, manualCumConvRf, '-');
+p1(5) = plot(ax1, vkTimes*1e6, pulseEcho, '-');
+legend(ax1, "FieldII", "Manual Fraunhoffer", "Manual Fraounhoffer with Manual Convolution", "Manual Fraounhoffer Cumulative with Manual Convolution", "vkField");
 
 lineWidth = 16;
 for i = 1:numel(p1)
     p1(i).LineWidth = lineWidth;
-    lineWidth = lineWidth * 0.5;
+    lineWidth = lineWidth * 0.75;
 end
 
 %% Measurements
@@ -278,6 +327,7 @@ fprintf("\n\n Sim to Distance Ratios\n")
 fprintf("FieldII Energy to distance ratio %g\n", sum(abs(fullRF))/distanceRatio);
 fprintf("Fraunhoffer Energy to distance ratio %g\n", double(sum(abs(fraun)))/distanceRatio);
 fprintf("Manual Conv Energy to distance ratio %g\n", double(sum(abs(manualConvRf)))/distanceRatio);
+fprintf("Manual Cumulative Energy to distance ratio %g\n", double(sum(abs(manualCumConvRf)))/distanceRatio);
 fprintf("vkField Energy to distance ratio %g\n", double(sum(abs(pulseEcho)))/distanceRatio);
 
 distanceRatio = 1/(2*pi*lT)*(2*pi*lR);
@@ -285,11 +335,13 @@ fprintf("\n\n Sim Energy Density to Distance Ratios\n")
 fprintf("FieldII Energy Density to distance ratio %g\n", sum(abs(fullRF))/distanceRatio);
 fprintf("Fraunhoffer Energy Density to distance ratio %g\n", double(sum(abs(fraun)))/distanceRatio);
 fprintf("Manual Conv Energy Density to distance ratio %g\n", double(sum(abs(manualConvRf)))/distanceRatio);
+fprintf("Manual Cumulative Energy Density to distance ratio %g\n", double(sum(abs(manualCumConvRf)))/distanceRatio);
 fprintf("vkField Energy Density to distance ratio %g\n", double(sum(abs(pulseEcho)))/distanceRatio);
 
 fprintf("\n\n Sim to Field II Ratios\n")
 fprintf("Fraunhoffer to FieldII ratio %g\n", double(sum(abs(fraun)))/sum(abs(fullRF)));
 fprintf("Manual Conv to FieldII ratio %g\n", double(sum(abs(manualConvRf)))/sum(abs(fullRF)));
+fprintf("Manual Cumulative to FieldII ratio %g\n", double(sum(abs(manualCumConvRf)))/sum(abs(fullRF)));
 fprintf("vkField to FieldII ratio %g\n", double(sum(abs(pulseEcho)))/sum(abs(fullRF)));
 
 %%% Near field (Exact Analytic) Rectangle spatial impulse
@@ -299,14 +351,14 @@ fprintf("vkField to FieldII ratio %g\n", double(sum(abs(pulseEcho)))/sum(abs(ful
 % d2 = y - b;
 % d3 = x + a;
 % d4 = y + b;
-% 
+%
 % taua = sqrt(d1^2 + d2^2 + z^2)/c;
 % taub = sqrt(d2^2 + d3^2 + z^2)/c;
 % tauc = sqrt(d1^2 + d4^2 + z^2)/c;
 % taud = sqrt(d3^2 + d4^2 + z^2)/c;
-% 
+%
 % sigma = sqrt(c^2*t^2 - z^2);
-% 
+%
 % alpha1 = arcsin(d1/sigma);
 
 %% Region 1, x >= a, y >= b

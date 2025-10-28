@@ -4,7 +4,6 @@ import "base:intrinsics"
 import "base:runtime"
 import "core:dynlib"
 import "core:log"
-import "core:math"
 import "core:mem"
 import "core:slice"
 import "core:strings"
@@ -24,7 +23,10 @@ ENABLE_VALIDATION_LAYERS :: #config(ENABLE_VALIDATION_LAYERS, ODIN_DEBUG)
 
 MAX_FRAMES_IN_FLIGHT :: 2
 
+USE_CUMULATIVE_COMPUTE :: #config(USE_CUMULATIVE_COMPUTE, true)
+
 SHADER_PULSE_ECHO_COMP :: #load("../shaders/pulse_echo.comp.spv")
+SHADER_PULSE_ECHO_CUM_COMP :: #load("../shaders/pulse_echo_cum.comp.spv")
 
 @(private = "file")
 debugLogger: log.Logger
@@ -171,12 +173,14 @@ vkCreateSimulator :: proc(settings: SimulationSettings, simulator: ^vkSimulator)
 		&simulator.shaderModules,
 		vkCreateShaderModule(simulator^, {name = "Pulse Echo", stage = {.COMPUTE}, entryPoint = "main", code = SHADER_PULSE_ECHO_COMP}),
 	)
+	append(
+		&simulator.shaderModules,
+		vkCreateShaderModule(simulator^, {name = "Cumulative Pulse Echo", stage = {.COMPUTE}, entryPoint = "main", code = SHADER_PULSE_ECHO_CUM_COMP}),
+	)
 
 	if (!settings.headless) {
 		must(vkCreateSwapchain(simulator^, &simulator.swapchain))
 		must(vkCreateRenderPass(simulator^, &simulator.renderPass))
-		// createFramebuffers
-		// createGraphicsPipeline
 	}
 
 	must(vkCreateComputePipeline(simulator^, &simulator.computePipeline))
@@ -721,12 +725,18 @@ vkCreateComputePipeline :: proc(simulator: vkSimulator, pipeline: ^vkPipeline) -
 	}
 	vk.CreatePipelineLayout(simulator.device, &layoutCreateInfo, nil, &pipeline.pipelineLayout) or_return
 
+	when !USE_CUMULATIVE_COMPUTE {
+		computeshaderIndex := 0
+	} else {
+		computeshaderIndex := 1
+	}
+
 	stageCreateInfo: vk.PipelineShaderStageCreateInfo = {
 		sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
 		flags  = {},
 		stage  = {.COMPUTE},
-		module = simulator.shaderModules[0].module,
-		pName  = strings.clone_to_cstring(simulator.shaderModules[0].entryPoint, context.temp_allocator),
+		module = simulator.shaderModules[computeshaderIndex].module,
+		pName  = strings.clone_to_cstring(simulator.shaderModules[computeshaderIndex].entryPoint, context.temp_allocator),
 	}
 
 	pipelineCreateInfo: vk.ComputePipelineCreateInfo = {
