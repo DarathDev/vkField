@@ -48,3 +48,6 @@
 
 # Render Doc Captures
 *.rdc
+
+# MATLAB Auto Save
+*.asv

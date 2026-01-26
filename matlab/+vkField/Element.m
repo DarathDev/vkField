@@ -1,22 +1,17 @@
-classdef Element
-    %ELEMENT Summary of this class goes here
-    %   Detailed explanation goes here
-
-    properties
-        Property1
+classdef Element < matlab.mixin.Heterogeneous
+    properties (Abstract, Constant)
+        ApertureType(1,1) vkField.ApertureType
     end
 
-    methods
-        function obj = Element(inputArg1,inputArg2)
-            %ELEMENT Construct an instance of this class
-            %   Detailed explanation goes here
-            obj.Property1 = inputArg1 + inputArg2;
-        end
+    properties
+        Apodization(1,1) single = 1;
+        Delay(1,1) single = 0;
+        Active(1,1) logical = true;
+    end
 
-        function outputArg = method1(obj,inputArg)
-            %METHOD1 Summary of this method goes here
-            %   Detailed explanation goes here
-            outputArg = obj.Property1 + inputArg;
+    methods (Static,Sealed,Access=protected)
+        function default_object = getDefaultScalarElement
+            default_object = vkField.RectangularElement;
         end
     end
 end

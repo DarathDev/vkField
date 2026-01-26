@@ -59,12 +59,9 @@ data = fieldII.xdc_get(rTh, 'rect');
 
 addpath("matlab\")
 
-settings = vkField.Settings;
-settings.SamplingFrequency = fs;
-settings.SpeedOfSound = c;
-settings.TransmitElementCount = 1;
-settings.ReceiveElementCount = 1;
-settings.ScatterCount = 1;
+simulator = vkField.Simulation;
+simulator.SamplingFrequency = fs;
+simulator.SpeedOfSound = c;
 
 transmitElements = vkField.RectangularElement;
 transmitElements.Size = dieWidthT;
@@ -75,13 +72,16 @@ receiveElements.Position = diePositionR;
 scatters = vkField.Scatter;
 scatters.Position = scatterPosition;
 scatters.Amplitude = 1;
+simulator.TransmitElements = transmitElements;
+simulator.ReceiveElements = receiveElements;
+simulator.Scatters = scatters;
 
 pT = scatters.Position - transmitElements.Position;
 pR = scatters.Position - receiveElements.Position;
 lT = norm(pT, 2);
 lR = norm(pR, 2);
-t0T = lT/settings.SpeedOfSound;
-t0R = lR/settings.SpeedOfSound;
+t0T = lT/simulator.SpeedOfSound;
+t0R = lR/simulator.SpeedOfSound;
 
 eT = transmitElements.Size.*pT(1:2);
 eR = receiveElements.Size.*pR(1:2);
@@ -127,12 +127,12 @@ end
 minDistance = minTransmitDistance + minReceiveDistance;
 maxDistance = maxTransmitDistance + maxReceiveDistance;
 
-minTransmitTime = minTransmitDistance/settings.SpeedOfSound;
-maxTransmitTime = maxTransmitDistance/settings.SpeedOfSound;
-minReceiveTime = minReceiveDistance/settings.SpeedOfSound;
-maxReceiveTime = maxReceiveDistance/settings.SpeedOfSound;
+minTransmitTime = minTransmitDistance/simulator.SpeedOfSound;
+maxTransmitTime = maxTransmitDistance/simulator.SpeedOfSound;
+minReceiveTime = minReceiveDistance/simulator.SpeedOfSound;
+maxReceiveTime = maxReceiveDistance/simulator.SpeedOfSound;
 
-manualStartTime = minDistance / settings.SpeedOfSound;
+manualStartTime = minDistance / simulator.SpeedOfSound;
 
 sampleCountPadding = 6; % There is little harm in padding by 6 samples to avoid edge cases
 
@@ -296,9 +296,10 @@ manualCumConvRf = conv(manualCumConvRf, single(excitation))*single(dt);
 
 %% vkField
 
-mex("matlab\vkField_lib.c", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
+% mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
+pulseEcho = vkField_mex(simulator);
+vkStartTime = simulator.StartTime;
 
-[pulseEcho, vkStartTime] = vkField_mex(settings.ToBytes, transmitElements.ToBytes, receiveElements.ToBytes, scatters.ToBytes);
 % pulseEcho = double(pulseEcho) * 2^-106;
 pulseEcho = double(pulseEcho) * dt^4;
 % pulseEcho = double(pulseEcho);

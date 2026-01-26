@@ -24,11 +24,11 @@ SimulationSettings :: struct {
 #assert(size_of(SimulationSettings) == 32)
 
 Element :: struct #align (16) {
-	aperture:    Aperture,
-	apodization: f32,
-	delay:       f32,
-	active:      b32,
-	padding:     [4]byte,
+	aperture:     Aperture,
+	apertureType: f32,
+	apodization:  f32,
+	delay:        f32,
+	active:       b32,
 }
 #assert(size_of(Element) == 64)
 
@@ -55,22 +55,21 @@ Scatter :: struct {
 @(export)
 simulate_c :: proc "c" (
 	settings: ^SimulationSettings,
-	transmitElements: ^Element,
-	receiveElements: ^Element,
-	scatters: ^Scatter,
-	pulseEcho: ^f32,
+	transmitElements: [^]Element,
+	receiveElements: [^]Element,
+	scatters: [^]Scatter,
+	pulseEcho: [^]f32,
 	cLogger: cLogProc = nil,
 ) {
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger)
-
 	data := simulate_odin(
 		settings,
-		slice.from_ptr(transmitElements, int(settings.transmitElementCount)),
-		slice.from_ptr(receiveElements, int(settings.receiveElementCount)),
-		slice.from_ptr(scatters, int(settings.scatterCount)),
+		transmitElements[:settings.transmitElementCount],
+		receiveElements[:settings.receiveElementCount],
+		scatters[:settings.scatterCount],
 	)
-	copy(slice.from_ptr(pulseEcho, len(data)), data)
+	copy(pulseEcho[:len(data)], data)
 }
 
 @(export)

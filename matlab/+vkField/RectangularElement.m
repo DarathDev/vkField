@@ -1,11 +1,12 @@
-classdef RectangularElement
+classdef RectangularElement < vkField.Element
+    properties (Constant)
+        ApertureType = vkField.ApertureType.Rectangular;
+    end
     properties
         Position(1,3) single = [0, 0, 0];
         Normal(1,3) single = [0, 0, 1];
         Size(1,2) single = [1, 1]*1e-4;
-        Apodization(1,1) single = 1;
-        Delay(1,1) single = 0;
-        Active(1,1) logical = true;
+        
     end
 
     methods

@@ -17,6 +17,7 @@ struct RectangularAperture {
 	uint padding1;
 	float2 size;
 	uint2 padding2;
+	uint apertureType;
 	float apodization;
 	float delay;
 	bool active;
