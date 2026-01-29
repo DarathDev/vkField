@@ -7,7 +7,7 @@ struct SimulationSettings {
 	float speedOfSound;
 	float startingTime;
 	uint sampleCount;
-	uint receiveIndex;
+	uint scatterIndex;
 };
 
 struct RectangularAperture {
@@ -21,7 +21,6 @@ struct RectangularAperture {
 	float apodization;
 	float delay;
 	bool active;
-	uint padding3;
 };
 
 struct Scatter {
@@ -103,13 +102,14 @@ float4x4 rotate(in float3 from, in float3 to) {
 void main(uint3 GlobalInvocationID : SV_DISPATCHTHREADID) {
 	int n = GlobalInvocationID.x;
 	uint transmitIndex = GlobalInvocationID.y;
-	uint scatterIndex = GlobalInvocationID.z;
+	uint receiveIndex = GlobalInvocationID.z;
+	uint scatterIndex = settings.scatterIndex;
 	Scatter scatter = scatters[scatterIndex];
 	float3 scatterPosition = scatter.position;
 	if (n >= settings.sampleCount) {
 		return;
 	}
-	uint storeOffset = settings.receiveIndex*settings.sampleCount;
+	uint storeOffset = receiveIndex*settings.sampleCount;
 
 	float startingTime = settings.startingTime;
 	float samplingFrequency = settings.samplingFrequency;
@@ -118,7 +118,7 @@ void main(uint3 GlobalInvocationID : SV_DISPATCHTHREADID) {
 	float dt = 1.f/samplingFrequency;
 
 	RectangularAperture transmitAperture = transmitApertures[transmitIndex];
-	RectangularAperture receiveAperture = receiveApertures[settings.receiveIndex];
+	RectangularAperture receiveAperture = receiveApertures[receiveIndex];
 
 	float time = startingTime + n * dt;
 	time += transmitAperture.delay + receiveAperture.delay;
@@ -158,6 +158,5 @@ void main(uint3 GlobalInvocationID : SV_DISPATCHTHREADID) {
 		sum += vT * vR;
 	}
 	sum *= powerT*powerR*scatter.amplitude*transmitAperture.apodization*receiveAperture.apodization;
-
-	response[storeOffset + n] = sum;
+	InterlockedAdd(response[storeOffset + n], sum);
 }

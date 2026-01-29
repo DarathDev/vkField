@@ -321,12 +321,19 @@ vkSimulate :: proc(simulator: ^vkSimulator, transmitElements: []Element, receive
 		speedOfSound      = settings.speedOfSound,
 		startingTime      = settings.startTime,
 		sampleCount       = settings.sampleCount,
-		receiveIndex      = 0,
 	}
-	vk.CmdPushConstants(commandBuffer, simulator.computePipeline.pipelineLayout, {.COMPUTE}, 0, size_of((vkSimulationSettings)), &simSettings)
 
 	// dispatch
-	vk.CmdDispatch(commandBuffer, u32(math.ceil(f32(simulator.settings.sampleCount) / 128)), u32(settings.transmitElementCount), u32(settings.scatterCount))
+	for i: int; i < int(settings.scatterCount); i += 1 {
+		simSettings.scatterIndex = i32(i)
+		vk.CmdPushConstants(commandBuffer, simulator.computePipeline.pipelineLayout, {.COMPUTE}, 0, size_of((vkSimulationSettings)), &simSettings)
+		vk.CmdDispatch(
+			commandBuffer,
+			u32(math.ceil(f32(simulator.settings.sampleCount) / 128)),
+			u32(settings.transmitElementCount),
+			u32(settings.receiveElementCount),
+		)
+	}
 
 	downloadBufferBarriers: [1]vk.BufferMemoryBarrier2 = {
 		{

@@ -141,7 +141,7 @@ vkSimulationSettings :: struct {
 	speedOfSound:      f32,
 	startingTime:      f32,
 	sampleCount:       i32,
-	receiveIndex:      i32,
+	scatterIndex:      i32,
 }
 
 vkDescriptorPool :: struct {
