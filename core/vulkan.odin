@@ -1161,7 +1161,7 @@ vk_messenger_callback :: proc "system" (
 
 	log.logf(level, "vulkan[%v]: %s", messageTypes, pCallbackData.pMessage)
 	if .ERROR in messageSeverity {
-		runtime.debug_trap()
+		// runtime.debug_trap()
 	}
 	return false
 }

@@ -1,16 +1,31 @@
 #include "mex.hpp"
 #include "mexAdapter.hpp"
 #include "vkField_lib.hpp"
+#include <functional>
 
 using namespace matlab::data;
 using matlab::mex::ArgumentList;
 
-int print(const char* string) {
-	// return mexPrintf("%s\n", string);
+
+int print(matlab::mex::Function& function, const char* string) {
+	std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = function.getEngine();
+	ArrayFactory factory;
+	std::string message(string);
+	message.push_back('\n');
+	matlabPtr->feval(u"fprintf", 0,
+			std::vector<Array>({ factory.createScalar(message) }));
 	return 0;
 }
 
+template <typename T>
+const T* getDataPtr(matlab::data::Array arr) {
+	const matlab::data::TypedArray<T> arr_t = arr;
+	matlab::data::TypedIterator<const T> it(arr_t.begin());
+	return it.operator->();
+}
+
 class MexFunction : public matlab::mex::Function {
+	std::ostringstream outputStream;
 public:
 	void operator()(matlab::mex::ArgumentList outputs, matlab::mex::ArgumentList inputs) {
 		void mexLock();
@@ -26,9 +41,9 @@ public:
 		const TypedArray<f32> mxStartTime = matlabPtr->getProperty(mxSimulator, u"StartTime");
 		const TypedArray<u32> mxSampleCount = matlabPtr->getProperty(mxSimulator, u"SampleCount");
 		const Array mxHeadless = matlabPtr->getProperty(mxSimulator, u"Headless");
-		const Array mxTransmitElements = matlabPtr->getProperty(mxSimulator, u"TransmitElements");
-		const Array mxReceiveElements = matlabPtr->getProperty(mxSimulator, u"ReceiveElements");
-		const Array mxScatters = matlabPtr->getProperty(mxSimulator, u"Scatters");
+		const ObjectArray mxTransmitElementSet = matlabPtr->getProperty(mxSimulator, u"TransmitElements");
+		const ObjectArray mxReceiveElementSet = matlabPtr->getProperty(mxSimulator, u"ReceiveElements");
+		const ObjectArray mxScatterSet = matlabPtr->getProperty(mxSimulator, u"Scatters");
 
 		SimulationSettings settings;
 		settings.samplingFrequency = mxSamplingFrequency[0];
@@ -36,25 +51,25 @@ public:
 		settings.startTime = mxStartTime[0];
 		settings.sampleCount = mxSampleCount[0];
 		settings.headless = mxHeadless[0];
-		settings.transmitElementCount = (i32)mxTransmitElements.getNumberOfElements();
-		settings.receiveElementCount = (i32)mxReceiveElements.getNumberOfElements();
-		settings.scatterCount = (i32)mxScatters.getNumberOfElements();
+		settings.transmitElementCount = (i32)matlabPtr->getProperty(mxTransmitElementSet, "Count")[0];
+		settings.receiveElementCount = (i32)matlabPtr->getProperty(mxReceiveElementSet, "Count")[0];
+		settings.scatterCount = (i32)matlabPtr->getProperty(mxScatterSet, "Count")[0];
 
 		Element* transmitElements = (Element*)malloc(sizeof(Element) * settings.transmitElementCount);
 		Element* receiveElements = (Element*)malloc(sizeof(Element) * settings.receiveElementCount);
 		Scatter* scatters = (Scatter*)malloc(sizeof(Scatter) * settings.scatterCount);
 
-		copyElements(mxTransmitElements, transmitElements, settings.transmitElementCount);
-		copyElements(mxReceiveElements, receiveElements, settings.receiveElementCount);
-		copyScatters(mxScatters, scatters, settings.scatterCount);
+		copyElements(mxTransmitElementSet, transmitElements, settings.transmitElementCount);
+		copyElements(mxReceiveElementSet, receiveElements, settings.receiveElementCount);
+		copyScatters(mxScatterSet, scatters, settings.scatterCount);
 
-		planSimulation_c(&settings, transmitElements, receiveElements, scatters, print);
+		planSimulation_c(&settings, transmitElements, receiveElements, scatters, print, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime", factory.createScalar<f32>(settings.startTime));
 		matlabPtr->setProperty(mxSimulator, u"SampleCount", factory.createScalar<u32>(settings.sampleCount));
 
 		auto pulseEchoBuffer = factory.createBuffer<float>(settings.sampleCount * settings.receiveElementCount);
 
-		simulate_c(&settings, transmitElements, receiveElements, scatters, pulseEchoBuffer.get(), print);
+		simulate_c(&settings, transmitElements, receiveElements, scatters, pulseEchoBuffer.get(), print, this);
 
 		ArrayDimensions pulseEchoDims;
 		pulseEchoDims.push_back((uz)settings.sampleCount);
@@ -79,38 +94,64 @@ public:
 
 	void copyElements(const Array& matlabArray, Element* array, uz length) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
+
+		constexpr uz countPositions = 3;
+		constexpr uz countNormals = 3;
+		constexpr uz countSizes = 2;
+		constexpr uz countApodizations = 1;
+		constexpr uz countDelays = 1;
+		Array propertyPositions = matlabPtr->getProperty(matlabArray, "Positions");
+		Array propertyNormals = matlabPtr->getProperty(matlabArray, "Normals");
+		Array propertySizes = matlabPtr->getProperty(matlabArray, "Sizes");
+		Array propertyApodizations = matlabPtr->getProperty(matlabArray, "PhysicalApodizations");
+		Array propertyDelays = matlabPtr->getProperty(matlabArray, "PhysicalDelays");
+		uz numelPositions = propertyPositions.getNumberOfElements();
+		uz numelNormals = propertyNormals.getNumberOfElements();
+		uz numelSizes = propertySizes.getNumberOfElements();
+		uz numelApodizations = propertyApodizations.getNumberOfElements();
+		uz numelDelays = propertyDelays.getNumberOfElements();
+		const f32* pPositions = getDataPtr<f32>(propertyPositions);
+		const f32* pNormals = getDataPtr<f32>(propertyNormals);
+		const f32* pSizes = getDataPtr<f32>(propertySizes);
+		const f32* pApodizations = getDataPtr<f32>(propertyApodizations);
+		const f32* pDelays = getDataPtr<f32>(propertyDelays);
+		uz offsetPositions = 0;
+		uz offsetNormals = 0;
+		uz offsetSizes = 0;
+		uz offsetApodizations = 0;
+		uz offsetDelays = 0;
 		for (uz i = 0; i < length; i++) {
-			// EnumArray mxApertureType = matlabPtr->getProperty(matlabArray, i, "ApertureType");
-			u32 apertureType = 0;
-			array[i].apodization = matlabPtr->getProperty(matlabArray, i, "Apodization")[0];
-			array[i].delay = matlabPtr->getProperty(matlabArray, i, "Delay")[0];
-			array[i].active = matlabPtr->getProperty(matlabArray, i, "Active")[0];
-			switch (apertureType) {
-			case Rectangular:
-				Array position = matlabPtr->getProperty(matlabArray, i, "Position");
-				for (uz j = 0; j < 3; j++) {
-					( (RectangularAperture*)array[i].apertureInfo )->position[j] = position[j];
-				}
-				Array normal = matlabPtr->getProperty(matlabArray, i, "Normal");
-				for (uz j = 0; j < 3; j++) {
-					( (RectangularAperture*)array[i].apertureInfo )->normal[j] = normal[j];
-				}
-				Array size = matlabPtr->getProperty(matlabArray, i, "Size");
-				for (uz j = 0; j < 2; j++) {
-					( (RectangularAperture*)array[i].apertureInfo )->size[j] = size[j];
-				}
-			}
+			memcpy(&( (RectangularAperture*)array[i].apertureInfo )->position, pPositions + offsetPositions, countPositions * sizeof(f32));
+			memcpy(&( (RectangularAperture*)array[i].apertureInfo )->normal, pNormals + offsetNormals, countNormals * sizeof(f32));
+			memcpy(&( (RectangularAperture*)array[i].apertureInfo )->size, pSizes + offsetSizes, countSizes * sizeof(f32));
+			array[i].apodization = *( pApodizations + offsetApodizations );
+			array[i].delay = *( pDelays + offsetDelays );
+			offsetPositions = std::min(offsetPositions + countPositions, numelPositions);
+			offsetNormals = std::min(offsetNormals + countNormals, numelNormals);
+			offsetSizes = std::min(offsetSizes + countSizes, numelSizes);
+			offsetApodizations = std::min(offsetApodizations + countApodizations, numelApodizations);
+			offsetDelays = std::min(offsetDelays + countDelays, numelDelays);
 		}
 	}
 
 	void copyScatters(const Array& matlabArray, Scatter* array, uz length) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
+
+		constexpr uz countPositions = 3;
+		constexpr uz countAmplitudes = 1;
+		Array propertyPositions = matlabPtr->getProperty(matlabArray, "Positions");
+		Array propertyAmplitudes = matlabPtr->getProperty(matlabArray, "Amplitudes");
+		uz numelPositions = propertyPositions.getNumberOfElements();
+		uz numelAmplitudes = propertyAmplitudes.getNumberOfElements();
+		const f32* pPositions = getDataPtr<f32>(propertyPositions);
+		const f32* pAmplitudes = getDataPtr<f32>(propertyAmplitudes);
+		uz offsetPositions = 0;
+		uz offsetAmplitudes = 0;
 		for (uz i = 0; i < length; i++) {
-			Array position = matlabPtr->getProperty(matlabArray, i, "Position");
-			for (uz j = 0; j < 3; j++) {
-				array[i].position[j] = position[j];
-			}
-			array[i].amplitude = matlabPtr->getProperty(matlabArray, i, "Amplitude")[0];
+			memcpy(&array[i].position, pPositions + offsetPositions, countPositions * sizeof(f32));
+			array[i].amplitude = *( pAmplitudes + offsetAmplitudes );
+			offsetPositions = std::min(offsetPositions + countPositions, numelPositions);
+			offsetAmplitudes = std::min(offsetAmplitudes + countAmplitudes, numelAmplitudes);
 		}
 	}
 };

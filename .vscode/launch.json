@@ -16,6 +16,11 @@
             "console": "internalConsole",
             "preLaunchTask": "build oneRectSimulation",
             "internalConsoleOptions": "openOnFirstSessionStart",
-        }
+        },
+        {
+            "name": "(Windows) Attach",
+            "type": "cppvsdbg",
+            "request": "attach",
+        },
     ]
 }

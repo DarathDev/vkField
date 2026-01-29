@@ -28,7 +28,7 @@ Element :: struct #align (16) {
 	apertureType: f32,
 	apodization:  f32,
 	delay:        f32,
-	active:       b32,
+	padding:      [4]byte,
 }
 #assert(size_of(Element) == 64)
 
@@ -60,9 +60,10 @@ simulate_c :: proc "c" (
 	scatters: [^]Scatter,
 	pulseEcho: [^]f32,
 	cLogger: cLogProc = nil,
+	loggerUserData: rawptr = nil,
 ) {
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger)
+	context.logger = c_logger(context.logger, cLogger, loggerUserData)
 	data := simulate_odin(
 		settings,
 		transmitElements[:settings.transmitElementCount],
@@ -79,9 +80,10 @@ planSimulation_c :: proc "c" (
 	receiveElements: ^Element,
 	scatters: ^Scatter,
 	cLogger: cLogProc = nil,
+	loggerUserData: rawptr = nil,
 ) {
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger)
+	context.logger = c_logger(context.logger, cLogger, loggerUserData)
 	planSimulation_odin(
 		settings,
 		slice.from_ptr(transmitElements, int(settings.transmitElementCount)),
@@ -142,10 +144,12 @@ planSimulation_odin :: proc(settings: ^SimulationSettings, transmitElements: []E
 }
 
 findDistanceLimits :: proc(transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) -> (minDistance: f32, maxDistance: f32) {
-	minTransmitDistance: f32 = math.INF_F32
-	maxTransmitDistance: f32 = 0
-	minReceiveDistance: f32 = math.INF_F32
-	maxReceiveDistance: f32 = 0
+	defer assert(maxDistance - minDistance >= 0)
+	// Any distance range greater than 10m is likely an error, and furthermore would require an unreasonable amount of memory
+	defer assert(maxDistance - minDistance < 10)
+
+	minTransmitDistance, maxTransmitDistance: f32 = math.INF_F32, 0
+	minReceiveDistance, maxReceiveDistance: f32 = math.INF_F32, 0
 	for scatter in scatters {
 		for transmit in transmitElements {
 			delta := linalg.length(scatter.position - transmit.aperture.rectangle.position)
@@ -164,6 +168,7 @@ findDistanceLimits :: proc(transmitElements: []Element, receiveElements: []Eleme
 
 	minDistance = minTransmitDistance + minReceiveDistance
 	maxDistance = maxTransmitDistance + maxReceiveDistance
+	minDistance = min(minDistance, maxDistance)
 	return
 }
 
@@ -386,17 +391,18 @@ vkSimulate :: proc(simulator: ^vkSimulator, transmitElements: []Element, receive
 	return slice.reinterpret([]f32, pulseEcho)
 }
 
-cLogProc :: #type proc "c" (string: cstring)
+cLogProc :: #type proc "c" (pUserData: rawptr, string: cstring)
 
-c_logger :: proc(l: log.Logger, c: cLogProc) -> log.Logger {
+c_logger :: proc(l: log.Logger, c: cLogProc, pUserData: rawptr) -> log.Logger {
 	c_logger_data :: struct {
 		wrappedLogger: log.Logger,
 		cLogProc:      cLogProc,
+		pUserData:     rawptr,
 	}
 	c_logger_proc :: proc(data: rawptr, level: log.Level, text: string, options: log.Options, locations := #caller_location) {
 		data := cast(^c_logger_data)data
 		if (data.cLogProc != nil) {
-			data.cLogProc(strings.clone_to_cstring(text, context.temp_allocator))
+			data.cLogProc(data.pUserData, strings.clone_to_cstring(text, context.temp_allocator))
 		}
 		data.wrappedLogger.procedure(data.wrappedLogger.data, level, text, options, locations)
 	}
@@ -404,6 +410,7 @@ c_logger :: proc(l: log.Logger, c: cLogProc) -> log.Logger {
 	logger_data := new(c_logger_data, context.allocator)
 	logger_data.wrappedLogger = context.logger
 	logger_data.cLogProc = c
+	logger_data.pUserData = pUserData
 	return log.Logger {
 		data = logger_data,
 		lowest_level = logger_data.wrappedLogger.lowest_level,
