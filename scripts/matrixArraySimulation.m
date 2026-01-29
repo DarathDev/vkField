@@ -43,20 +43,16 @@ fieldII.field_init(-1);
 fieldII.set_field('c', c);
 fieldII.set_field('fs', fs);
 
-% tTh = fieldII.xdc_2d_array(columnCountT, rowCountT, dieWidthT(1), dieWidthT(2), dieKerfT, dieKerfT, ones(columnCountT, rowCountT)',1,1,[0, 0, 1e10]);
-% rTh = fieldII.xdc_2d_array(columnCountR, rowCountR, dieWidthR(1), dieWidthR(2), dieKerfR, dieKerfR, ones(columnCountR, rowCountR)',1,1,[0, 0, 1e10]);
-tTh = fieldII.xdc_linear_array(columnCountT, dieWidthT(1), dieWidthT(2), dieKerfT, 1, 1, [0, 0, 1e10]);
-rTh = fieldII.xdc_linear_array(columnCountR, dieWidthR(1), dieWidthR(2), dieKerfR, 1, 1, [0, 0, 1e10]);
+tTh = fieldII.xdc_2d_array(columnCountT, rowCountT, dieWidthT(1), dieWidthT(2), dieKerfT, dieKerfT, ones(columnCountT, rowCountT)',1,1,[0, 0, 1e10]);
+rTh = fieldII.xdc_2d_array(columnCountR, rowCountR, dieWidthR(1), dieWidthR(2), dieKerfR, dieKerfR, ones(columnCountR, rowCountR)',1,1,[0, 0, 1e10]);
 
 fieldII.xdc_impulse(tTh, double(impulseResponse));
 fieldII.xdc_impulse(rTh, double(impulseResponse));
 fieldII.xdc_excitation(tTh, double(excitation));
 
 
-% fieldII.xdc_apodization(tTh, 0, ones(columnCount, rowCount)');
-% fieldII.xdc_apodization(rTh, 0, ones(columnCount, rowCount)');
-fieldII.xdc_apodization(tTh, 0, ones(1, columnCountT));
-fieldII.xdc_apodization(rTh, 0, ones(1, columnCountR));
+fieldII.xdc_apodization(tTh, 0, reshape(ones(columnCountT, rowCountT)', 1, []));
+fieldII.xdc_apodization(rTh, 0, reshape(ones(columnCountR, rowCountR)', 1, []));
 
 % fieldII.xdc_times_focus(tTh, 0, double(delays(:)'));
 % fieldII.ele_delay(tTh, double(1:die.ColumnCount*die.RowCount)', double(delays(:)));
@@ -117,7 +113,7 @@ end
 im1(1) = imagesc(ax1(1), 1:columnCountR, times*1e6, fullRF);
 im1(1) = imagesc(ax1(2), 1:columnCountR, vkTimes*1e6, pulseEcho);
 
-vw1 = VideoWriter(fullfile("figures", "linearArrayComparison" + ".mp4"), "MPEG-4");
+vw1 = VideoWriter(fullfile("figures", "matrixArrayComparison" + ".mp4"), "MPEG-4");
 vw1.FrameRate = 30;
 vw1.open();
 

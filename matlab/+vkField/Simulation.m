@@ -13,9 +13,9 @@ classdef Simulation < handle
     end
 
     properties
-        TransmitElements vkField.Element = vkField.Element.empty();
-        ReceiveElements vkField.Element = vkField.Element.empty();
-        Scatters vkField.Scatter = vkField.Scatter.empty();
+        TransmitElements(1,1) vkField.RectangularElementSet
+        ReceiveElements(1,1) vkField.RectangularElementSet
+        Scatters(1,1) vkField.ScatterSet
     end
 
     methods

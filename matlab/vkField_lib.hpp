@@ -42,7 +42,7 @@ typedef struct {
 	f32 apertureType;
 	f32 apodization;
 	f32 delay;
-	bool active;
+	f32 padding;
 } Element;
 
 typedef struct {
@@ -63,8 +63,8 @@ typedef struct {
 extern "C" {
 #endif
 
-	LIB_FN void planSimulation_c(SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, void* logFunc);
-	LIB_FN void simulate_c(SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, float* pulseEcho, void* logFunc);
+	LIB_FN void planSimulation_c(SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, void* logFunc, void* pUserData);
+	LIB_FN void simulate_c(SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, float* pulseEcho, void* logFunc, void* pUserData);
 
 #ifdef __cplusplus
 }
