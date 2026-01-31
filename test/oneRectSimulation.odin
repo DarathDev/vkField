@@ -2,20 +2,12 @@ package vkfield_scripts
 
 import "core:fmt"
 import "core:log"
-import "core:mem"
-import "core:os"
-import "core:path/filepath"
 import "core:slice"
+import "core:testing"
 import vkField "vkField:."
 
-main :: proc() {
-	when ODIN_DEBUG {
-		track: mem.Tracking_Allocator
-		mem.tracking_allocator_init(&track, context.allocator)
-		defer mem.tracking_allocator_destroy(&track)
-		context.allocator = mem.tracking_allocator(&track)
-	}
-
+@(test)
+oneRectSimulation :: proc(t: ^testing.T) {
 	context.logger = log.create_console_logger()
 
 	settings := vkField.SimulationSettings {
@@ -51,10 +43,4 @@ main :: proc() {
 	data := vkField.simulate_odin(&settings, transmitElements, receiveElements, scatters)
 
 	fmt.println(data)
-
-	when ODIN_DEBUG {
-		for _, leak in track.allocation_map {
-			fmt.printfln("%v leaked %m", leak.location, leak.size)
-		}
-	}
 }

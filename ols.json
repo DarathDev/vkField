@@ -11,7 +11,7 @@
     "enable_hover": true,
     "enable_snippets": true,
     "enable_inlay_hints": false,
-    "enable_inlay_hints_params": true,
+    "enable_inlay_hints_params": false,
     "enable_inlay_hints_default_params": false,
     "enable_procedure_context": true,
     "enable_format": true,

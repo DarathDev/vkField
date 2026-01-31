@@ -35,6 +35,9 @@
 *.a
 *.lib
 
+# Compiled Shaders
+*.spv
+
 # Executables
 *.exe
 *.out
@@ -51,3 +54,7 @@
 
 # MATLAB Auto Save
 *.asv
+
+# Rad Debugger
+*.radproj
+*.rdi
