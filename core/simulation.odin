@@ -10,6 +10,19 @@ import "core:path/filepath"
 import "core:slice"
 import "core:strings"
 import vk "vendor:vulkan"
+import vkField_util "vkField:utility"
+import vkField_vk "vkField:vulkan"
+
+@(private = "file")
+is_ok :: vkField_util.is_ok
+@(private = "file")
+confirm :: vkField_util.confirm
+@(private = "file")
+check :: vkField_util.check
+@(private = "file")
+assert :: vkField_util.assert
+@(private = "file")
+assume :: vkField_util.assume
 
 SimulationSettings :: struct {
 	samplingFrequency:    f32,
@@ -20,8 +33,9 @@ SimulationSettings :: struct {
 	startTime:            f32,
 	sampleCount:          i32,
 	headless:             b32,
+	cumulative:           b32,
 }
-#assert(size_of(SimulationSettings) == 32)
+#assert(size_of(SimulationSettings) == 36)
 
 Element :: struct #align (16) {
 	aperture:     Aperture,
@@ -82,6 +96,9 @@ planSimulation_c :: proc "c" (
 	cLogger: cLogProc = nil,
 	loggerUserData: rawptr = nil,
 ) {
+	if !vkField_vk.VKFIELD_VULKAN_INITIALIZED {
+		vkField_vk.initialize()
+	}
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
 	planSimulation_odin(
@@ -92,7 +109,15 @@ planSimulation_c :: proc "c" (
 	)
 }
 
-simulate_odin :: proc(settings: ^SimulationSettings, transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) -> (data: []f32) {
+simulate_odin :: proc(
+	settings: ^SimulationSettings,
+	transmitElements: []Element,
+	receiveElements: []Element,
+	scatters: []Scatter,
+	allocator := context.allocator,
+) -> (
+	data: []f32,
+) {
 	simulator: vkSimulator
 	vkCreateSimulator(settings^, &simulator)
 	defer vkDestroySimulator(&simulator)
@@ -120,17 +145,18 @@ simulate_odin :: proc(settings: ^SimulationSettings, transmitElements: []Element
 	rdoc.SetCaptureFilePathTemplate(rdoc_api, "captures/capture.rdc")
 
 	if rdoc_ok {
-		devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(simulator.instance)
+		devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(simulator.instance.instance)
 		rdoc.StartFrameCapture(rdoc_api, devicePointer, nil)
 		// assert(rdoc.IsFrameCapturing(rdoc_api))
 	}
 	defer if rdoc_ok {
-		devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(simulator.instance)
+		devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(simulator.instance.instance)
 		rdoc.EndFrameCapture(rdoc_api, devicePointer, nil)
 		// LaunchOrShowRenderdocUI(rdoc_api)
 	}
 
-	data = vkSimulate(&simulator, transmitElements, receiveElements, scatters)
+	data, _ = check(vkSimulate(&simulator, transmitElements, receiveElements, scatters))
+
 	return
 }
 
@@ -170,225 +196,6 @@ findDistanceLimits :: proc(transmitElements: []Element, receiveElements: []Eleme
 	maxDistance = maxTransmitDistance + maxReceiveDistance
 	minDistance = min(minDistance, maxDistance)
 	return
-}
-
-vkSimulate :: proc(simulator: ^vkSimulator, transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) -> []f32 {
-	device := simulator.device
-	computeFence := simulator.computeFence
-	commandBuffer := simulator.computeCommandPool.commandBuffers[0]
-	settings := simulator.settings
-	resources := &simulator.simulationResources
-
-	// Make Buffers
-	transmitBufferInfo: vk.BufferCreateInfo = {
-		sType                 = .BUFFER_CREATE_INFO,
-		flags                 = {},
-		usage                 = {.STORAGE_BUFFER, .TRANSFER_DST},
-		size                  = vk.DeviceSize(size_of(Element) * simulator.settings.transmitElementCount),
-		sharingMode           = .EXCLUSIVE,
-		queueFamilyIndexCount = 1,
-		pQueueFamilyIndices   = &simulator.queueIndices.compute,
-	}
-	receiveBufferInfo: vk.BufferCreateInfo = transmitBufferInfo
-	receiveBufferInfo.size = vk.DeviceSize(size_of(Element) * simulator.settings.receiveElementCount)
-	scatterBufferInfo: vk.BufferCreateInfo = transmitBufferInfo
-	scatterBufferInfo.size = vk.DeviceSize(size_of(Scatter) * simulator.settings.scatterCount)
-
-	pulseEchoBufferInfo: vk.BufferCreateInfo = {
-		sType                 = .BUFFER_CREATE_INFO,
-		flags                 = {},
-		usage                 = {.STORAGE_TEXEL_BUFFER, .TRANSFER_SRC},
-		size                  = vk.DeviceSize(size_of(f32) * simulator.settings.receiveElementCount * simulator.settings.sampleCount),
-		sharingMode           = .EXCLUSIVE,
-		queueFamilyIndexCount = 1,
-		pQueueFamilyIndices   = &simulator.queueIndices.compute,
-	}
-
-	must(vkCreateBuffer(simulator.vkDevice, &transmitBufferInfo, {.DEVICE_LOCAL}, &simulator.simulationResources.transmitElements))
-	must(vkCreateBuffer(simulator.vkDevice, &receiveBufferInfo, {.DEVICE_LOCAL}, &simulator.simulationResources.receiveElements))
-	must(vkCreateBuffer(simulator.vkDevice, &scatterBufferInfo, {.DEVICE_LOCAL}, &simulator.simulationResources.scatters))
-	must(vkCreateBuffer(simulator.vkDevice, &pulseEchoBufferInfo, {.DEVICE_LOCAL}, &simulator.simulationResources.pulseEcho))
-	defer vkDestroyBuffer(simulator.vkDevice, simulator.simulationResources.transmitElements)
-	defer vkDestroyBuffer(simulator.vkDevice, simulator.simulationResources.receiveElements)
-	defer vkDestroyBuffer(simulator.vkDevice, simulator.simulationResources.scatters)
-	defer vkDestroyBuffer(simulator.vkDevice, simulator.simulationResources.pulseEcho)
-
-	// Reset
-	must(vk.ResetCommandPool(device, simulator.computeCommandPool.commandPool, {}))
-
-	commandBeginInfo: vk.CommandBufferBeginInfo = {
-		sType = .COMMAND_BUFFER_BEGIN_INFO,
-	}
-	must(vk.BeginCommandBuffer(commandBuffer, &commandBeginInfo))
-
-	// Upload data
-	vkUploadBuffer(simulator.vkDevice, commandBuffer, &resources.transmitElements, slice.to_bytes(transmitElements), &resources.stagingBuffers)
-	vkUploadBuffer(simulator.vkDevice, commandBuffer, &resources.receiveElements, slice.to_bytes(receiveElements), &resources.stagingBuffers)
-	vkUploadBuffer(simulator.vkDevice, commandBuffer, &resources.scatters, slice.to_bytes(scatters), &resources.stagingBuffers)
-
-	vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.computePipeline.pipeline)
-
-	uploadBufferBarriers: [3]vk.BufferMemoryBarrier2
-	for &barrier in uploadBufferBarriers {
-		barrier.sType = .BUFFER_MEMORY_BARRIER_2
-		barrier.srcStageMask = {.TRANSFER, .HOST}
-		barrier.srcAccessMask = {.TRANSFER_WRITE}
-		barrier.dstStageMask = {.COMPUTE_SHADER}
-		barrier.dstAccessMask = {.SHADER_READ}
-	}
-	uploadBufferBarriers[0].buffer = resources.transmitElements.buffer
-	uploadBufferBarriers[0].size = resources.transmitElements.size
-	uploadBufferBarriers[0].offset = 0
-	uploadBufferBarriers[1].buffer = resources.receiveElements.buffer
-	uploadBufferBarriers[1].size = resources.receiveElements.size
-	uploadBufferBarriers[1].offset = 0
-	uploadBufferBarriers[2].buffer = resources.scatters.buffer
-	uploadBufferBarriers[2].size = resources.scatters.size
-	uploadBufferBarriers[2].offset = 0
-
-	uploadDepInfo: vk.DependencyInfo = {
-		sType                    = .DEPENDENCY_INFO,
-		bufferMemoryBarrierCount = len(uploadBufferBarriers),
-		pBufferMemoryBarriers    = &uploadBufferBarriers[0],
-	}
-
-	vk.CmdPipelineBarrier2KHR(commandBuffer, &uploadDepInfo)
-
-	transmitElementsDescriptor: vk.DescriptorBufferInfo = {
-		buffer = resources.transmitElements.buffer,
-		range  = resources.transmitElements.size,
-		offset = 0,
-	}
-	receiveElementsDescriptor: vk.DescriptorBufferInfo = {
-		buffer = resources.receiveElements.buffer,
-		range  = resources.receiveElements.size,
-		offset = 0,
-	}
-	scattersDescriptor: vk.DescriptorBufferInfo = {
-		buffer = resources.scatters.buffer,
-		range  = resources.scatters.size,
-		offset = 0,
-	}
-	pulseEchoBufferView: vk.BufferView
-	must(vkCreateBufferView(simulator.vkDevice, resources.pulseEcho, .R32_SFLOAT, &pulseEchoBufferView))
-	defer vk.DestroyBufferView(device, pulseEchoBufferView, nil)
-
-	descriptorWrites: []vk.WriteDescriptorSet = {
-		{
-			sType = .WRITE_DESCRIPTOR_SET,
-			dstSet = simulator.computeDescriptorPool.sets[0],
-			dstBinding = 0,
-			descriptorType = .STORAGE_BUFFER,
-			descriptorCount = 1,
-			pBufferInfo = &transmitElementsDescriptor,
-		},
-		{
-			sType = .WRITE_DESCRIPTOR_SET,
-			dstSet = simulator.computeDescriptorPool.sets[0],
-			dstBinding = 1,
-			descriptorType = .STORAGE_BUFFER,
-			descriptorCount = 1,
-			pBufferInfo = &receiveElementsDescriptor,
-		},
-		{
-			sType = .WRITE_DESCRIPTOR_SET,
-			dstSet = simulator.computeDescriptorPool.sets[0],
-			dstBinding = 2,
-			descriptorType = .STORAGE_BUFFER,
-			descriptorCount = 1,
-			pBufferInfo = &scattersDescriptor,
-		},
-		{
-			sType = .WRITE_DESCRIPTOR_SET,
-			dstSet = simulator.computeDescriptorPool.sets[0],
-			dstBinding = 3,
-			descriptorType = .STORAGE_TEXEL_BUFFER,
-			descriptorCount = 1,
-			pTexelBufferView = &pulseEchoBufferView,
-		},
-	}
-
-	vk.UpdateDescriptorSets(device, auto_cast len(descriptorWrites), raw_data(descriptorWrites), 0, nil)
-
-	vk.CmdBindDescriptorSets(
-		commandBuffer,
-		vk.PipelineBindPoint.COMPUTE,
-		simulator.computePipeline.pipelineLayout,
-		0,
-		1,
-		&simulator.computeDescriptorPool.sets[0],
-		0,
-		nil,
-	)
-
-	simSettings := vkSimulationSettings {
-		samplingFrequency = settings.samplingFrequency,
-		speedOfSound      = settings.speedOfSound,
-		startingTime      = settings.startTime,
-		sampleCount       = settings.sampleCount,
-	}
-
-	// dispatch
-	for i: int; i < int(settings.scatterCount); i += 1 {
-		simSettings.scatterIndex = i32(i)
-		vk.CmdPushConstants(commandBuffer, simulator.computePipeline.pipelineLayout, {.COMPUTE}, 0, size_of((vkSimulationSettings)), &simSettings)
-		vk.CmdDispatch(
-			commandBuffer,
-			u32(math.ceil(f32(simulator.settings.sampleCount) / 128)),
-			u32(settings.transmitElementCount),
-			u32(settings.receiveElementCount),
-		)
-	}
-
-	downloadBufferBarriers: [1]vk.BufferMemoryBarrier2 = {
-		{
-			sType = .BUFFER_MEMORY_BARRIER_2,
-			buffer = resources.pulseEcho.buffer,
-			size = resources.pulseEcho.size,
-			offset = 0,
-			srcStageMask = {.COMPUTE_SHADER},
-			srcAccessMask = {.SHADER_WRITE},
-			dstStageMask = {.TRANSFER, .HOST},
-			dstAccessMask = {.TRANSFER_READ},
-		},
-	}
-
-	downloadDepInfo: vk.DependencyInfo = {
-		sType                    = .DEPENDENCY_INFO,
-		bufferMemoryBarrierCount = len(downloadBufferBarriers),
-		pBufferMemoryBarriers    = &downloadBufferBarriers[0],
-	}
-
-	vk.CmdPipelineBarrier2KHR(commandBuffer, &downloadDepInfo)
-
-	vkDeviceDownload(simulator.vkDevice, commandBuffer, &resources.pulseEcho, &resources.stagingBuffers)
-
-	must(vk.EndCommandBuffer(commandBuffer))
-
-	commandSubmitInfo: vk.CommandBufferSubmitInfo = {
-		sType         = .COMMAND_BUFFER_SUBMIT_INFO,
-		commandBuffer = commandBuffer,
-		deviceMask    = 0,
-	}
-
-	submitInfo: vk.SubmitInfo2 = {
-		sType                  = .SUBMIT_INFO_2,
-		commandBufferInfoCount = 1,
-		pCommandBufferInfos    = &commandSubmitInfo,
-	}
-
-	must(vk.QueueSubmit2KHR(simulator.computeQueue, 1, &submitInfo, computeFence))
-
-	must(vk.WaitForFences(device, 1, &computeFence, true, 10 * 1e9))
-
-	// Download
-	pulseEcho := vkHostDownload(simulator.vkDevice, &resources.pulseEcho)
-
-	for stagingBuffer in simulator.simulationResources.stagingBuffers {
-		vkDestroyBuffer(simulator.vkDevice, stagingBuffer)
-	}
-
-	return slice.reinterpret([]f32, pulseEcho)
 }
 
 cLogProc :: #type proc "c" (pUserData: rawptr, string: cstring)
@@ -439,11 +246,8 @@ LaunchOrShowRenderdocUI :: proc(rdoc_api: rawptr) {
 
 	if rdoc.GetCapture(rdoc_api, latest_capture_index, auto_cast raw_data(capture_file_path), &capture_file_path_len, &timestamp) != 0 {
 		assert(capture_file_path_len < 512, "too long capture path!!")
-		current_directory := os.get_current_directory(context.temp_allocator)
-		defer delete(current_directory, context.temp_allocator)
-
-		abs_capture_path := filepath.join([]string{current_directory, transmute(string)capture_file_path}, context.temp_allocator)
-		defer delete(abs_capture_path, context.temp_allocator)
+		current_directory := assume(os.get_working_directory(context.temp_allocator))
+		abs_capture_path := assume(filepath.join([]string{current_directory, transmute(string)capture_file_path}, context.temp_allocator))
 
 		log.infof("loading latest capture: %v", abs_capture_path)
 

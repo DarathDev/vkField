@@ -1,10 +1,10 @@
 package vkField_build
 
+import "base:runtime"
+import util "core/utility"
 import "core:fmt"
 import "core:log"
-import os "core:os/os2"
-import "core:slice"
-import "core:strings"
+import "core:os"
 
 when ODIN_DEBUG { VKFIELD_DEFAULT_BUILD_MODE :: "debug" } else { VKFIELD_DEFAULT_BUILD_MODE :: "release" }
 VKFIELD_BUILD_MODE: string
@@ -22,24 +22,11 @@ VKFIELD_OUTPUT_LIB_NAME := "vkField"
 VKFIELD_TESTS_NAME := "vkField_tests"
 VKFIELD_MATLAB := #config(MATLAB, true)
 
+LOG_DEBUG := #config(LOG_DEBUG, false)
+
 VKFIELD_SRC_DIR := "core"
 MATLAB_DIR := "matlab"
 VKFIELD_TEST_DIR := "test"
-
-/* ----- ODIN ----- */
-ODIN_CMD := "odin"
-ODIN_BUILD_ARG := "build"
-ODIN_TEST_ARG := "test"
-
-OdinBuildOption :: struct {
-	flag:  string,
-	value: []string,
-}
-
-OdinCollection :: struct {
-	name: string,
-	path: string,
-}
 
 VKFIELD_COLLECTIONS: []OdinCollection = {{name = "vkField", path = "core"}}
 VKFIELD_ODIN_BUILD_OPTIONS: []OdinBuildOption = {}
@@ -48,29 +35,20 @@ VKFIELD_ODIN_DEBUG_OPTIONS: []OdinBuildOption = {{flag = "debug"}}
 VKFIELD_ODIN_LIB_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"lib"}}}
 VKFIELD_ODIN_TEST_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"test"}}}
 
-/* ----- GLSLANG ----- */
-GLSLANG_CMD := "glslang"
+VKFIELD_ODIN_DEBUG_DEFINES: []OdinDefine = {{name = "REQUIRE_RESOURCE_LABELS", value = "false"}}
 
-GlslangConfigurationOption :: struct {
-	flag:  GlslangFlag,
-	value: string,
-}
+@(private = "file")
+is_ok :: util.is_ok
+@(private = "file")
+confirm :: util.confirm
+@(private = "file")
+check :: util.check
+@(private = "file")
+assert :: util.assert
+@(private = "file")
+assume :: util.assume
 
-GlslangFlag :: union {
-	rune,
-	string,
-}
-
-SHADER_COMPILER_CMD := "glslang"
-SOURCE_SHADER_EXT := "hlsl"
-COMPILED_SHADER_EXT := "spv"
-
-VKFIELD_GLSLANG_OPTIONS: []GlslangConfigurationOption = {
-	{flag = 'V'},
-	{flag = 'e', value = "main"},
-	{flag = "target-env", value = "vulkan1.2"},
-	{flag = "spirv-val"},
-}
+VKFIELD_GLSLANG_OPTIONS: []CliOptions = {{flag = 'V'}, {flag = 'e', value = "main"}, {flag = "target-env", value = "vulkan1.2"}, {flag = "spirv-val"}}
 
 // odin build ./core -build-mode:lib -out:bin/debug/vkField.lib -collection:vkField=core -debug
 // odin build ./scripts -out:bin/debug/oneRectSimulation.exe -debug -collection:vkField=core
@@ -78,8 +56,14 @@ VKFIELD_GLSLANG_OPTIONS: []GlslangConfigurationOption = {
 // glslang -V shaders/pulse_echo_cum.comp.hlsl -o shaders/pulse_echo_cum.comp.spv -e main -gVS --target-env vulkan1.2 --spirv-val
 
 main :: proc() {
-	context.logger = log.create_console_logger(.Info)
+	logger: runtime.Logger
+	if LOG_DEBUG do logger = log.create_console_logger(.Debug)
+	else do logger = log.create_console_logger(.Info)
+	context.logger = logger
 
+	options := make([dynamic]OdinBuildOption)
+	append(&options, ..VKFIELD_ODIN_BUILD_OPTIONS)
+	append(&options, ..odin_collections_to_options(VKFIELD_COLLECTIONS))
 	args := os.args
 	for arg in args {
 		switch arg {
@@ -102,8 +86,12 @@ main :: proc() {
 		}
 	}
 
-	if len(VKFIELD_BUILD_MODE) == 0 do VKFIELD_BUILD_MODE = VKFIELD_DEFAULT_BUILD_MODE
-	if len(VKFIELD_BUILD_TYPE) == 0 do VKFIELD_BUILD_TYPE = VKFIELD_DEFAULT_BUILD_TYPE
+	if len(VKFIELD_BUILD_MODE) == 0 {
+		VKFIELD_BUILD_MODE = VKFIELD_DEFAULT_BUILD_MODE
+	}
+	if len(VKFIELD_BUILD_TYPE) == 0 {
+		VKFIELD_BUILD_TYPE = VKFIELD_DEFAULT_BUILD_TYPE
+	}
 	if len(VKFIELD_OUTPUT_SUBDIR) == 0 {
 		switch VKFIELD_BUILD_MODE {
 		case "release":
@@ -112,153 +100,74 @@ main :: proc() {
 			VKFIELD_OUTPUT_SUBDIR = VKFIELD_DEBUG_OUT_SUBDIR
 		}
 	}
-
+	switch VKFIELD_BUILD_MODE {
+	case "debug":
+		append(&options, ..VKFIELD_ODIN_DEBUG_OPTIONS)
+		append(&options, ..odin_defines_to_options(VKFIELD_ODIN_DEBUG_DEFINES))
+	}
 	switch VKFIELD_BUILD_TYPE {
 	case "lib":
-		log.assert(build_lib())
+		build_lib(&options)
 	case "test":
-		log.assert(build_test())
+		build_test(&options)
 	}
 }
 
-build_lib :: proc() -> (ok := true) {
-	outputDir, _ := os.join_path({INSTALL_LOCATION, VKFIELD_LIBRARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator)
-	// Make Output Directory
-	if !os.is_dir(outputDir) do os.make_directory_all(outputDir)
+build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
+	assert(check_cmd(ODIN_CMD), fmt.aprintf("Odin Command \"%v\" not found", ODIN_CMD))
+	assert(check_cmd(SLANG_CMD), fmt.aprintf("Slang Command \"%v\" not found", SLANG_CMD))
 
 	// Compile Shaders
-	for shader in PULSE_ECHO_SHADERS {
-		compileShaderGlsl(shader) or_return
-	}
+	for shader in VKFIELD_PULSE_ECHO_SHADERS do confirm(compile_shader_slangc(shader))
+
+	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_LIBRARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
+	// Make Output Directory
+	if !os.is_directory(outputDir) do os.make_directory_all(outputDir)
 
 	// Odin Compilation
 	when ODIN_OS == .Windows {
-		libraryName, _ := os.join_filename(VKFIELD_OUTPUT_LIB_NAME, "lib", context.allocator)
-		libraryOutPath, _ := os.join_path({outputDir, libraryName}, context.allocator)
+		libraryName := assume(os.join_filename(VKFIELD_OUTPUT_LIB_NAME, "lib", context.allocator))
+		libraryOutPath := assume(os.join_path({outputDir, libraryName}, context.allocator))
 	}
-	options := make([dynamic]OdinBuildOption)
-	collect_odin_build_options(&options)
-	append(&options, ..VKFIELD_ODIN_LIB_OPTIONS)
-	append(&options, OdinBuildOption{flag = "out", value = {libraryOutPath}})
+	append(options, ..VKFIELD_ODIN_LIB_OPTIONS)
+	append(options, OdinBuildOption{flag = "out", value = {libraryOutPath}})
 
 	odinCmd := make([dynamic]string)
 	append(&odinCmd, ODIN_CMD, ODIN_BUILD_ARG, VKFIELD_SRC_DIR)
 	append(&odinCmd, ..odin_options_to_args(options[:]))
-	run_cmd(odinCmd[:]) or_return
+	assert(assert(run_cmd(odinCmd[:])) == 0)
 
 	if VKFIELD_MATLAB {
-		matlabLibraryName, _ := os.join_filename(fmt.aprintf("%s_lib", VKFIELD_OUTPUT_LIB_NAME), "lib", context.allocator)
-		matlabPath, _ := os.join_path({INSTALL_LOCATION, MATLAB_DIR, matlabLibraryName}, context.allocator)
-		os.copy_file(matlabPath, libraryOutPath)
+		matlabLibraryName := assume(os.join_filename(fmt.aprintf("%s_lib", VKFIELD_OUTPUT_LIB_NAME), "lib", context.allocator))
+		matlabPath := assume(os.join_path({INSTALL_LOCATION, MATLAB_DIR, matlabLibraryName}, context.allocator))
+		assert(os.copy_file(matlabPath, libraryOutPath))
 	}
 
 	return
 }
 
-build_test :: proc() -> (ok := true) {
-	outputDir, _ := os.join_path({INSTALL_LOCATION, VKFIELD_BINARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator)
-	// Make Output Directory
-	if !os.is_dir(outputDir) do os.make_directory_all(outputDir)
+build_test :: proc(options: ^[dynamic]OdinBuildOption) {
+	assert(check_cmd(ODIN_CMD), fmt.aprintf("Odin Command \"%v\" not found", ODIN_CMD))
+	assert(check_cmd(SLANG_CMD), fmt.aprintf("Slang Command \"%v\" not found", SLANG_CMD))
 
 	// Compile Shaders
-	for shader in PULSE_ECHO_SHADERS {
-		compileShaderGlsl(shader) or_return
-	}
+	for shader in VKFIELD_PULSE_ECHO_SHADERS do assert(compile_shader_slangc(shader))
+
+	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_BINARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
+	// Make Output Directory
+	if !os.is_dir(outputDir) do os.make_directory_all(outputDir)
 
 	// Odin Compilation
 	when ODIN_OS == .Windows {
 		binaryName, _ := os.join_filename(VKFIELD_TESTS_NAME, "exe", context.allocator)
 		binaryOutPath, _ := os.join_path({outputDir, binaryName}, context.allocator)
 	}
-	options := make([dynamic]OdinBuildOption)
-	collect_odin_build_options(&options)
-	append(&options, ..VKFIELD_ODIN_TEST_OPTIONS)
-	append(&options, OdinBuildOption{flag = "out", value = {binaryOutPath}})
+	append(options, ..VKFIELD_ODIN_TEST_OPTIONS)
+	append(options, OdinBuildOption{flag = "out", value = {binaryOutPath}})
 
 	odinCmd := make([dynamic]string)
 	append(&odinCmd, ODIN_CMD, ODIN_BUILD_ARG, VKFIELD_TEST_DIR)
 	append(&odinCmd, ..odin_options_to_args(options[:]))
-	run_cmd(odinCmd[:]) or_return
-	return
-}
-
-collect_odin_build_options :: proc(options: ^[dynamic]OdinBuildOption) {
-	append(options, ..collections_to_options(VKFIELD_COLLECTIONS))
-	append(options, ..VKFIELD_ODIN_BUILD_OPTIONS)
-	switch VKFIELD_BUILD_MODE {
-	case "debug":
-		append(options, ..VKFIELD_ODIN_DEBUG_OPTIONS)
-	}
-}
-
-run_cmd :: proc(cmd: []string, working_dir: string = "", loc := #caller_location) -> (ok: bool) {
-	processDesc: os.Process_Desc = {
-		command     = cmd,
-		working_dir = working_dir,
-	}
-	log.infof("Executing: %s", strings.join(cmd, " "))
-	_, stdout, stderr, err := os.process_exec(processDesc, context.allocator)
-	stdoutText, _ := strings.clone_from_bytes(stdout)
-	stderrText, _ := strings.clone_from_bytes(stderr)
-	if len(stdoutText) > 0 do log.info(stdoutText, loc)
-	if len(stderrText) > 0 do log.error(stderrText, loc)
-	return err == os.General_Error.None
-}
-
-collections_to_options :: proc(collections: []OdinCollection) -> (options: []OdinBuildOption) {
-	options = make([]OdinBuildOption, len(collections))
-	for collection, index in collections {
-		value := fmt.aprintf("%v=%v", collection.name, collection.path)
-		options[index] = {
-			flag  = "collection",
-			value = slice.from_ptr(new_clone(value), 1),
-		}
-	}
-	return
-}
-
-odin_options_to_args :: proc(options: []OdinBuildOption) -> (args: []string) {
-	args = make([]string, len(options))
-	for option, index in options {
-		if len(option.value) == 0 {
-			args[index] = fmt.tprintf("-%s", option.flag)
-		} else {
-			args[index] = fmt.tprintf("-%s:%s", option.flag, strings.join(option.value, ","))
-		}
-	}
-	return
-}
-
-glslang_options_to_args :: proc(options: []GlslangConfigurationOption) -> (args: []string) {
-	dArgs := make([dynamic]string, len(options))
-	for option in options {
-		switch var in option.flag {
-		case rune:
-			append(&dArgs, fmt.tprintf("-%c", var))
-		case string:
-			append(&dArgs, fmt.tprintf("--%s", var))
-		}
-		if len(option.value) > 0 {
-			append(&dArgs, option.value)
-		}
-	}
-	args = dArgs[:]
-	return
-}
-
-compileShaderGlsl :: proc(shader: ShaderFiles) -> (ok := true) {
-	dir, filename := os.split_path(shader.path)
-	moduleName, _ := os.split_filename(filename)
-	outputFilename, _ := os.join_filename(moduleName, COMPILED_SHADER_EXT, context.allocator)
-	outputPath, _ := os.join_path({dir, outputFilename}, context.allocator)
-
-	glslangCmd := make([dynamic]string)
-	append(&glslangCmd, GLSLANG_CMD)
-	append(&glslangCmd, shader.path)
-	append(&glslangCmd, "-gVS")
-	append(&glslangCmd, ..glslang_options_to_args({{flag = 'o', value = outputPath}}))
-	append(&glslangCmd, ..glslang_options_to_args(VKFIELD_GLSLANG_OPTIONS))
-
-	run_cmd(glslangCmd[:]) or_return
+	assert(assert(run_cmd(odinCmd[:])) == 0)
 	return
 }

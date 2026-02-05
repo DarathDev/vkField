@@ -13,7 +13,7 @@
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
-            "console": "internalConsole",
+            "console": "integratedTerminal",
             "preLaunchTask": "Build Tests",
             "internalConsoleOptions": "openOnFirstSessionStart",
         },
@@ -21,6 +21,20 @@
             "name": "(Windows) Attach",
             "type": "cppvsdbg",
             "request": "attach",
+        },
+        {
+            "name": "Debug Builder",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "build.exe",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "-test",
+                "-debug",
+                "-matlab",
+            ],
+            "preLaunchTask": "Build Builder",
+            "stopAtEntry": false,
         },
     ]
 }

@@ -96,10 +96,11 @@ simulator.ReceiveElements.PhysicalApodizations = rData(5, :);
 simulator.ReceiveElements.PhysicalDelays = rData(23, :);
 
 
-% mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
+mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
 vkTimer = tic();
 pulseEcho = vkField_mex(simulator);
 vkTime = toc(vkTimer);
+
 
 fprintf("fieldII Time == %d\n", fieldTime);
 fprintf("vkField Time == %d\n", vkTime);

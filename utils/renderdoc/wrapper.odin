@@ -27,7 +27,7 @@ load_api :: proc(
 	ok: bool,
 ) {
 	when LOAD_RENDERDOC {
-		dll_path := filepath.join([]string{renderdoc_install_root, RENDERDOC_LIB_NAME}, context.temp_allocator)
+		dll_path, _ := filepath.join([]string{renderdoc_install_root, RENDERDOC_LIB_NAME}, context.temp_allocator)
 		defer delete(dll_path, context.temp_allocator)
 
 		if !os.exists(renderdoc_install_root) {

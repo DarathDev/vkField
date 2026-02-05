@@ -9,6 +9,7 @@ import vkField "vkField:."
 @(test)
 oneRectSimulation :: proc(t: ^testing.T) {
 	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency    = 100e6,
@@ -41,6 +42,6 @@ oneRectSimulation :: proc(t: ^testing.T) {
 	vkField.planSimulation_odin(&settings, transmitElements, receiveElements, scatters)
 
 	data := vkField.simulate_odin(&settings, transmitElements, receiveElements, scatters)
-
+	defer delete(data)
 	fmt.println(data)
 }
