@@ -334,8 +334,9 @@ vkSimulate :: proc(
 	}
 
 	check(vk.QueueSubmit2(device.queues[device.computeQueueIndex], 1, &submitInfo, computeFence)) or_return
-	check(vk.WaitForFences(device.device, 1, &computeFence, true, auto_cast time.duration_nanoseconds(auto_cast 10 * time.Second))) or_return
+	check(vk.WaitForFences(device.device, 1, &computeFence, true, auto_cast time.duration_nanoseconds(auto_cast 100 * time.Second))) or_return
 	vkField_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
+	vk.DeviceWaitIdle(device.device) or_return
 	return
 }
 
