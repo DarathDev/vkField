@@ -6,7 +6,39 @@ float b2f(bool v) {
   return v ? 1.0f : 0.0f;
 }
 
-float sample_rect_aperture(in float n, in float4 rectSamples) {
+#if defined(PULSE_ECHO_CUMULATIVE)
+float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
+  bool qDelta = rectSamples.x == rectSamples.w;
+  bool qRect = !qDelta && (rectSamples.x == rectSamples.y);
+  bool qTri = !qDelta && (rectSamples.y == rectSamples.z);
+  bool qTrap = !(qDelta | qRect | qTri);
+
+  float sDelta = n >= rectSamples.x ? 1 : 0;
+
+  float sRect = (rectSamples.z - rectSamples.y) * saturate((n - rectSamples.y) / (rectSamples.z - rectSamples.y));
+
+  float sTriLeftSat = saturate((n - rectSamples.x) / (rectSamples.y - rectSamples.x));
+  float sTriLeft = 0.5f * (rectSamples.y - rectSamples.x) * sTriLeftSat * sTriLeftSat;
+  float sTriRightSat = saturate((rectSamples.w - n) / (rectSamples.w - rectSamples.z));
+  float sTriRight = 0.5f * (rectSamples.w - rectSamples.z) * (1 - sTriRightSat * sTriRightSat);
+
+  float value = b2f(qDelta) * sDelta + b2f(qRect) * sRect + b2f(qTri) * (sTriLeft + sTriRight) + b2f(qTrap) * (sTriLeft + sRect + sTriRight);
+  return value;
+}
+
+float aperture_power_denominator(in float4 nRect, in float dt, in float dt2) {
+  return nRect.x == nRect.w ? dt : dt2;
+}
+
+float sample_transmit_aperture(in int i, in float4 nRectT) {
+  return sample_rect_aperture_cumulative(i, nRectT) - sample_rect_aperture_cumulative(i - 1, nRectT);
+}
+
+float sample_receive_aperture(in int n, in int i, in float4 nRectR) {
+  return sample_rect_aperture_cumulative(n - i + 1, nRectR) - sample_rect_aperture_cumulative(n - i, nRectR);
+}
+#else
+float sample_rect_aperture_discrete(in float n, in float4 rectSamples) {
   bool qDelta = rectSamples.w - rectSamples.x < 1;
   bool qRect = !qDelta && (rectSamples.y - rectSamples.x < 1);
   bool qTri = !qDelta && (rectSamples.z - rectSamples.y < 1);
@@ -39,6 +71,19 @@ float sample_rect_aperture(in float n, in float4 rectSamples) {
   float value = b2f(qDelta) * sDelta + b2f(qRect) * ((b2f(qRectLeft) * sRectLeft) + (b2f(qRectCenter) * sRectCenter) + (b2f(qRectRight) * sRectRight)) + b2f(qTri) * ((b2f(qTriLeft) * sTriLeft) + (b2f(qTriRight) * sTriRight)) + b2f(qTrap) * ((b2f(qTrapLeft) * sTrapLeft) + (b2f(qTrapCenter) * sTrapCenter) + (b2f(qTrapRight) * sTrapRight));
   return saturate(value);
 }
+
+float aperture_power_denominator(in float4 nRect, in float dt, in float dt2) {
+  return nRect.w - nRect.x <= 1 ? dt : dt2;
+}
+
+float sample_transmit_aperture(in int i, in float4 nRectT) {
+  return sample_rect_aperture_discrete(i, nRectT);
+}
+
+float sample_receive_aperture(in int n, in int i, in float4 nRectR) {
+  return sample_rect_aperture_discrete(n - i, nRectR);
+}
+#endif
 
 [shader("compute")]
 [numthreads(128, 1, 1)]
@@ -91,13 +136,13 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID) {
   int minK = int(max(floor(nRectT.x - 0.5f), n - ceil(nRectR.w + 0.5f)));
   int maxK = int(min(ceil(nRectT.w + 0.5f), n - floor(nRectR.x - 0.5f)));
 
-  float powerT = (apertureSizeT.x * apertureSizeT.y) / (2 * pi * length(scatterPositionT)) / (nRectT.w - nRectT.x <= 1 ? dt : dt2T);
-  float powerR = (apertureSizeR.x * apertureSizeR.y) / (2 * pi * length(scatterPositionR)) / (nRectR.w - nRectR.x <= 1 ? dt : dt2R);
+  float powerT = (apertureSizeT.x * apertureSizeT.y) / (2 * pi * length(scatterPositionT)) / aperture_power_denominator(nRectT, dt, dt2T);
+  float powerR = (apertureSizeR.x * apertureSizeR.y) / (2 * pi * length(scatterPositionR)) / aperture_power_denominator(nRectR, dt, dt2R);
 
   float sum = 0;
   for (int i = minK; i <= maxK; i++) {
-    float vT = sample_rect_aperture(i, nRectT);
-    float vR = sample_rect_aperture(n - i, nRectR);
+    float vT = sample_transmit_aperture(i, nRectT);
+    float vR = sample_receive_aperture(n, i, nRectR);
     sum += vT * vR;
   }
   sum *= powerT * powerR * scatter.amplitude * transmitAperture.apodization * receiveAperture.apodization;

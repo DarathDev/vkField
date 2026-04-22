@@ -10,13 +10,16 @@ SHADER_FOLDER :: "core/shaders/"
 VKFIELD_PULSE_ECHO_SHADERS: []SlangShaderFile = {
 	{
 		path = SHADER_FOLDER + "pulse_echo.slang",
+		outputName = "pulse_echo",
 		type = .Compute,
 		capabilities = {"spvAtomicFloat32AddEXT"},
 	},
 	{
-		path = SHADER_FOLDER + "pulse_echo_cumulative.slang",
+		path = SHADER_FOLDER + "pulse_echo.slang",
+		outputName = "pulse_echo_cumulative",
 		type = .Compute,
 		capabilities = {"spvAtomicFloat32AddEXT"},
+		defines = {"PULSE_ECHO_CUMULATIVE=1"},
 	},
 }
 VKFIELD_DEBUG_PRECOMPILED_SHADERS: []SlangShaderFile = {}

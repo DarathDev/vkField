@@ -460,15 +460,19 @@ SlangShaderType :: enum {
 
 SlangShaderFile :: struct {
 	path:         string,
+	outputName:   string,
 	type:         SlangShaderType,
 	capabilities: []string,
+	defines:      []string,
 }
 
 compile_shader_slangc :: proc(shader: SlangShaderFile) -> (ok := true) {
 	dir, filename := os.split_path(shader.path)
 	moduleName, ext := os.split_filename(filename)
 	assert(strings.compare(ext, SLANG_INPUT_EXT) == 0)
-	outputPath := assume(os.join_path({dir, assume(os.join_filename(moduleName, SLANG_TARGET_EXT, context.allocator))}, context.allocator))
+	outputModuleName := moduleName
+	if len(shader.outputName) > 0 do outputModuleName = shader.outputName
+	outputPath := assume(os.join_path({dir, assume(os.join_filename(outputModuleName, SLANG_TARGET_EXT, context.allocator))}, context.allocator))
 
 	slangCmd := make([dynamic]string)
 	append(&slangCmd, SLANG_CMD)
@@ -478,6 +482,9 @@ compile_shader_slangc :: proc(shader: SlangShaderFile) -> (ok := true) {
 	append(&slangCmd, "-profile", SLANG_PROFILE)
 	for capability in shader.capabilities {
 		append(&slangCmd, "-capability", capability)
+	}
+	for define in shader.defines {
+		append(&slangCmd, "-D", define)
 	}
 
 	confirm(run_cmd(slangCmd[:])) or_return
