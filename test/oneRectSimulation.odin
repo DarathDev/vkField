@@ -5,11 +5,15 @@ import "core:log"
 import "core:slice"
 import "core:testing"
 import vkField "vkField:."
+import utility "vkField:utility"
 
 @(test)
 oneRectSimulation :: proc(t: ^testing.T) {
 	context.logger = log.create_console_logger()
 	defer log.destroy_console_logger(context.logger)
+
+	simulator, _ := utility.expect(t, vkField.create_vulkan_simulator())
+	defer vkField.destroy_vulkan_simulator(&simulator)
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency    = 100e6,
@@ -17,7 +21,7 @@ oneRectSimulation :: proc(t: ^testing.T) {
 		transmitElementCount = 1,
 		receiveElementCount  = 1,
 		scatterCount         = 1,
-		headless             = true,
+		cumulative           = true,
 	}
 
 	transmitElement: vkField.Element = {
@@ -39,9 +43,9 @@ oneRectSimulation :: proc(t: ^testing.T) {
 	receiveElements := slice.from_ptr(&receiveElement, 1)
 	scatters := slice.from_ptr(&scatter, 1)
 
-	vkField.planSimulation_odin(&settings, transmitElements, receiveElements, scatters)
+	vkField.plan_simulation(&settings, transmitElements, receiveElements, scatters)
 
-	data := vkField.simulate_odin(&settings, transmitElements, receiveElements, scatters)
+	data, _ := utility.expect(t, vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters))
 	defer delete(data)
 	fmt.println(data)
 }

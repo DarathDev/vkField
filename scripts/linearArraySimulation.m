@@ -104,6 +104,7 @@ vkTime = toc(vkTimer);
 
 fprintf("fieldII Time == %d\n", fieldTime);
 fprintf("vkField Time == %d\n", vkTime);
+fprintf("vkField Time == %d\n", simulator.SimulationTime);
 
 pulseEcho = double(pulseEcho) * dt^4;
 

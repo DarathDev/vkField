@@ -1,7 +1,5 @@
 package vkfield
 
-import "base:runtime"
-import "core:dynlib"
 import "core:log"
 import "core:math"
 import "core:slice"
@@ -21,14 +19,6 @@ check :: vkField_util.check
 assert :: vkField_util.assert
 @(private = "file")
 assume :: vkField_util.assume
-
-when ODIN_OS == .Darwin {
-	// NOTE: just a bogus import of the system library,
-	// needed so we can add a linker flag to point to /usr/local/lib (where vulkan is installed by default)
-	// when trying to load vulkan.
-	@(require, extra_linker_flags = "-rpath /usr/local/lib")
-	foreign import __ "system:System.framework"
-}
 
 ENABLE_VALIDATION_LAYERS :: #config(ENABLE_VALIDATION_LAYERS, ODIN_DEBUG)
 
@@ -53,23 +43,26 @@ when ODIN_OS != .Darwin {
 }
 
 vkSimulator :: struct {
-	settings:                   SimulationSettings,
-	module:                     dynlib.Library,
 	instance:                   vkField_vk.Instance,
-	debugUserData:              vkField_vk.DebugUserData,
+	debugUserData:              ^vkField_vk.DebugUserData,
 	debugMessenger:             vkField_vk.DebugMessenger,
 	physicalDevices:            #soa[]vkField_vk.PhysicalDevice,
 	device:                     vkField_vk.Device,
-	shaderModule:               vk.ShaderModule,
+	shaderModules:              [dynamic]vk.ShaderModule,
 	computePipelineLayout:      vk.PipelineLayout,
+	using computePipelines:     vkPipelines,
 	computeDescriptorSetLayout: vkField_vk.DescriptorSetLayout,
-	computePipeline:            vk.Pipeline,
 	computeCommandPool:         vkField_vk.CommandPool,
 	computeDescriptorPool:      vkField_vk.DescriptorPool,
 	computeFence:               vk.Fence,
 }
 
-vkSimulationSettings :: struct {
+vkPipelines :: struct {
+	pulseEcho:           vkField_vk.ComputePipeline,
+	pulseEchoCumulative: vkField_vk.ComputePipeline,
+}
+
+vkSimulationPushConstants :: struct {
 	samplingFrequency: f32,
 	speedOfSound:      f32,
 	startingTime:      f32,
@@ -77,19 +70,17 @@ vkSimulationSettings :: struct {
 	scatterIndex:      i32,
 }
 
-vkCreateSimulator :: proc(settings: SimulationSettings, simulator: ^vkSimulator) -> (ok := vk.Result.SUCCESS) {
-	simulator.settings = settings
-
+create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
+	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
 	simulator.instance = confirm(
-		vkField_vk.create_instance({appName = "vkField", presentable = true, vulkanVersion = vk.API_VERSION_1_3}, debugUserData = &simulator.debugUserData),
+		vkField_vk.create_instance({appName = "vkField", presentable = true, vulkanVersion = vk.API_VERSION_1_3}, debugUserData = simulator.debugUserData),
 	) or_return
 
 	when ENABLE_VALIDATION_LAYERS {
-		simulator.debugMessenger = confirm(vkField_vk.create_debug_messenger(simulator.instance, &simulator.debugUserData)) or_return
+		simulator.debugMessenger = confirm(vkField_vk.create_debug_messenger(simulator.instance, simulator.debugUserData)) or_return
 	}
 
-	if (!settings.headless) do vkField_util.throw_not_implemented()
 	simulator.physicalDevices = vkField_vk.get_physical_devices(simulator.instance.instance) or_return
 	requiredCapabilities: vkField_vk.DeviceCapabilities = {.AtomicAddFloat32Buffer, .Synchronization2}
 	physicalDevice, physicalDeviceAvailable := vkField_vk.pick_physical_device(
@@ -97,11 +88,8 @@ vkCreateSimulator :: proc(settings: SimulationSettings, simulator: ^vkSimulator)
 		simulator.physicalDevices,
 		{requiredCapabilities = requiredCapabilities},
 	)
-	if !physicalDeviceAvailable do return vk.Result.ERROR_DEVICE_LOST
+	if !physicalDeviceAvailable do return simulator, vk.Result.ERROR_DEVICE_LOST
 	simulator.device = check(vkField_vk.create_device(simulator.instance, physicalDevice, {requiredCapabilities = requiredCapabilities})) or_return
-
-	shaderCode := !settings.cumulative ? SHADER_PULSE_ECHO_COMP : SHADER_PULSE_ECHO_CUMULATIVE_COMP
-	shaderCodeLabel := !settings.cumulative ? "Pulse Echo" : "Cumulative Pulse Echo"
 
 	simulator.computeDescriptorSetLayout = check(
 		vkField_vk.create_descriptor_set_layout(
@@ -118,17 +106,27 @@ vkCreateSimulator :: proc(settings: SimulationSettings, simulator: ^vkSimulator)
 		vkField_vk.create_pipeline_layout(
 			simulator.device,
 			{simulator.computeDescriptorSetLayout.layout},
-			{{stageFlags = {.COMPUTE}, size = size_of(vkSimulationSettings), offset = 0}},
+			{{stageFlags = {.COMPUTE}, size = size_of(vkSimulationPushConstants), offset = 0}},
 		),
 	) or_return
-	simulator.shaderModule, simulator.computePipeline = check(
+
+	simulator.pulseEcho = check(
 		vkField_vk.create_compute_pipeline(
 			simulator.device,
-			{kind = .Compute, code = shaderCode, entryPoints = {{name = "main", stage = .COMPUTE}}},
+			{kind = .Compute, code = SHADER_PULSE_ECHO_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
 			simulator.computePipelineLayout,
-			shaderCodeLabel,
+			"Pulse Echo",
 		),
 	) or_return
+	simulator.pulseEchoCumulative = check(
+		vkField_vk.create_compute_pipeline(
+			simulator.device,
+			{kind = .Compute, code = SHADER_PULSE_ECHO_CUMULATIVE_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
+			simulator.computePipelineLayout,
+			"Cumulative Pulse Echo",
+		),
+	) or_return
+
 	simulator.computeCommandPool = check(vkField_vk.create_command_pool(simulator.device, simulator.device.computeQueueIndex, true)) or_return
 	simulator.computeDescriptorPool = check(
 		vkField_vk.create_descriptor_pool(simulator.device, 1, simulator.computeDescriptorSetLayout, label = "Compute"),
@@ -138,25 +136,27 @@ vkCreateSimulator :: proc(settings: SimulationSettings, simulator: ^vkSimulator)
 	return
 }
 
-vkDestroySimulator :: proc(simulator: ^vkSimulator) {
+destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 	vkField_vk.destroy_fence(simulator.device, simulator.computeFence)
 	vkField_vk.destroy_command_pool(simulator.device, simulator.computeCommandPool)
 	vkField_vk.destroy_descriptor_pool(simulator.device, simulator.computeDescriptorPool)
-	vkField_vk.destroy_pipeline(simulator.device, simulator.computePipeline)
+	vkField_vk.destroy_compute_pipeline(simulator.device, simulator.pulseEcho)
+	vkField_vk.destroy_compute_pipeline(simulator.device, simulator.pulseEchoCumulative)
 	vkField_vk.destroy_pipeline_layout(simulator.device, simulator.computePipelineLayout)
 	vkField_vk.destroy_descriptor_set_layout(simulator.device, simulator.computeDescriptorSetLayout)
-	vkField_vk.destroy_shader_module(simulator.device, simulator.shaderModule)
 	vkField_vk.destroy_device(&simulator.device)
 	vkField_vk.free_physical_devices(&simulator.physicalDevices)
 	when ENABLE_VALIDATION_LAYERS {
 		vkField_vk.destroy_debug_messenger(simulator.instance.instance, &simulator.debugMessenger)
 	}
 	vkField_vk.destroy_instance(&simulator.instance)
+	free(simulator.debugUserData)
 	simulator^ = {}
 }
 
 vkSimulate :: proc(
 	simulator: ^vkSimulator,
+	settings: SimulationSettings,
 	transmitElements: []Element,
 	receiveElements: []Element,
 	scatters: []Scatter,
@@ -167,9 +167,8 @@ vkSimulate :: proc(
 ) {
 	device := simulator.device
 	computeFence := simulator.computeFence
-	settings := simulator.settings
 
-	response = make([]f32, simulator.settings.receiveElementCount * simulator.settings.sampleCount, allocator)
+	response = make([]f32, settings.receiveElementCount * settings.sampleCount, allocator)
 
 	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
 	defer vkField_vk.reset_command_buffer(device, &simulator.computeCommandPool, commandBuffer)
@@ -211,10 +210,8 @@ vkSimulate :: proc(
 		}
 	}
 
-	// responseBufferView := check(vkField_vk.create_buffer_view(device, responseBuffer, .R32_SFLOAT)) or_return
-	// defer vkField_vk.destroy_buffer_view(device, responseBufferView)
-
-	vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.computePipeline)
+	if !settings.cumulative do vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.pulseEcho.pipeline)
+	else do vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.pulseEchoCumulative.pipeline)
 
 	vkField_vk.cmd_pipeline_barrier(
 		commandBuffer,
@@ -283,7 +280,7 @@ vkSimulate :: proc(
 
 	vk.CmdBindDescriptorSets(commandBuffer, vk.PipelineBindPoint.COMPUTE, simulator.computePipelineLayout, 0, 1, &descriptorSet, 0, nil)
 
-	simSettings := vkSimulationSettings {
+	simSettings := vkSimulationPushConstants {
 		samplingFrequency = settings.samplingFrequency,
 		speedOfSound      = settings.speedOfSound,
 		startingTime      = settings.startTime,
@@ -294,12 +291,7 @@ vkSimulate :: proc(
 	for i: int; i < int(settings.scatterCount); i += 1 {
 		simSettings.scatterIndex = i32(i)
 		vkField_vk.cmd_push_constants(commandBuffer, simulator.computePipelineLayout, {.COMPUTE}, simSettings)
-		vk.CmdDispatch(
-			commandBuffer,
-			u32(math.ceil(f32(simulator.settings.sampleCount) / 128)),
-			u32(settings.transmitElementCount),
-			u32(settings.receiveElementCount),
-		)
+		vk.CmdDispatch(commandBuffer, u32(math.ceil(f32(settings.sampleCount) / 128)), u32(settings.transmitElementCount), u32(settings.receiveElementCount))
 	}
 
 	vkField_vk.cmd_pipeline_barrier(

@@ -1192,10 +1192,6 @@ destroy_pipeline_layout :: proc(device: Device, layout: vk.PipelineLayout) {
 	vk.DestroyPipelineLayout(device.device, layout, nil)
 }
 
-destroy_pipeline :: proc(device: Device, pipeline: vk.Pipeline) {
-	vk.DestroyPipeline(device.device, pipeline, nil)
-}
-
 GraphicsTechnique :: struct {
 	using rasterizationOptions: RasterizationOptions,
 	using blendOptions:         BlendOptions,
@@ -1402,26 +1398,22 @@ create_graphics_pipelines :: proc(
 	return
 }
 
-create_compute_pipeline :: proc(
-	device: Device,
-	shaderInfo: ShaderInfo,
-	layout: vk.PipelineLayout,
-	label := "",
-) -> (
-	module: vk.ShaderModule,
-	pipeline: vk.Pipeline,
-	ok: vk.Result,
-) {
+ComputePipeline :: struct {
+	pipeline:     vk.Pipeline,
+	shaderModule: vk.ShaderModule,
+}
+
+create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: vk.PipelineLayout, label := "") -> (pipeline: ComputePipeline, ok: vk.Result) {
 	checkLabel(label)
 
 	assert(len(shaderInfo.entryPoints) == 1)
-	module = create_shader_module(device, shaderInfo.code, label) or_return
+	pipeline.shaderModule = create_shader_module(device, shaderInfo.code, label) or_return
 
 	stageCreateInfo: vk.PipelineShaderStageCreateInfo = {
 		sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
 		flags  = {},
 		stage  = {.COMPUTE},
-		module = module,
+		module = pipeline.shaderModule,
 		pName  = strings.clone_to_cstring(shaderInfo.entryPoints[0].name, context.temp_allocator),
 	}
 
@@ -1432,11 +1424,20 @@ create_compute_pipeline :: proc(
 		stage  = stageCreateInfo,
 	}
 
-	check(vk.CreateComputePipelines(device.device, {}, 1, &createInfo, nil, &pipeline)) or_return
+	check(vk.CreateComputePipelines(device.device, {}, 1, &createInfo, nil, &pipeline.pipeline)) or_return
 	if len(label) > 0 {
-		name(device, pipeline, label)
+		name(device, pipeline.pipeline, label)
 	}
 	return
+}
+
+destroy_pipeline :: proc(device: Device, pipeline: vk.Pipeline) {
+	vk.DestroyPipeline(device.device, pipeline, nil)
+}
+
+destroy_compute_pipeline :: proc(device: Device, pipeline: ComputePipeline) {
+	destroy_shader_module(device, pipeline.shaderModule)
+	destroy_pipeline(device, pipeline.pipeline)
 }
 
 /* --------------------- */

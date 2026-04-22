@@ -10,8 +10,7 @@ using matlab::mex::ArgumentList;
 int print(matlab::mex::Function& function, const char* string) {
 	std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = function.getEngine();
 	ArrayFactory factory;
-	std::string message(string);
-	message.push_back('\n');
+	std::string message({ string, '\n' });
 	matlabPtr->feval(u"fprintf", 0,
 			std::vector<Array>({ factory.createScalar(message) }));
 	return 0;
@@ -40,7 +39,7 @@ public:
 		const TypedArray<f32> mxSpeedOfSound = matlabPtr->getProperty(mxSimulator, u"SpeedOfSound");
 		const TypedArray<f32> mxStartTime = matlabPtr->getProperty(mxSimulator, u"StartTime");
 		const TypedArray<u32> mxSampleCount = matlabPtr->getProperty(mxSimulator, u"SampleCount");
-		const Array mxHeadless = matlabPtr->getProperty(mxSimulator, u"Headless");
+		const Array mxCumulative = matlabPtr->getProperty(mxSimulator, u"Cumulative");
 		const ObjectArray mxTransmitElementSet = matlabPtr->getProperty(mxSimulator, u"TransmitElements");
 		const ObjectArray mxReceiveElementSet = matlabPtr->getProperty(mxSimulator, u"ReceiveElements");
 		const ObjectArray mxScatterSet = matlabPtr->getProperty(mxSimulator, u"Scatters");
@@ -50,7 +49,7 @@ public:
 		settings.speedOfSound = mxSpeedOfSound[0];
 		settings.startTime = mxStartTime[0];
 		settings.sampleCount = mxSampleCount[0];
-		settings.headless = mxHeadless[0];
+		settings.cumulative = mxCumulative[0];
 		settings.transmitElementCount = (i32)matlabPtr->getProperty(mxTransmitElementSet, "Count")[0];
 		settings.receiveElementCount = (i32)matlabPtr->getProperty(mxReceiveElementSet, "Count")[0];
 		settings.scatterCount = (i32)matlabPtr->getProperty(mxScatterSet, "Count")[0];
@@ -63,18 +62,25 @@ public:
 		copyElements(mxReceiveElementSet, receiveElements, settings.receiveElementCount);
 		copyScatters(mxScatterSet, scatters, settings.scatterCount);
 
-		planSimulation_c(&settings, transmitElements, receiveElements, scatters, print, this);
+		Simulator* simulator;
+
+		create_vulkan_simulator_c(&simulator, print, this);
+
+		plan_simulation_c(&settings, transmitElements, receiveElements, scatters, print, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime", factory.createScalar<f32>(settings.startTime));
 		matlabPtr->setProperty(mxSimulator, u"SampleCount", factory.createScalar<u32>(settings.sampleCount));
 
 		auto pulseEchoBuffer = factory.createBuffer<float>(settings.sampleCount * settings.receiveElementCount);
 
-		simulate_c(&settings, transmitElements, receiveElements, scatters, pulseEchoBuffer.get(), print, this);
+		simulate_c(simulator, &settings, transmitElements, receiveElements, scatters, pulseEchoBuffer.get(), print, this);
+		matlabPtr->setProperty(mxSimulator, u"SimulationTime", factory.createScalar<f32>(settings.simulationTime));
 
 		ArrayDimensions pulseEchoDims;
 		pulseEchoDims.push_back((uz)settings.sampleCount);
 		pulseEchoDims.push_back((uz)settings.receiveElementCount);
 		outputs[0] = factory.createArrayFromBuffer(pulseEchoDims, std::move(pulseEchoBuffer));
+
+		destroy_vulkan_simulator_c(simulator, print, this);
 
 		void mexUnlock();
 

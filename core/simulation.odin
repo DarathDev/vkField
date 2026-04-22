@@ -1,17 +1,13 @@
 package vkfield
 
 import rdoc "../utils/renderdoc"
-import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
 import "core:os"
 import "core:path/filepath"
-import "core:slice"
-import "core:strings"
-import vk "vendor:vulkan"
+import "core:time"
 import vkField_util "vkField:utility"
-import vkField_vk "vkField:vulkan"
 
 @(private = "file")
 is_ok :: vkField_util.is_ok
@@ -24,6 +20,10 @@ assert :: vkField_util.assert
 @(private = "file")
 assume :: vkField_util.assume
 
+Simulator :: union {
+	vkSimulator,
+}
+
 SimulationSettings :: struct {
 	samplingFrequency:    f32,
 	speedOfSound:         f32,
@@ -32,10 +32,9 @@ SimulationSettings :: struct {
 	scatterCount:         i32,
 	startTime:            f32,
 	sampleCount:          i32,
-	headless:             b32,
 	cumulative:           b32,
+	simulationTime:       f32,
 }
-#assert(size_of(SimulationSettings) == 36)
 
 Element :: struct #align (16) {
 	aperture:     Aperture,
@@ -66,50 +65,8 @@ Scatter :: struct {
 }
 #assert(size_of(Scatter) == 16)
 
-@(export)
-simulate_c :: proc "c" (
-	settings: ^SimulationSettings,
-	transmitElements: [^]Element,
-	receiveElements: [^]Element,
-	scatters: [^]Scatter,
-	pulseEcho: [^]f32,
-	cLogger: cLogProc = nil,
-	loggerUserData: rawptr = nil,
-) {
-	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	data := simulate_odin(
-		settings,
-		transmitElements[:settings.transmitElementCount],
-		receiveElements[:settings.receiveElementCount],
-		scatters[:settings.scatterCount],
-	)
-	copy(pulseEcho[:len(data)], data)
-}
-
-@(export)
-planSimulation_c :: proc "c" (
-	settings: ^SimulationSettings,
-	transmitElements: ^Element,
-	receiveElements: ^Element,
-	scatters: ^Scatter,
-	cLogger: cLogProc = nil,
-	loggerUserData: rawptr = nil,
-) {
-	if !vkField_vk.VKFIELD_VULKAN_INITIALIZED {
-		vkField_vk.initialize()
-	}
-	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	planSimulation_odin(
-		settings,
-		slice.from_ptr(transmitElements, int(settings.transmitElementCount)),
-		slice.from_ptr(receiveElements, int(settings.receiveElementCount)),
-		slice.from_ptr(scatters, int(settings.scatterCount)),
-	)
-}
-
-simulate_odin :: proc(
+simulate :: proc(
+	simulator: Simulator,
 	settings: ^SimulationSettings,
 	transmitElements: []Element,
 	receiveElements: []Element,
@@ -117,50 +74,42 @@ simulate_odin :: proc(
 	allocator := context.allocator,
 ) -> (
 	data: []f32,
+	ok := true,
 ) {
-	simulator: vkSimulator
-	vkCreateSimulator(settings^, &simulator)
-	defer vkDestroySimulator(&simulator)
-
-	if (settings.transmitElementCount == 0) {
-		settings.transmitElementCount = i32(len(transmitElements))
-	}
-
-	if (settings.receiveElementCount == 0) {
-		settings.receiveElementCount = i32(len(receiveElements))
-	}
-
-	if (settings.scatterCount == 0) {
-		settings.scatterCount = i32(len(scatters))
-	}
+	if (settings.transmitElementCount == 0) do settings.transmitElementCount = i32(len(transmitElements))
+	if (settings.receiveElementCount == 0) do settings.receiveElementCount = i32(len(receiveElements))
+	if (settings.scatterCount == 0) do settings.scatterCount = i32(len(scatters))
 
 	rdoc_lib, rdoc_api, rdoc_ok := rdoc.load_api()
-	if rdoc_ok {
-		log.infof("loaded renderdoc %v", rdoc_api)
-	} else {
-		log.warn("couldnt load renderdoc")
-	}
-	defer if rdoc_ok { rdoc.unload_api(rdoc_lib) }
+	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
+	else do log.warn("couldnt load renderdoc")
+	defer if rdoc_ok do rdoc.unload_api(rdoc_lib)
 
 	rdoc.SetCaptureFilePathTemplate(rdoc_api, "captures/capture.rdc")
 
-	if rdoc_ok {
-		devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(simulator.instance.instance)
-		rdoc.StartFrameCapture(rdoc_api, devicePointer, nil)
-		// assert(rdoc.IsFrameCapturing(rdoc_api))
+	if vkSimulator, simOk := simulator.(vkSimulator); simOk {
+		if rdoc_ok {
+			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(vkSimulator.instance.instance)
+			rdoc.StartFrameCapture(rdoc_api, devicePointer, nil)
+			// assert(rdoc.IsFrameCapturing(rdoc_api))
+		}
+		defer if rdoc_ok {
+			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(vkSimulator.instance.instance)
+			rdoc.EndFrameCapture(rdoc_api, devicePointer, nil)
+			// LaunchOrShowRenderdocUI(rdoc_api)
+		}
 	}
-	defer if rdoc_ok {
-		devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(simulator.instance.instance)
-		rdoc.EndFrameCapture(rdoc_api, devicePointer, nil)
-		// LaunchOrShowRenderdocUI(rdoc_api)
+	startTimeStamp := time.now()
+	switch &sim in simulator {
+	case vkSimulator:
+		data = is_ok(check(vkSimulate(&sim, settings^, transmitElements, receiveElements, scatters))) or_return
 	}
-
-	data, _ = check(vkSimulate(&simulator, transmitElements, receiveElements, scatters))
-
+	endTimeStamp := time.now()
+	settings.simulationTime = auto_cast time.duration_seconds(time.diff(startTimeStamp, endTimeStamp))
 	return
 }
 
-planSimulation_odin :: proc(settings: ^SimulationSettings, transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) {
+plan_simulation :: proc(settings: ^SimulationSettings, transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) {
 	minDistance, maxDistance := findDistanceLimits(transmitElements, receiveElements, scatters)
 	settings.startTime = minDistance / settings.speedOfSound
 	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))
@@ -196,34 +145,6 @@ findDistanceLimits :: proc(transmitElements: []Element, receiveElements: []Eleme
 	maxDistance = maxTransmitDistance + maxReceiveDistance
 	minDistance = min(minDistance, maxDistance)
 	return
-}
-
-cLogProc :: #type proc "c" (pUserData: rawptr, string: cstring)
-
-c_logger :: proc(l: log.Logger, c: cLogProc, pUserData: rawptr) -> log.Logger {
-	c_logger_data :: struct {
-		wrappedLogger: log.Logger,
-		cLogProc:      cLogProc,
-		pUserData:     rawptr,
-	}
-	c_logger_proc :: proc(data: rawptr, level: log.Level, text: string, options: log.Options, locations := #caller_location) {
-		data := cast(^c_logger_data)data
-		if (data.cLogProc != nil) {
-			data.cLogProc(data.pUserData, strings.clone_to_cstring(text, context.temp_allocator))
-		}
-		data.wrappedLogger.procedure(data.wrappedLogger.data, level, text, options, locations)
-	}
-
-	logger_data := new(c_logger_data, context.allocator)
-	logger_data.wrappedLogger = context.logger
-	logger_data.cLogProc = c
-	logger_data.pUserData = pUserData
-	return log.Logger {
-		data = logger_data,
-		lowest_level = logger_data.wrappedLogger.lowest_level,
-		options = logger_data.wrappedLogger.options,
-		procedure = c_logger_proc,
-	}
 }
 
 initRenderDoc :: proc() {

@@ -5,7 +5,8 @@ classdef Simulation < handle
         SpeedOfSound(1,1) single = 1540;
         StartTime(1,1) single = NaN;
         SampleCount(1,1) uint32 = 0;
-        Headless(1,1) logical = true;
+        Cumulative(1,1) logical = true;
+        SimulationTime(1,1) single = NaN;
     end
 
     properties (Dependent)
