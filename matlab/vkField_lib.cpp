@@ -8,11 +8,7 @@ using matlab::mex::ArgumentList;
 
 
 int print(matlab::mex::Function& function, const char* string) {
-	std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = function.getEngine();
-	ArrayFactory factory;
-	std::string message({ string, '\n' });
-	matlabPtr->feval(u"fprintf", 0,
-			std::vector<Array>({ factory.createScalar(message) }));
+	std::cout << string << std::endl;
 	return 0;
 }
 
