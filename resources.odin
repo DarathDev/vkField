@@ -7,19 +7,18 @@ when ODIN_OS == .Windows {
 SLANG_LIBRARIES: []string = {"slang", "slang-compiler", "slang-rt", "gfx"}
 
 SHADER_FOLDER :: "core/shaders/"
+SAMPLE_GROUP_X :: 128
+RECEIVE_GROUP_Y :: 1
+SCATTER_REDUCTION_Z :: 1
+
 VKFIELD_PULSE_ECHO_SHADERS: []SlangShaderFile = {
-	{
-		path = SHADER_FOLDER + "pulse_echo.slang",
-		outputName = "pulse_echo",
-		type = .Compute,
-		capabilities = {"spvAtomicFloat32AddEXT"},
-	},
+	{path = SHADER_FOLDER + "pulse_echo.slang", outputName = "pulse_echo", type = .Compute, capabilities = {"spvAtomicFloat32AddEXT"}},
 	{
 		path = SHADER_FOLDER + "pulse_echo.slang",
 		outputName = "pulse_echo_cumulative",
 		type = .Compute,
 		capabilities = {"spvAtomicFloat32AddEXT"},
-		defines = {"PULSE_ECHO_CUMULATIVE=1"},
+		defines = {{"PULSE_ECHO_CUMULATIVE", "1"}},
 	},
 }
 VKFIELD_DEBUG_PRECOMPILED_SHADERS: []SlangShaderFile = {}

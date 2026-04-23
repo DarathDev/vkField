@@ -8,7 +8,12 @@ public struct SimulationSettings {
   public float speedOfSound;
   public float startingTime;
   public uint sampleCount;
-  public uint scatterIndex;
+  public uint receiveStart;
+  public uint receiveCount;
+  public uint transmitCount;
+  public uint transmitStart;
+  public uint transmitBatchCount;
+  public uint scatterCount;
 };
 
 public struct RectangularAperture {

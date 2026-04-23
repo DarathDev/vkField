@@ -463,10 +463,10 @@ SlangShaderFile :: struct {
 	outputName:   string,
 	type:         SlangShaderType,
 	capabilities: []string,
-	defines:      []string,
+	defines:      []CliDefine,
 }
 
-compile_shader_slangc :: proc(shader: SlangShaderFile) -> (ok := true) {
+compile_shader_slangc :: proc(shader: SlangShaderFile, extraDefines: []CliDefine = {}) -> (ok := true) {
 	dir, filename := os.split_path(shader.path)
 	moduleName, ext := os.split_filename(filename)
 	assert(strings.compare(ext, SLANG_INPUT_EXT) == 0)
@@ -483,9 +483,9 @@ compile_shader_slangc :: proc(shader: SlangShaderFile) -> (ok := true) {
 	for capability in shader.capabilities {
 		append(&slangCmd, "-capability", capability)
 	}
-	for define in shader.defines {
-		append(&slangCmd, "-D", define)
-	}
+	append(&slangCmd, ..cli_defines_to_args(shader.defines))
+
+	append(&slangCmd, ..cli_defines_to_args(extraDefines))
 
 	confirm(run_cmd(slangCmd[:])) or_return
 	return

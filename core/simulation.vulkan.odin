@@ -26,6 +26,10 @@ MAX_FRAMES_IN_FLIGHT :: 2
 
 USE_CUMULATIVE_COMPUTE :: #config(USE_CUMULATIVE_COMPUTE, true)
 
+VKFIELD_SAMPLE_GROUP_X := #config(SAMPLE_GROUP_X, 128)
+VKFIELD_RECEIVE_GROUP_Y := #config(RECEIVE_GROUP_Y, 16)
+VKFIELD_SCATTER_REDUCTION_Z := #config(SCATTER_REDUCTION_Z, 8)
+
 SHADER_PULSE_ECHO_COMP :: #load("shaders/pulse_echo.spv")
 SHADER_PULSE_ECHO_CUMULATIVE_COMP :: #load("shaders/pulse_echo_cumulative.spv")
 
@@ -67,7 +71,12 @@ vkSimulationPushConstants :: struct {
 	speedOfSound:      f32,
 	startingTime:      f32,
 	sampleCount:       i32,
-	scatterIndex:      i32,
+	receiveStart:      i32,
+	receiveCount:      i32,
+	transmitCount:     i32,
+	transmitStart:     i32,
+	transmitBatchCount: i32,
+	scatterCount:      i32,
 }
 
 create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
@@ -210,6 +219,9 @@ vkSimulate :: proc(
 		}
 	}
 
+	// Initialize response to zero for atomic accumulation.
+	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(response), responseBuffer)
+
 	if !settings.cumulative do vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.pulseEcho.pipeline)
 	else do vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.pulseEchoCumulative.pipeline)
 
@@ -240,6 +252,15 @@ vkSimulate :: proc(
 				srcAccessMask = {.TRANSFER_WRITE},
 				dstStageMask = {.COMPUTE_SHADER},
 				dstAccessMask = {.SHADER_READ},
+			},
+			{
+				buffer = responseBuffer.buffer,
+				size = responseBuffer.size,
+				offset = 0,
+				srcStageMask = {.TRANSFER, .HOST},
+				srcAccessMask = {.TRANSFER_WRITE, .HOST_WRITE},
+				dstStageMask = {.COMPUTE_SHADER},
+				dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
 			},
 		},
 		{},
@@ -285,13 +306,42 @@ vkSimulate :: proc(
 		speedOfSound      = settings.speedOfSound,
 		startingTime      = settings.startTime,
 		sampleCount       = settings.sampleCount,
+		receiveStart      = 0,
+		transmitCount     = settings.transmitElementCount,
+		receiveCount      = settings.receiveElementCount,
+		scatterCount      = settings.scatterCount,
+	}
+	workLimit := settings.dispatchWorkLimit
+	if workLimit <= 0 {
+		workLimit = 1 << 24
 	}
 
-	// dispatch
-	for i: int; i < int(settings.scatterCount); i += 1 {
-		simSettings.scatterIndex = i32(i)
-		vkField_vk.cmd_push_constants(commandBuffer, simulator.computePipelineLayout, {.COMPUTE}, simSettings)
-		vk.CmdDispatch(commandBuffer, u32(math.ceil(f32(settings.sampleCount) / 128)), u32(settings.transmitElementCount), u32(settings.receiveElementCount))
+	for receiveStart: i32 = 0; receiveStart < simSettings.receiveCount; receiveStart += i32(VKFIELD_RECEIVE_GROUP_Y) {
+		simSettings.receiveStart = receiveStart
+		receiveBatchCount := min(simSettings.receiveCount - receiveStart, i32(VKFIELD_RECEIVE_GROUP_Y))
+		if receiveBatchCount < 1 {
+			continue
+		}
+
+		workPerTransmit := i64(max(1, simSettings.sampleCount)) * i64(receiveBatchCount) * i64(max(1, simSettings.scatterCount))
+		if workPerTransmit < 1 {
+			workPerTransmit = 1
+		}
+		simSettings.transmitBatchCount = 1
+
+		for transmitStart: i32 = 0; transmitStart < simSettings.transmitCount; transmitStart += simSettings.transmitBatchCount {
+			simSettings.transmitStart = transmitStart
+			transmitRemaining := simSettings.transmitCount - transmitStart
+			transmitBatchCount := i32(max(1, min(transmitRemaining, i32(i64(workLimit) / workPerTransmit))))
+			simSettings.transmitBatchCount = transmitBatchCount
+			vkField_vk.cmd_push_constants(commandBuffer, simulator.computePipelineLayout, {.COMPUTE}, simSettings)
+			vk.CmdDispatch(
+				commandBuffer,
+				u32(math.ceil(f32(settings.sampleCount) / f32(VKFIELD_SAMPLE_GROUP_X))),
+				u32(VKFIELD_RECEIVE_GROUP_Y),
+				u32(math.ceil(f32(settings.scatterCount) / f32(VKFIELD_SCATTER_REDUCTION_Z))),
+			)
+		}
 	}
 
 	vkField_vk.cmd_pipeline_barrier(

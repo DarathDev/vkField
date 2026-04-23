@@ -34,6 +34,7 @@ struct SimulationSettings {
 	i32 sampleCount;
 	bool cumulative;
 	f32 simulationTime;
+	i32 dispatchWorkLimit;
 };
 
 typedef enum {

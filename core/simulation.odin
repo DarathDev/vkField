@@ -34,6 +34,7 @@ SimulationSettings :: struct {
 	sampleCount:          i32,
 	cumulative:           b32,
 	simulationTime:       f32,
+	dispatchWorkLimit:    i32,
 }
 
 Element :: struct #align (16) {
