@@ -301,6 +301,8 @@ name_object :: proc(device: Device, objectHandle: u64, objectType: vk.ObjectType
 			pObjectName  = pName,
 		}
 		return vk.SetDebugUtilsObjectNameEXT(device.device, &nameInfo)
+	} else {
+		return .SUCCESS
 	}
 }
 
