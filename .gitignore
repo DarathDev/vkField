@@ -46,6 +46,10 @@
 # debug information files
 *.dwo
 
+# Binaries
+bin/
+lib/
+
 # fieldII
 +fieldII/
 

@@ -152,7 +152,11 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	assert(assert(run_cmd(odinCmd[:])) == 0)
 
 	if VKFIELD_MATLAB {
-		matlabLibraryName := assume(os.join_filename(fmt.aprintf("%s_lib", VKFIELD_OUTPUT_LIB_NAME), "lib", context.allocator))
+		when ODIN_OS == .Windows {
+			matlabLibraryName := assume(os.join_filename(fmt.aprintf("%s_lib", VKFIELD_OUTPUT_LIB_NAME), "lib", context.allocator))
+		} else when ODIN_OS == .Linux {
+			matlabLibraryName := assume(os.join_filename(fmt.aprintf("%s_lib", VKFIELD_OUTPUT_LIB_NAME), "a", context.allocator))
+		}
 		matlabPath := assume(os.join_path({INSTALL_LOCATION, MATLAB_DIR, matlabLibraryName}, context.allocator))
 		assert(os.copy_file(matlabPath, libraryOutPath))
 	}
