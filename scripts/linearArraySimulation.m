@@ -25,11 +25,9 @@ impulseResponse = 1;
 % excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
 excitation = 1;
 
-scatterPosition = [0, 0, 20e-3]'*1;
-% scatterPosition = [0, 5e-3, 20e-3]'*1;
-% scatterPosition = [5e-3, 5e-3, 20e-3]'*1;
-% scatterPosition = [10e-3, 5e-3, 20e-3]'*1;
-scatterAmplitude = ones(1, size(scatterPosition, 2));
+nScatters = 128;
+scatterPosition = rand(3, nScatters) .* [16e-3, 16e-3, 100e-3]' + [-8e-3, -8e-3, 0]';
+scatterAmplitude = ones(size(scatterPosition, 2), 1);
 
 diePositionT = [0, 0, 0]*1e-3;
 diePositionR = [0, 0, 0]*1e-3;
