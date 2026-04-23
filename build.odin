@@ -139,8 +139,10 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	// Odin Compilation
 	when ODIN_OS == .Windows {
 		libraryName := assume(os.join_filename(VKFIELD_OUTPUT_LIB_NAME, "lib", context.allocator))
-		libraryOutPath := assume(os.join_path({outputDir, libraryName}, context.allocator))
+	} else when ODIN_OS == .Linux {
+		libraryName := assume(os.join_filename(VKFIELD_OUTPUT_LIB_NAME, "a", context.allocator))
 	}
+	libraryOutPath := assume(os.join_path({outputDir, libraryName}, context.allocator))
 	append(options, ..VKFIELD_ODIN_LIB_OPTIONS)
 	append(options, OdinBuildOption{flag = "out", value = {libraryOutPath}})
 
@@ -172,8 +174,10 @@ build_test :: proc(options: ^[dynamic]OdinBuildOption) {
 	// Odin Compilation
 	when ODIN_OS == .Windows {
 		binaryName, _ := os.join_filename(VKFIELD_TESTS_NAME, "exe", context.allocator)
-		binaryOutPath, _ := os.join_path({outputDir, binaryName}, context.allocator)
+	} else when ODIN_OS == .Linux {
+		binaryName := VKFIELD_TESTS_NAME
 	}
+	binaryOutPath, _ := os.join_path({outputDir, binaryName}, context.allocator)
 	append(options, ..VKFIELD_ODIN_TEST_OPTIONS)
 	append(options, OdinBuildOption{flag = "out", value = {binaryOutPath}})
 

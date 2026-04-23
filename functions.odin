@@ -37,7 +37,7 @@ when ODIN_OS == .Windows {
 	CheckCommand: []string = {"powershell", "-Command", "Get-Command", "cmd", "-ErrorAction", "SilentlyContinue", "|", "Out-Null"}
 	CheckCommandPlaceholderIndex: int = 3
 } else when ODIN_OS == .Linux {
-	CheckCommand: []string = {"where", "cmd"}
+	CheckCommand: []string = {"which", "cmd"}
 	CheckCommandPlaceholderIndex: int = 1
 }
 

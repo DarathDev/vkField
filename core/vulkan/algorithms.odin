@@ -363,6 +363,9 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 CheckPresentSupport :: #force_inline proc(physicalDevice: vk.PhysicalDevice, familyIndex: int) -> b32 {
 	when ODIN_OS == .Windows {
 		return vk.GetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, u32(familyIndex))
+	} else {
+		vkField_util.throw_not_implemented()
+		return false
 	}
 }
 

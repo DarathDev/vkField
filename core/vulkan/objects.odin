@@ -217,22 +217,22 @@ destroy_debug_messenger :: proc(instance: vk.Instance, dbgMsg: ^DebugMessenger) 
 /* ------------------- */
 /* ----- Surface ----- */
 /* ------------------- */
-
-create_surface :: proc {
-	create_win32_surface,
-}
-
-create_win32_surface :: proc(instance: vk.Instance, window: win32.HWND, hInstance: win32.HINSTANCE) -> (surface: vk.SurfaceKHR, ok: vk.Result) {
-	createInfo: vk.Win32SurfaceCreateInfoKHR = {
-		sType     = .WIN32_SURFACE_CREATE_INFO_KHR,
-		flags     = {},
-		hwnd      = window,
-		hinstance = hInstance,
+when ODIN_OS == .Windows {
+	create_surface :: proc {
+		create_win32_surface,
 	}
-	check(vk.CreateWin32SurfaceKHR(instance, &createInfo, nil, &surface)) or_return
-	return
-}
 
+	create_win32_surface :: proc(instance: vk.Instance, window: win32.HWND, hInstance: win32.HINSTANCE) -> (surface: vk.SurfaceKHR, ok: vk.Result) {
+		createInfo: vk.Win32SurfaceCreateInfoKHR = {
+			sType     = .WIN32_SURFACE_CREATE_INFO_KHR,
+			flags     = {},
+			hwnd      = window,
+			hinstance = hInstance,
+		}
+		check(vk.CreateWin32SurfaceKHR(instance, &createInfo, nil, &surface)) or_return
+		return
+	}
+}
 destroy_surface :: proc(instance: vk.Instance, surface: vk.SurfaceKHR) {
 	vk.DestroySurfaceKHR(instance, surface, nil)
 }
