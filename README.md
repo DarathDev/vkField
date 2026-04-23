@@ -16,7 +16,7 @@ While it can perform simulations for arbitrary sets of rectangular and triangula
 ## Building the Library
 
 ```shell
-odin run . -debug -- -lib -debug -matlab
+odin run . -- -lib -matlab
 ```
 
 Note: MATLAB will crash if a debug trap is hit and no debugger is attached.
@@ -24,6 +24,6 @@ Note: MATLAB will crash if a debug trap is hit and no debugger is attached.
 ## Testing
 
 ```shell
-odin run . -debug -- -test -debug
+odin run . -- -test
 ./bin/release/vkField_tests
 ```
