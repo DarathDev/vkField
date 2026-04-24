@@ -83,30 +83,28 @@ simulate :: proc(
 
 	rdoc_lib, rdoc_api, rdoc_ok := rdoc.load_api()
 	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
-	else do log.warn("couldnt load renderdoc")
 	defer if rdoc_ok do rdoc.unload_api(rdoc_lib)
 
-	rdoc.SetCaptureFilePathTemplate(rdoc_api, "captures/capture.rdc")
-
-	if vkSimulator, simOk := simulator.(vkSimulator); simOk {
+	startTimeStamp := time.now()
+	switch &sim in simulator {
+	case vkSimulator:
 		if rdoc_ok {
-			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(vkSimulator.instance.instance)
+			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(sim.instance.instance)
+			rdoc.SetCaptureFilePathTemplate(rdoc_api, "captures/capture.rdc")
 			rdoc.StartFrameCapture(rdoc_api, devicePointer, nil)
 			// assert(rdoc.IsFrameCapturing(rdoc_api))
 		}
 		defer if rdoc_ok {
-			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(vkSimulator.instance.instance)
+			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(sim.instance.instance)
 			rdoc.EndFrameCapture(rdoc_api, devicePointer, nil)
 			// LaunchOrShowRenderdocUI(rdoc_api)
 		}
-	}
-	startTimeStamp := time.now()
-	switch &sim in simulator {
-	case vkSimulator:
+
 		data = is_ok(check(vkSimulate(&sim, settings^, transmitElements, receiveElements, scatters))) or_return
 	}
 	endTimeStamp := time.now()
 	settings.simulationTime = auto_cast time.duration_seconds(time.diff(startTimeStamp, endTimeStamp))
+
 	return
 }
 

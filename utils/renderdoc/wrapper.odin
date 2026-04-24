@@ -6,20 +6,13 @@ import "core:log"
 import "core:math"
 import "core:os"
 import "core:path/filepath"
+import "core:sys/posix"
+import "core:sys/windows"
 
 LOAD_RENDERDOC :: #config(LOAD_RENDERDOC, true)
 
-when ODIN_OS == .Linux {
-	RENDERDOC_DEFAULT_INSTALL_ROOT :: "~/.local/share/applications/renderdoc/lib"
-	RENDERDOC_LIB_NAME :: "librenderdoc.so"
-} else {
-	RENDERDOC_DEFAULT_INSTALL_ROOT :: "C:/Program Files/RenderDoc"
-	RENDERDOC_LIB_NAME :: "renderdoc.dll"
-}
-
 // utility to load renderdoc, pass in the path to renderdoc if not installed at the default path
 load_api :: proc(
-	renderdoc_install_root: string = RENDERDOC_DEFAULT_INSTALL_ROOT,
 	version: Version = .API_Version_1_6_0,
 ) -> (
 	lib: dynlib.Library,
@@ -27,30 +20,28 @@ load_api :: proc(
 	ok: bool,
 ) {
 	when LOAD_RENDERDOC {
-		dll_path, _ := filepath.join([]string{renderdoc_install_root, RENDERDOC_LIB_NAME}, context.temp_allocator)
-		defer delete(dll_path, context.temp_allocator)
-
-		if !os.exists(renderdoc_install_root) {
-			log.errorf("renderdoc install root %v doesnt exist", renderdoc_install_root)
-			return nil, nil, false
+		when ODIN_OS == .Linux {
+			RTLD_NOLOAD :: cast(posix.RTLD_Flag_Bits)2
+			handle := posix.dlopen("librenderdoc.so", posix.RTLD_LOCAL + {RTLD_NOLOAD, .NOW})
+		} else {
+			handle := windows.GetModuleHandleA("renderdoc.dll")
 		}
 
-		rdoc_lib, did_load := dynlib.load_library(dll_path)
-		if !did_load {
-			log.errorf("could not load %v, reason: %v", dll_path, dynlib.last_error())
+		// NOTE: renderdoc not attached
+		if handle == nil {
 			return nil, nil, false
 		}
 
 		GET_API_SYMBOL :: "RENDERDOC_GetAPI"
-		symbol_ptr, found := dynlib.symbol_address(rdoc_lib, GET_API_SYMBOL)
+		symbol_ptr, found := dynlib.symbol_address(dynlib.Library(handle), GET_API_SYMBOL)
 		if !found {
-			log.errorf("could not find symbol %v in %v, %v", GET_API_SYMBOL, dll_path, dynlib.last_error())
+			log.errorf("renderdoc: failed to load symbol %v: %v", GET_API_SYMBOL, dynlib.last_error())
 			return nil, nil, false
 		}
 
 		GetAPI: GetAPIProc = cast(GetAPIProc)symbol_ptr
 		GetAPI(version, &rdoc_api)
-		return rdoc_lib, rdoc_api, true
+		return dynlib.Library(handle), rdoc_api, true
 	} else {
 		return nil, nil, false
 	}
