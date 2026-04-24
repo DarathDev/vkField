@@ -89,39 +89,53 @@ create_instance :: proc(
 	availableExtensions := make([]vk.ExtensionProperties, availableExtensionCount, context.temp_allocator)
 	for result = check(vk.EnumerateInstanceExtensionProperties(nil, &availableExtensionCount, raw_data(availableExtensions))); result == .INCOMPLETE; {  }
 
+	availableExtensionStrings := make([]string, availableExtensionCount, context.temp_allocator)
+	for i : u32 = 0; i < availableExtensionCount; i += 1 {
+		availableExtensionStrings[i] = strings.string_from_null_terminated_ptr(auto_cast &availableExtensions[i].extensionName, vk.MAX_EXTENSION_NAME_SIZE)
+	}
+
 	when ENABLE_VALIDATION_LAYERS {
 		validationLayer :: "VK_LAYER_KHRONOS_validation"
 
+		// TODO(rnp): technically this needs to be checked for support
 		append(&instance.enabledLayers, strings.clone_to_cstring(validationLayer, allocator))
 		instanceCreateInfo.ppEnabledLayerNames = raw_data(instance.enabledLayers)
 		instanceCreateInfo.enabledLayerCount = 1
 
-		append(&extensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME)
-
-		severity: vk.DebugUtilsMessageSeverityFlagsEXT
-		if context.logger.lowest_level <= .Error { severity |= {.ERROR} }
-		if context.logger.lowest_level <= .Warning { severity |= {.WARNING} }
-		if context.logger.lowest_level <= .Info { severity |= {.INFO} }
-		if context.logger.lowest_level <= .Debug { severity |= {.VERBOSE} }
-
-		dbgInfo := vk.DebugUtilsMessengerCreateInfoEXT {
-			sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-			pNext           = nil,
-			messageSeverity = severity,
-			messageType     = {.GENERAL, .VALIDATION, .PERFORMANCE},
-			pfnUserCallback = vk_messenger_callback,
-			pUserData       = debugUserData,
-		}
-
-		for &availableExtension in availableExtensions {
-			rhs := strings.string_from_null_terminated_ptr(auto_cast &availableExtension.extensionName, vk.MAX_EXTENSION_NAME_SIZE)
-			if strings.compare(vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME, rhs) == 0 {
-				dbgInfo.messageType |= {.DEVICE_ADDRESS_BINDING}
-				append(&instance.enabledExtensions, vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME)
+		// TODO(rnp): array of desired debug extensions
+		debug_utils := false
+		for i := 0; i < availableExtensionCount; i += 1 {
+			if strings.compare(vk.EXT_DEBUG_UTILS_EXTENSION_NAME, availableExtensionStrings[i]) == 0 {
+				append(&instance.enabledExtensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME)
+				debug_utils = true
 			}
 		}
 
-		instanceCreateInfo.pNext = &dbgInfo
+		if debug_utils {
+			for i := 0; i < availableExtensionCount; i += 1 {
+				if strings.compare(vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME, availableExtensionStrings[i]) == 0 {
+					dbgInfo.messageType |= {.DEVICE_ADDRESS_BINDING}
+					append(&instance.enabledExtensions, vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME)
+				}
+			}
+
+			severity: vk.DebugUtilsMessageSeverityFlagsEXT
+			if context.logger.lowest_level <= .Error   { severity |= {.ERROR} }
+			if context.logger.lowest_level <= .Warning { severity |= {.WARNING} }
+			if context.logger.lowest_level <= .Info    { severity |= {.INFO} }
+			if context.logger.lowest_level <= .Debug   { severity |= {.VERBOSE} }
+
+			dbgInfo := vk.DebugUtilsMessengerCreateInfoEXT {
+				sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+				pNext           = nil,
+				messageSeverity = severity,
+				messageType     = {.GENERAL, .VALIDATION, .PERFORMANCE},
+				pfnUserCallback = vk_messenger_callback,
+				pUserData       = debugUserData,
+			}
+
+			instanceCreateInfo.pNext = &dbgInfo
+		}
 	}
 
 	for extension in requiredExtensions {
@@ -129,9 +143,8 @@ create_instance :: proc(
 	}
 
 	extensionLoop: for extension in extensions {
-		for &availableExtension in availableExtensions {
-			rhs := strings.string_from_null_terminated_ptr(auto_cast &availableExtension.extensionName, vk.MAX_EXTENSION_NAME_SIZE)
-			if strings.compare(extension, rhs) == 0 do continue extensionLoop
+		for i : u32 = 0; i < availableExtensionCount; i += 1 {
+			if strings.compare(extension, availableExtensionStrings[i]) == 0 do continue extensionLoop
 		}
 
 		check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
@@ -139,9 +152,11 @@ create_instance :: proc(
 	}
 
 	for extension in optionalExtensions {
-		for &availableExtension in availableExtensions {
-			rhs := strings.string_from_null_terminated_ptr(auto_cast &availableExtension.extensionName, vk.MAX_EXTENSION_NAME_SIZE)
-			if strings.compare(extension, rhs) == 0 { append(&extensions, extension); break }
+		for i : u32 = 0; i < availableExtensionCount; i += 1 {
+			if strings.compare(extension, availableExtensionStrings[i]) == 0 {
+				append(&extensions, extension)
+				break
+			}
 		}
 	}
 

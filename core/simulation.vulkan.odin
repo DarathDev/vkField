@@ -85,7 +85,7 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
 	simulator.instance = confirm(
-		vkField_vk.create_instance({appName = "vkField", presentable = true, vulkanVersion = vk.API_VERSION_1_3}, debugUserData = simulator.debugUserData),
+		vkField_vk.create_instance({appName = "vkField", vulkanVersion = vk.API_VERSION_1_3}, debugUserData = simulator.debugUserData),
 	) or_return
 
 	when ENABLE_VALIDATION_LAYERS {
