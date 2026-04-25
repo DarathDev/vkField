@@ -483,6 +483,10 @@ compile_shader_slangc :: proc(shader: SlangShaderFile, extraDefines: []CliDefine
 	for capability in shader.capabilities {
 		append(&slangCmd, "-capability", capability)
 	}
+
+	// NOTE: debug symbols
+	append(&slangCmd, "-g3")
+
 	append(&slangCmd, ..cli_defines_to_args(shader.defines))
 
 	append(&slangCmd, ..cli_defines_to_args(extraDefines))
