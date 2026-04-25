@@ -1,6 +1,7 @@
 module pulse_echo;
 
 import pulse_echo_common;
+import util;
 
 float b2f(bool v) {
   return v ? 1.0f : 0.0f;
@@ -114,7 +115,6 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID, uint3 GroupThreadID: SV
   float startingTime = settings.startingTime;
   float samplingFrequency = settings.samplingFrequency;
   float speedOfSound = settings.speedOfSound;
-  float pi = PI;
   float dt = 1.f / samplingFrequency;
 
   RectangularAperture receiveAperture = receiveApertures[receiveIndex];
@@ -155,8 +155,8 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID, uint3 GroupThreadID: SV
       int minK = int(max(floor(nRectT.x - 0.5f), n - ceil(nRectR.w + 0.5f)));
       int maxK = int(min(ceil(nRectT.w + 0.5f), n - floor(nRectR.x - 0.5f)));
 
-      float powerT = (apertureSizeT.x * apertureSizeT.y) / (2 * pi * length(scatterPositionT)) / aperture_power_denominator(nRectT, dt, dt2T);
-      float powerR = (apertureSizeR.x * apertureSizeR.y) / (2 * pi * length(scatterPositionR)) / aperture_power_denominator(nRectR, dt, dt2R);
+      float powerT = (apertureSizeT.x * apertureSizeT.y) / (2 * PI * length(scatterPositionT)) / aperture_power_denominator(nRectT, dt, dt2T);
+      float powerR = (apertureSizeR.x * apertureSizeR.y) / (2 * PI * length(scatterPositionR)) / aperture_power_denominator(nRectR, dt, dt2R);
 
       float sum = 0;
       for (int i = minK; i <= maxK; i++) {
