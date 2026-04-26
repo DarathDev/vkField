@@ -35,6 +35,11 @@ VKFIELD_ODIN_DEBUG_OPTIONS: []OdinBuildOption = {{flag = "debug"}}
 VKFIELD_ODIN_LIB_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"lib"}}}
 VKFIELD_ODIN_TEST_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"test"}}}
 
+VKFIELD_ODIN_TEST_DEFINES: []OdinDefine = {
+	{name = "ODIN_TEST_THREADS",     value = "1"},
+	{name = "ODIN_TEST_RANDOM_SEED", value = "0xcafebabe"},
+}
+
 VKFIELD_ODIN_DEBUG_DEFINES: []OdinDefine = {{name = "REQUIRE_RESOURCE_LABELS", value = "false"}}
 
 @(private = "file")
@@ -183,6 +188,7 @@ build_test :: proc(options: ^[dynamic]OdinBuildOption) {
 	}
 	binaryOutPath, _ := os.join_path({outputDir, binaryName}, context.allocator)
 	append(options, ..VKFIELD_ODIN_TEST_OPTIONS)
+	append(options, ..odin_defines_to_options(VKFIELD_ODIN_TEST_DEFINES))
 	append(options, OdinBuildOption{flag = "out", value = {binaryOutPath}})
 
 	odinCmd := make([dynamic]string)
