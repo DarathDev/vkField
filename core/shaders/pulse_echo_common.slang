@@ -1,16 +1,21 @@
 module pulse_echo_common;
 
-public struct SimulationSettings {
-  public float samplingFrequency;
-  public float speedOfSound;
-  public float startingTime;
-  public uint sampleCount;
-  public uint receiveStart;
-  public uint receiveCount;
-  public uint transmitCount;
-  public uint transmitStart;
-  public uint transmitBatchCount;
-  public uint scatterCount;
+public struct PackScatterRectSettings {
+	public float samplingFrequency;
+	public float speedOfSound;
+	public float startTime;
+	public uint  scatterBatchOffset;
+	public uint  scatterBatchCount;
+	public uint  transmitCount;
+	public uint  receiveCount;
+	public bool  cumulative;
+};
+
+public struct PulseEchoSettings {
+	public uint sampleCount;
+	public uint transmitCount;
+	public uint receiveCount;
+	public uint scatterBatchCount;
 };
 
 public struct RectangularAperture {
@@ -31,18 +36,20 @@ public struct Scatter {
   public float amplitude;
 };
 
-[[vk::push_constant]]
-public ConstantBuffer<SimulationSettings> settings;
-
 [[vk::binding(0, 0)]]
-public RWStructuredBuffer<RectangularAperture> transmitApertures : register(u0, space0);
+public StructuredBuffer<RectangularAperture> transmitApertures;
 
 [[vk::binding(1, 0)]]
-public RWStructuredBuffer<RectangularAperture> receiveApertures : register(u1, space0);
+public StructuredBuffer<RectangularAperture> receiveApertures;
 
 [[vk::binding(2, 0)]]
-public RWStructuredBuffer<Scatter> scatters : register(u2, space0);
+public StructuredBuffer<Scatter> scatters;
 
-[[format("r32f")]]
 [[vk::binding(3, 0)]]
-public RWStructuredBuffer<Atomic<float>> response : register(u3, space0);
+public RWStructuredBuffer<float> response;
+
+[[vk::binding(4, 0)]]
+public RWStructuredBuffer<float4> packed_scatter_rects;
+
+[[vk::binding(5, 0)]]
+public RWStructuredBuffer<float> packed_scatter_scales;

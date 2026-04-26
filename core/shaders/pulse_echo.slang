@@ -3,6 +3,9 @@ module pulse_echo;
 import pulse_echo_common;
 import util;
 
+[[vk::push_constant]]
+public ConstantBuffer<PulseEchoSettings> settings;
+
 float b2f(bool v) {
   return v ? 1.0f : 0.0f;
 }
@@ -25,10 +28,6 @@ float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
 
   float value = b2f(qDelta) * sDelta + b2f(qRect) * sRect + b2f(qTri) * (sTriLeft + sTriRight) + b2f(qTrap) * (sTriLeft + sRect + sTriRight);
   return value;
-}
-
-float aperture_power_denominator(in float4 nRect, in float dt, in float dt2) {
-  return nRect.x == nRect.w ? dt : dt2;
 }
 
 float sample_transmit_aperture(in int i, in float4 nRectT) {
@@ -73,10 +72,6 @@ float sample_rect_aperture_discrete(in float n, in float4 rectSamples) {
   return saturate(value);
 }
 
-float aperture_power_denominator(in float4 nRect, in float dt, in float dt2) {
-  return nRect.w - nRect.x <= 1 ? dt : dt2;
-}
-
 float sample_transmit_aperture(in int i, in float4 nRectT) {
   return sample_rect_aperture_discrete(i, nRectT);
 }
@@ -86,96 +81,61 @@ float sample_receive_aperture(in int n, in int i, in float4 nRectR) {
 }
 #endif
 
-#ifndef SAMPLE_GROUP_X
-#define SAMPLE_GROUP_X 128
-#endif
+// TODO(rnp): spec constant
+#define SAMPLE_BATCH_SIZE 64
 
-#ifndef RECEIVE_GROUP_Y
-#define RECEIVE_GROUP_Y 16
-#endif
-
-#ifndef SCATTER_REDUCTION_Z
-#define SCATTER_REDUCTION_Z 8
-#endif
-
-groupshared float scatterLaneSums[SCATTER_REDUCTION_Z][SAMPLE_GROUP_X];
+groupshared float output_samples[SAMPLE_BATCH_SIZE];
 
 [shader("compute")]
-[numthreads(SAMPLE_GROUP_X, 1, SCATTER_REDUCTION_Z)]
-void main(uint3 GlobalInvocationID: SV_DispatchThreadID, uint3 GroupThreadID: SV_GroupThreadID) {
-  int n = GlobalInvocationID.x;
-  uint receiveIndex = settings.receiveStart + GlobalInvocationID.y;
-  uint scatterIndex = GlobalInvocationID.z;
-  if (n >= settings.sampleCount || receiveIndex >= settings.receiveCount) {
-    return;
-  }
+[numthreads(SAMPLE_BATCH_SIZE, 1, 1)]
+void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
+{
+	const uint thread_count = SAMPLE_BATCH_SIZE;
 
-  uint storeOffset = receiveIndex * settings.sampleCount;
+	uint base_sample   = SAMPLE_BATCH_SIZE * GroupID.x;
+	uint receive_index = GroupID.y;
 
-  float startingTime = settings.startingTime;
-  float samplingFrequency = settings.samplingFrequency;
-  float speedOfSound = settings.speedOfSound;
-  float dt = 1.f / samplingFrequency;
+	output_samples[ThreadID] = 0;
 
-  RectangularAperture receiveAperture = receiveApertures[receiveIndex];
+	uint n_total       = settings.scatterBatchCount * settings.transmitCount;
+	uint n_per_thread  = n_total / thread_count;
+	uint n_leftover    = n_total % thread_count;
+	uint n_this_thread = n_per_thread + uint(ThreadID < n_leftover);
 
-  float2 apertureSizeR = receiveAperture.size;
+	for (uint n = 0; n < n_this_thread; n++) {
+		uint packed_index   = thread_count * n + ThreadID;
+		uint scatter_index  = packed_index / settings.transmitCount;
+		uint transmit_index = packed_index % settings.transmitCount;
 
-  float scatterLaneSum = 0;
-  if (scatterIndex < settings.scatterCount) {
-    Scatter scatter = scatters[scatterIndex];
-    float3 scatterPosition = scatter.position;
+		uint t_index = scatter_index * settings.transmitCount + transmit_index;
+		uint r_index = settings.scatterBatchCount * settings.transmitCount + scatter_index * settings.receiveCount + receive_index;
 
-    uint transmitStart = min(settings.transmitStart, settings.transmitCount);
-    uint transmitEnd = min(settings.transmitCount, transmitStart + settings.transmitBatchCount);
-    for (uint transmitIndex = transmitStart; transmitIndex < transmitEnd; transmitIndex++) {
-      RectangularAperture transmitAperture = transmitApertures[transmitIndex];
+		float4 r_rect_samples = packed_scatter_rects[r_index];
+		float  r_scale        = packed_scatter_scales[r_index];
+		float4 t_rect_samples = packed_scatter_rects[t_index];
+		float  t_scale        = packed_scatter_scales[t_index];
 
-      float2 apertureSizeT = transmitAperture.size;
-      float4x4 apertureTransformT = mul(rotate(transmitAperture.normal, float3(0, 0, 1)), translate(transmitAperture.position, 0));
-      float3 scatterPositionT = mul(apertureTransformT, float4(scatterPosition, 1)).xyz;
-      float2 dieProjectionT = abs(apertureSizeT * scatterPositionT.xy);
+		for (int sample_index = 0; sample_index < SAMPLE_BATCH_SIZE; sample_index++) {
+			GroupMemoryBarrierWithGroupSync();
+			int sample_n      = (sample_index + ThreadID) % SAMPLE_BATCH_SIZE;
+			int full_sample_n = base_sample + sample_n;
+			if (full_sample_n < settings.sampleCount) {
+				int minK = int(max(floor(t_rect_samples.x - 0.5f), full_sample_n - ceil(r_rect_samples.w + 0.5f)));
+				int maxK = int(min(ceil(t_rect_samples.w + 0.5f),  full_sample_n - floor(r_rect_samples.x - 0.5f)));
 
-      float4x4 apertureTransformR = mul(rotate(receiveAperture.normal, float3(0, 0, 1)), translate(receiveAperture.position, 0));
-      float3 scatterPositionR = mul(apertureTransformR, float4(scatterPosition, 1)).xyz;
-      float2 dieProjectionR = abs(apertureSizeR * scatterPositionR.xy);
+				float sum = 0;
+				for (int i = minK; i <= maxK; i++) {
+					float vT = sample_transmit_aperture(i, t_rect_samples);
+					float vR = sample_receive_aperture(full_sample_n, i, r_rect_samples);
+					sum += vT * vR;
+				}
+				output_samples[sample_n] += t_scale * r_scale * sum;
+			}
+		}
+	}
 
-      float t0T = length(scatterPositionT) / speedOfSound;
-      float dt1T = min(dieProjectionT.x, dieProjectionT.y) * t0T / dot(scatterPositionT, scatterPositionT);
-      float dt2T = max(dieProjectionT.x, dieProjectionT.y) * t0T / dot(scatterPositionT, scatterPositionT);
-      float4 tRectT = t0T + 0.5f * (dt1T * float4(-1, +1, -1, +1) + dt2T * float4(-1, -1, +1, +1));
-      float4 nRectT = tRectT * samplingFrequency;
-
-      float t0R = length(scatterPositionR) / speedOfSound;
-      float dt1R = min(dieProjectionR.x, dieProjectionR.y) * t0R / dot(scatterPositionR, scatterPositionR);
-      float dt2R = max(dieProjectionR.x, dieProjectionR.y) * t0R / dot(scatterPositionR, scatterPositionR);
-      float4 tRectR = t0R + 0.5f * (dt1R * float4(-1, +1, -1, +1) + dt2R * float4(-1, -1, +1, +1));
-      float4 nRectR = (tRectR - startingTime) * samplingFrequency;
-
-      int minK = int(max(floor(nRectT.x - 0.5f), n - ceil(nRectR.w + 0.5f)));
-      int maxK = int(min(ceil(nRectT.w + 0.5f), n - floor(nRectR.x - 0.5f)));
-
-      float powerT = (apertureSizeT.x * apertureSizeT.y) / (2 * PI * length(scatterPositionT)) / aperture_power_denominator(nRectT, dt, dt2T);
-      float powerR = (apertureSizeR.x * apertureSizeR.y) / (2 * PI * length(scatterPositionR)) / aperture_power_denominator(nRectR, dt, dt2R);
-
-      float sum = 0;
-      for (int i = minK; i <= maxK; i++) {
-        float vT = sample_transmit_aperture(i, nRectT);
-        float vR = sample_receive_aperture(n, i, nRectR);
-        sum += vT * vR;
-      }
-      scatterLaneSum += sum * powerT * powerR * scatter.amplitude * transmitAperture.apodization * receiveAperture.apodization;
-    }
-  }
-
-  scatterLaneSums[GroupThreadID.z][GroupThreadID.x] = scatterLaneSum;
-  GroupMemoryBarrierWithGroupSync();
-
-  if (GroupThreadID.z == 0) {
-    float reduced = 0;
-    for (uint z = 0; z < SCATTER_REDUCTION_Z; z++) {
-      reduced += scatterLaneSums[z][GroupThreadID.x];
-    }
-    response[storeOffset + n].add(reduced);
-  }
+	GroupMemoryBarrierWithGroupSync();
+	uint sample_index = base_sample + ThreadID;
+	if (sample_index < settings.sampleCount)
+		response[receive_index * settings.sampleCount + sample_index] += output_samples[ThreadID];
 }

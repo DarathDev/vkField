@@ -1524,6 +1524,11 @@ create_buffer :: proc(
 	return
 }
 
+release_buffer :: proc(device: Device, buffer: Buffer) {
+	vk.FreeMemory(device.device, buffer.deviceMemory, nil)
+	vk.DestroyBuffer(device.device, buffer.buffer, nil)
+}
+
 destroy_buffer :: proc(device: Device, buffer: Buffer) {
 	vk.DestroyBuffer(device.device, buffer.buffer, nil)
 }
