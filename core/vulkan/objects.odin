@@ -37,7 +37,7 @@ Instance :: struct {
 	instance:          vk.Instance,
 	apiVersion:        u32,
 	enabledLayers:     [dynamic]cstring,
-	enabledExtensions: [dynamic]cstring,
+	enabledExtensions: [dynamic]string,
 }
 
 @(require_results)
@@ -71,18 +71,7 @@ create_instance :: proc(
 	}
 
 	instance.enabledLayers = make([dynamic]cstring, allocator)
-	instance.enabledExtensions = make([dynamic]cstring, allocator)
-
-	extensions: [dynamic]string
-	if appInfo.presentable {
-		presentExtensions := get_required_instance_presentation_extensions()
-		extensions = slice.clone_to_dynamic(presentExtensions, context.temp_allocator)
-	}
-
-	when ODIN_OS == .Darwin {
-		instanceCreateInfo.flags |= {.ENUMERATE_PORTABILITY_KHR}
-		append(&extensions, vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
-	}
+	instance.enabledExtensions = make([dynamic]string, allocator)
 
 	availableExtensionCount: u32
 	for result = check(vk.EnumerateInstanceExtensionProperties(nil, &availableExtensionCount, nil)); result == .INCOMPLETE; {  }
@@ -92,6 +81,29 @@ create_instance :: proc(
 	availableExtensionStrings := make([]string, availableExtensionCount, context.temp_allocator)
 	for i : u32 = 0; i < availableExtensionCount; i += 1 {
 		availableExtensionStrings[i] = strings.string_from_null_terminated_ptr(auto_cast &availableExtensions[i].extensionName, vk.MAX_EXTENSION_NAME_SIZE)
+	}
+
+	if appInfo.presentable {
+		presentExtensions := get_required_instance_presentation_extensions()
+		for extension in presentExtensions {
+			if has_string(availableExtensionStrings, extension) {
+				append(&instance.enabledExtensions, extension)
+			} else {
+				check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
+				return
+			}
+		}
+	}
+
+	when ODIN_OS == .Darwin {
+		instanceCreateInfo.flags |= {.ENUMERATE_PORTABILITY_KHR}
+		extension :: vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+		if has_string(availableExtensionStrings, extension) {
+			append(&instance.enabledExtensions, extension)
+		} else {
+			check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
+			return
+		}
 	}
 
 	when ENABLE_VALIDATION_LAYERS {
@@ -104,21 +116,12 @@ create_instance :: proc(
 
 		// TODO(rnp): array of desired debug extensions
 		debug_utils := false
-		for i := 0; i < availableExtensionCount; i += 1 {
-			if strings.compare(vk.EXT_DEBUG_UTILS_EXTENSION_NAME, availableExtensionStrings[i]) == 0 {
-				append(&instance.enabledExtensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME)
-				debug_utils = true
-			}
+		if has_string(availableExtensionStrings, vk.EXT_DEBUG_UTILS_EXTENSION_NAME) {
+			append(&instance.enabledExtensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME)
+			debug_utils = true
 		}
 
 		if debug_utils {
-			for i := 0; i < availableExtensionCount; i += 1 {
-				if strings.compare(vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME, availableExtensionStrings[i]) == 0 {
-					dbgInfo.messageType |= {.DEVICE_ADDRESS_BINDING}
-					append(&instance.enabledExtensions, vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME)
-				}
-			}
-
 			severity: vk.DebugUtilsMessageSeverityFlagsEXT
 			if context.logger.lowest_level <= .Error   { severity |= {.ERROR} }
 			if context.logger.lowest_level <= .Warning { severity |= {.WARNING} }
@@ -134,43 +137,52 @@ create_instance :: proc(
 				pUserData       = debugUserData,
 			}
 
+			if has_string(availableExtensionStrings, vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME) {
+				append(&instance.enabledExtensions, vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME)
+				dbgInfo.messageType |= {.DEVICE_ADDRESS_BINDING}
+			}
+
 			instanceCreateInfo.pNext = &dbgInfo
 		}
 	}
 
 	for extension in requiredExtensions {
-		append(&extensions, extension)
-	}
-
-	extensionLoop: for extension in extensions {
-		for i : u32 = 0; i < availableExtensionCount; i += 1 {
-			if strings.compare(extension, availableExtensionStrings[i]) == 0 do continue extensionLoop
+		if has_string(availableExtensionStrings, extension) {
+			append(&instance.enabledExtensions, extension)
+		} else {
+			check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
+			return
 		}
-
-		check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
-		return
 	}
 
 	for extension in optionalExtensions {
-		for i : u32 = 0; i < availableExtensionCount; i += 1 {
-			if strings.compare(extension, availableExtensionStrings[i]) == 0 {
-				append(&extensions, extension)
-				break
-			}
+		if has_string(availableExtensionStrings, extension) {
+			append(&instance.enabledExtensions, extension)
 		}
 	}
 
-	ppExtensionNames: []cstring = make([]cstring, len(extensions), context.temp_allocator)
-	for extension, i in extensions {
+	ppExtensionNames: []cstring = make([]cstring, len(instance.enabledExtensions), context.temp_allocator)
+	for extension, i in instance.enabledExtensions {
 		ppExtensionNames[i] = strings.clone_to_cstring(extension, context.temp_allocator)
 	}
-	instanceCreateInfo.enabledExtensionCount = u32(len(extensions))
+	instanceCreateInfo.enabledExtensionCount = u32(len(instance.enabledExtensions))
 	instanceCreateInfo.ppEnabledExtensionNames = raw_data(ppExtensionNames)
 
 	check(vk.CreateInstance(&instanceCreateInfo, nil, &instance.instance)) or_return
 	instance.apiVersion = appInfo.vulkanVersion
 	vk.load_proc_addresses_instance(instance.instance)
 	return
+}
+
+has_string :: proc(strs: []string, str: string) -> (result: bool)
+{
+	result = true
+	for test in strs {
+		if strings.compare(test, str) == 0 {
+			return
+		}
+	}
+	return false
 }
 
 destroy_instance :: proc(instance: ^Instance) {
