@@ -90,7 +90,6 @@ simulate :: proc(
 	case vkSimulator:
 		if rdoc_ok {
 			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(sim.instance.instance)
-			rdoc.SetCaptureFilePathTemplate(rdoc_api, "captures/capture.rdc")
 			rdoc.StartFrameCapture(rdoc_api, devicePointer, nil)
 			// assert(rdoc.IsFrameCapturing(rdoc_api))
 		}
