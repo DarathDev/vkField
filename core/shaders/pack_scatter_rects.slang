@@ -18,16 +18,11 @@ layout(constant_id =  9) const float SpeedOfSound      = 0;
 [[vk::push_constant]]
 public ConstantBuffer<PackScatterRectSettings> settings;
 
-float aperture_power_denominator_cumulative(in float4 rect_samples, in float dt, in float dt2)
-{
-	// TODO(rnp): is this supposed to be floating point equal? seems suspicious
-	return rect_samples.x == rect_samples.w ? dt : dt2;
-}
-
 float aperture_power_denominator(in float4 rect_samples, in float dt, in float dt2)
 {
-	// TODO(rnp): is this supposed to be floating point equal? seems suspicious
-	return rect_samples.w - rect_samples.x <= 1 ? dt : dt2;
+	// TODO(rnp): are these supposed to be floating point equal? seems suspicious
+	if (Cumulative) return rect_samples.x == rect_samples.w ? dt : dt2;
+	else            return rect_samples.w - rect_samples.x <= 1 ? dt : dt2;
 }
 
 [shader("compute")]
@@ -62,8 +57,7 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	float4   t_rect_times   = t_t0 + 0.5f * (t_dt1 * float4(-1, +1, -1, +1) + t_dt2 * float4(-1, -1, +1, +1));
 	float4   t_rect_samples = t_rect_times * fs;
 
-	float t_denom = Cumulative ? aperture_power_denominator_cumulative(t_rect_samples, dt, t_dt2)
-	                           : aperture_power_denominator(t_rect_samples, dt, t_dt2);
+	float t_denom = aperture_power_denominator(t_rect_samples, dt, t_dt2);
 	float t_scale = sqrt(scatter.amplitude) * t_aperture.apodization * t_aperture.size.x * t_aperture.size.y
 	                / (2 * PI * sqrt(t_scatter_dist_square) * t_denom);
 
@@ -80,8 +74,7 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	float4   r_rect_times   = r_t0 + 0.5f * (r_dt1 * float4(-1, +1, -1, +1) + r_dt2 * float4(-1, -1, +1, +1));
 	float4   r_rect_samples = (r_rect_times - StartTime) * fs;
 
-	float r_denom = Cumulative ? aperture_power_denominator_cumulative(r_rect_samples, dt, r_dt2)
-	                           : aperture_power_denominator(r_rect_samples, dt, r_dt2);
+	float r_denom = aperture_power_denominator(r_rect_samples, dt, r_dt2);
 	float r_scale = sqrt(scatter.amplitude) * r_aperture.apodization * r_aperture.size.x * r_aperture.size.y
 	                / (2 * PI * sqrt(r_scatter_dist_square) * r_denom);
 
