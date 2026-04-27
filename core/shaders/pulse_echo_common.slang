@@ -1,21 +1,7 @@
 module pulse_echo_common;
 
 public struct PackScatterRectSettings {
-	public float samplingFrequency;
-	public float speedOfSound;
-	public float startTime;
-	public uint  scatterBatchOffset;
-	public uint  scatterBatchCount;
-	public uint  transmitCount;
-	public uint  receiveCount;
-	public bool  cumulative;
-};
-
-public struct PulseEchoSettings {
-	public uint sampleCount;
-	public uint transmitCount;
-	public uint receiveCount;
-	public uint scatterBatchCount;
+	public uint scatterBatchOffset;
 };
 
 public struct RectangularAperture {

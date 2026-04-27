@@ -26,15 +26,8 @@ MAX_FRAMES_IN_FLIGHT :: 2
 
 DISPATCH_TIMEOUT :: 1000 * time.Second
 
-USE_CUMULATIVE_COMPUTE :: #config(USE_CUMULATIVE_COMPUTE, true)
-
-VKFIELD_SAMPLE_GROUP_X := #config(SAMPLE_GROUP_X, 128)
-VKFIELD_RECEIVE_GROUP_Y := #config(RECEIVE_GROUP_Y, 16)
-VKFIELD_SCATTER_REDUCTION_Z := #config(SCATTER_REDUCTION_Z, 8)
-
-SHADER_PULSE_ECHO_COMP            :: #load("shaders/pulse_echo.spv")
-SHADER_PULSE_ECHO_CUMULATIVE_COMP :: #load("shaders/pulse_echo_cumulative.spv")
-SHADER_PACK_SCATTER_RECTS_COMP    :: #load("shaders/pack_scatter_rects.spv")
+SHADER_PULSE_ECHO_COMP         :: #load("shaders/pulse_echo.spv")
+SHADER_PACK_SCATTER_RECTS_COMP :: #load("shaders/pack_scatter_rects.spv")
 
 @(private = "file")
 debugLogger: log.Logger
@@ -59,35 +52,36 @@ vkSimulator :: struct {
 	pulseEchoPipelineLayout:        vk.PipelineLayout,
 	packScatterRectsPipelineLayout: vk.PipelineLayout,
 
-	using computePipelines:     vkPipelines,
 	computeDescriptorSetLayout: vkField_vk.DescriptorSetLayout,
 	computeCommandPool:         vkField_vk.CommandPool,
 	computeDescriptorPool:      vkField_vk.DescriptorPool,
 	computeFence:               vk.Fence,
 }
 
-vkPipelines :: struct {
-	pulseEcho:           vkField_vk.ComputePipeline,
-	pulseEchoCumulative: vkField_vk.ComputePipeline,
-	packScatterRects:    vkField_vk.ComputePipeline,
-}
-
 vkPackScatterRectsPushConstants :: struct {
-	samplingFrequency  : f32,
-	speedOfSound       : f32,
-	startTime          : f32,
 	scatterBatchOffset : u32,
-	scatterBatchCount  : u32,
-	transmitCount      : u32,
-	receiveCount       : u32,
-	cumulative         : u32,
 }
 
-vkPulseEchoPushConstants :: struct {
-	sampleCount       : u32,
-	transmitCount     : u32,
-	receiveCount      : u32,
-	scatterBatchCount : u32,
+vkPackScatterRectsSpecConstants :: struct {
+	WorkgroupSizeX    : u32,
+	WorkgroupSizeY    : u32,
+	WorkgroupSizeZ    : u32,
+	ScatterBatchCount : u32,
+	TransmitCount     : u32,
+	ReceiveCount      : u32,
+	Cumulative        : u32,
+	StartTime         : f32,
+	SamplingFrequency : f32,
+	SpeedOfSound      : f32,
+}
+
+vkPulseEchoSpecConstants :: struct {
+	WorkgroupSizeX    : u32,
+	SampleCount       : u32,
+	TransmitCount     : u32,
+	ReceiveCount      : u32,
+	ScatterBatchCount : u32,
+	Cumulative        : u32,
 }
 
 create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
@@ -129,7 +123,7 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 		vkField_vk.create_pipeline_layout(
 			simulator.device,
 			{simulator.computeDescriptorSetLayout.layout},
-			{{stageFlags = {.COMPUTE}, size = size_of(vkPulseEchoPushConstants), offset = 0}},
+			{{stageFlags = {.COMPUTE}, size = 0, offset = 0}},
 		),
 	) or_return
 
@@ -138,32 +132,6 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 			simulator.device,
 			{simulator.computeDescriptorSetLayout.layout},
 			{{stageFlags = {.COMPUTE}, size = size_of(vkPackScatterRectsPushConstants), offset = 0}},
-		),
-	) or_return
-
-	simulator.pulseEcho = check(
-		vkField_vk.create_compute_pipeline(
-			simulator.device,
-			{kind = .Compute, code = SHADER_PULSE_ECHO_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
-			simulator.pulseEchoPipelineLayout,
-			"Pulse Echo",
-		),
-	) or_return
-	simulator.pulseEchoCumulative = check(
-		vkField_vk.create_compute_pipeline(
-			simulator.device,
-			{kind = .Compute, code = SHADER_PULSE_ECHO_CUMULATIVE_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
-			simulator.pulseEchoPipelineLayout,
-			"Cumulative Pulse Echo",
-		),
-	) or_return
-
-	simulator.packScatterRects = check(
-		vkField_vk.create_compute_pipeline(
-			simulator.device,
-			{kind = .Compute, code = SHADER_PACK_SCATTER_RECTS_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
-			simulator.packScatterRectsPipelineLayout,
-			"Pack Scatter Rects",
 		),
 	) or_return
 
@@ -180,10 +148,6 @@ destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 	vkField_vk.destroy_fence(simulator.device, simulator.computeFence)
 	vkField_vk.destroy_command_pool(simulator.device, simulator.computeCommandPool)
 	vkField_vk.destroy_descriptor_pool(simulator.device, simulator.computeDescriptorPool)
-
-	vkField_vk.destroy_compute_pipeline(simulator.device, simulator.pulseEcho)
-	vkField_vk.destroy_compute_pipeline(simulator.device, simulator.pulseEchoCumulative)
-	vkField_vk.destroy_compute_pipeline(simulator.device, simulator.packScatterRects)
 
 	vkField_vk.destroy_pipeline_layout(simulator.device, simulator.pulseEchoPipelineLayout)
 	vkField_vk.destroy_pipeline_layout(simulator.device, simulator.packScatterRectsPipelineLayout)
@@ -213,6 +177,163 @@ vkSimulate :: proc(
 	device := simulator.device
 	computeFence := simulator.computeFence
 
+	packRectsBufferSize       :: 32 * 1024 * 1024
+	packRectSingleScatterSize := (4 * size_of(f32) + 4 * size_of(f32)) * (settings.receiveElementCount + settings.transmitElementCount)
+	scatterBatchCount         := u32(math.min(settings.scatterCount, packRectsBufferSize / packRectSingleScatterSize))
+	packRectsScaleBufferSize  := size_of(f32) * scatterBatchCount * u32(settings.receiveElementCount + settings.transmitElementCount)
+
+	// NOTE(rnp): specialize shaders
+	pulseEchoPipeline        : vkField_vk.ComputePipeline
+	packScatterRectsPipeline : vkField_vk.ComputePipeline
+	packScatterRectsSpecConstants := vkPackScatterRectsSpecConstants {
+		WorkgroupSizeX    = 4,
+		WorkgroupSizeY    = 4,
+		WorkgroupSizeZ    = 4,
+		ScatterBatchCount = scatterBatchCount,
+		TransmitCount     = u32(settings.transmitElementCount),
+		ReceiveCount      = u32(settings.receiveElementCount),
+		Cumulative        = settings.cumulative ? 1 : 0,
+		StartTime         = settings.startTime,
+		SamplingFrequency = settings.samplingFrequency,
+		SpeedOfSound      = settings.speedOfSound,
+	}
+
+	pulseEchoSpecConstants := vkPulseEchoSpecConstants {
+		// TODO(rnp): subgroup size
+		WorkgroupSizeX    = 64,
+		SampleCount       = u32(settings.sampleCount),
+		TransmitCount     = u32(settings.transmitElementCount),
+		ReceiveCount      = u32(settings.receiveElementCount),
+		ScatterBatchCount = scatterBatchCount,
+		Cumulative        = settings.cumulative ? 1 : 0,
+	}
+
+	{
+		// TODO(rnp): doesn't odin have a compile time way to generate this?
+		packScatterRectsSpecMap := []vk.SpecializationMapEntry {
+			{
+				constantID = 0,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, WorkgroupSizeX)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 1,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, WorkgroupSizeY)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 2,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, WorkgroupSizeZ)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 3,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, ScatterBatchCount)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 4,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, TransmitCount)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 5,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, ReceiveCount)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 6,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, Cumulative)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 7,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, StartTime)),
+				size       = size_of(f32),
+			},
+			{
+				constantID = 8,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, SamplingFrequency)),
+				size       = size_of(f32),
+			},
+			{
+				constantID = 9,
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, SpeedOfSound)),
+				size       = size_of(f32),
+			},
+		}
+
+		packScatterRectsSpecInfo := vk.SpecializationInfo {
+			mapEntryCount = u32(len(packScatterRectsSpecMap)),
+			pMapEntries   = &packScatterRectsSpecMap[0],
+			dataSize      = size_of(packScatterRectsSpecConstants),
+			pData         = &packScatterRectsSpecConstants,
+		}
+
+		packScatterRectsPipeline = check(
+			vkField_vk.create_compute_pipeline(
+				simulator.device,
+				{kind = .Compute, code = SHADER_PACK_SCATTER_RECTS_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
+				simulator.packScatterRectsPipelineLayout,
+				&packScatterRectsSpecInfo,
+				"Pack Scatter Rects",
+			),
+		) or_return
+
+		pulseEchoSpecMap := []vk.SpecializationMapEntry {
+			{
+				constantID = 0,
+				offset     = u32(offset_of(vkPulseEchoSpecConstants, WorkgroupSizeX)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 1,
+				offset     = u32(offset_of(vkPulseEchoSpecConstants, SampleCount)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 2,
+				offset     = u32(offset_of(vkPulseEchoSpecConstants, TransmitCount)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 3,
+				offset     = u32(offset_of(vkPulseEchoSpecConstants, ReceiveCount)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 4,
+				offset     = u32(offset_of(vkPulseEchoSpecConstants, ScatterBatchCount)),
+				size       = size_of(u32),
+			},
+			{
+				constantID = 5,
+				offset     = u32(offset_of(vkPulseEchoSpecConstants, Cumulative)),
+				size       = size_of(u32),
+			},
+		}
+		pulseEchoSpecInfo := vk.SpecializationInfo {
+			mapEntryCount = u32(len(pulseEchoSpecMap)),
+			pMapEntries   = &pulseEchoSpecMap[0],
+			dataSize      = size_of(pulseEchoSpecConstants),
+			pData         = &pulseEchoSpecConstants,
+		}
+
+		pulseEchoPipeline = check(
+			vkField_vk.create_compute_pipeline(
+				device,
+				{kind = .Compute, code = SHADER_PULSE_ECHO_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
+				simulator.pulseEchoPipelineLayout,
+				&pulseEchoSpecInfo,
+				"Pulse Echo",
+			),
+		) or_return
+	}
+	defer {
+		vkField_vk.destroy_compute_pipeline(device, pulseEchoPipeline)
+		vkField_vk.destroy_compute_pipeline(device, packScatterRectsPipeline)
+	}
+
 	response = make([]f32, settings.receiveElementCount * settings.sampleCount, allocator)
 
 	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
@@ -222,11 +343,6 @@ vkSimulate :: proc(
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 	}
 	check(vk.BeginCommandBuffer(commandBuffer, &commandBeginInfo)) or_return
-
-	packRectsBufferSize       :: 32 * 1024 * 1024
-	packRectSingleScatterSize := (4 * size_of(f32) + 4 * size_of(f32)) * (settings.receiveElementCount + settings.transmitElementCount)
-	scatterBatchCount         := u32(math.min(settings.scatterCount, packRectsBufferSize / packRectSingleScatterSize))
-	packRectsScaleBufferSize  := size_of(f32) * scatterBatchCount * u32(settings.receiveElementCount + settings.transmitElementCount)
 
 	transmitElementsBuffer, transmitElementsStagingBuffer := check(stream(device, commandBuffer, transmitElements)) or_return
 	receiveElementsBuffer,  receiveElementsStagingBuffer  := check(stream(device, commandBuffer, receiveElements)) or_return
@@ -352,14 +468,7 @@ vkSimulate :: proc(
 
 	for scatterOffset : u32 = 0; scatterOffset < u32(settings.scatterCount); scatterOffset += u32(scatterBatchCount) {
 		packScatterRectsPushConstants := vkPackScatterRectsPushConstants {
-			samplingFrequency  = settings.samplingFrequency,
-			speedOfSound       = settings.speedOfSound,
-			startTime          = settings.startTime,
 			scatterBatchOffset = scatterOffset,
-			scatterBatchCount  = scatterBatchCount,
-			transmitCount      = u32(settings.transmitElementCount),
-			receiveCount       = u32(settings.receiveElementCount),
-			cumulative         = settings.cumulative ? 1 : 0,
 		}
 
 		vkField_vk.cmd_pipeline_barrier(
@@ -388,18 +497,17 @@ vkSimulate :: proc(
 			{},
 		)
 
-		vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.packScatterRects.pipeline)
+		vk.CmdBindPipeline(commandBuffer, .COMPUTE, packScatterRectsPipeline.pipeline)
 		vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.packScatterRectsPipelineLayout,
 		                         0, 1, &descriptorSet, 0, nil)
 		vkField_vk.cmd_push_constants(commandBuffer, simulator.packScatterRectsPipelineLayout,
 		                              {.COMPUTE}, packScatterRectsPushConstants)
 
-		// TODO(rnp): cleanup dispatch layout
 		vk.CmdDispatch(
 			commandBuffer,
-			u32(math.ceil(f32(scatterBatchCount)             / 4)),
-			u32(math.ceil(f32(settings.receiveElementCount)  / 4)),
-			u32(math.ceil(f32(settings.transmitElementCount) / 4)),
+			u32(math.ceil(f32(packScatterRectsSpecConstants.ScatterBatchCount) / f32(packScatterRectsSpecConstants.WorkgroupSizeX))),
+			u32(math.ceil(f32(packScatterRectsSpecConstants.ReceiveCount)      / f32(packScatterRectsSpecConstants.WorkgroupSizeY))),
+			u32(math.ceil(f32(packScatterRectsSpecConstants.TransmitCount)     / f32(packScatterRectsSpecConstants.WorkgroupSizeZ))),
 		)
 
 		vkField_vk.cmd_pipeline_barrier(
@@ -437,24 +545,13 @@ vkSimulate :: proc(
 			{},
 		)
 
-		pulseEchoPushConstants := vkPulseEchoPushConstants {
-			sampleCount       = u32(settings.sampleCount),
-			transmitCount     = u32(settings.transmitElementCount),
-			receiveCount      = u32(settings.receiveElementCount),
-			scatterBatchCount = scatterBatchCount,
-		}
-
-		if !settings.cumulative do vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.pulseEcho.pipeline)
-		else do vk.CmdBindPipeline(commandBuffer, .COMPUTE, simulator.pulseEchoCumulative.pipeline)
+		vk.CmdBindPipeline(commandBuffer, .COMPUTE, pulseEchoPipeline.pipeline)
 		vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.pulseEchoPipelineLayout,
 		                         0, 1, &descriptorSet, 0, nil)
-		vkField_vk.cmd_push_constants(commandBuffer, simulator.pulseEchoPipelineLayout,
-		                              {.COMPUTE}, pulseEchoPushConstants)
-		// TODO(rnp): cleanup dispatch layout
 		vk.CmdDispatch(
 			commandBuffer,
-			u32(math.ceil(f32(settings.sampleCount) / 64)),
-			u32(settings.receiveElementCount),
+			u32(math.ceil(f32(pulseEchoSpecConstants.SampleCount) / f32(pulseEchoSpecConstants.WorkgroupSizeX))),
+			u32(pulseEchoSpecConstants.ReceiveCount),
 			1,
 		)
 	}

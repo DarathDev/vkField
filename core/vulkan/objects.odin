@@ -1430,18 +1430,19 @@ ComputePipeline :: struct {
 	shaderModule: vk.ShaderModule,
 }
 
-create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: vk.PipelineLayout, label := "") -> (pipeline: ComputePipeline, ok: vk.Result) {
+create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: vk.PipelineLayout, specInfo: ^vk.SpecializationInfo, label := "") -> (pipeline: ComputePipeline, ok: vk.Result) {
 	checkLabel(label)
 
 	assert(len(shaderInfo.entryPoints) == 1)
 	pipeline.shaderModule = create_shader_module(device, shaderInfo.code, label) or_return
 
 	stageCreateInfo: vk.PipelineShaderStageCreateInfo = {
-		sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-		flags  = {},
-		stage  = {.COMPUTE},
-		module = pipeline.shaderModule,
-		pName  = strings.clone_to_cstring(shaderInfo.entryPoints[0].name, context.temp_allocator),
+		sType               = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+		flags               = {},
+		stage               = {.COMPUTE},
+		module              = pipeline.shaderModule,
+		pSpecializationInfo = specInfo,
+		pName               = strings.clone_to_cstring(shaderInfo.entryPoints[0].name, context.temp_allocator),
 	}
 
 	createInfo: vk.ComputePipelineCreateInfo = {

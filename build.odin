@@ -112,16 +112,6 @@ main :: proc() {
 		append(&options, ..VKFIELD_ODIN_DEBUG_OPTIONS)
 		append(&options, ..odin_defines_to_options(VKFIELD_ODIN_DEBUG_DEFINES))
 	}
-	append(
-		&options,
-		..odin_defines_to_options(
-			{
-				{name = "SAMPLE_GROUP_X", value = fmt.aprintf("%v", SAMPLE_GROUP_X)},
-				{name = "RECEIVE_GROUP_Y", value = fmt.aprintf("%v", RECEIVE_GROUP_Y)},
-				{name = "SCATTER_REDUCTION_Z", value = fmt.aprintf("%v", SCATTER_REDUCTION_Z)},
-			},
-		),
-	)
 	switch VKFIELD_BUILD_TYPE {
 	case "lib":
 		build_lib(&options)
@@ -135,7 +125,7 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	assert(check_cmd(SLANG_CMD), fmt.aprintf("Slang Command \"%v\" not found", SLANG_CMD))
 
 	// Compile Shaders
-	for shader in VKFIELD_PULSE_ECHO_SHADERS do confirm(compile_shader_slangc(shader, {{"SAMPLE_GROUP_X", fmt.aprintf("%v", SAMPLE_GROUP_X)}, {"RECEIVE_GROUP_Y", fmt.aprintf("%v", RECEIVE_GROUP_Y)}, {"SCATTER_REDUCTION_Z", fmt.aprintf("%v", SCATTER_REDUCTION_Z)}}))
+	for shader in VKFIELD_PULSE_ECHO_SHADERS do confirm(compile_shader_slangc(shader))
 
 	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_LIBRARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
 	// Make Output Directory
@@ -174,7 +164,7 @@ build_test :: proc(options: ^[dynamic]OdinBuildOption) {
 	assert(check_cmd(SLANG_CMD), fmt.aprintf("Slang Command \"%v\" not found", SLANG_CMD))
 
 	// Compile Shaders
-	for shader in VKFIELD_PULSE_ECHO_SHADERS do assert(compile_shader_slangc(shader, {{"SAMPLE_GROUP_X", fmt.aprintf("%v", SAMPLE_GROUP_X)}, {"RECEIVE_GROUP_Y", fmt.aprintf("%v", RECEIVE_GROUP_Y)}, {"SCATTER_REDUCTION_Z", fmt.aprintf("%v", SCATTER_REDUCTION_Z)}}))
+	for shader in VKFIELD_PULSE_ECHO_SHADERS do assert(compile_shader_slangc(shader))
 
 	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_BINARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
 	// Make Output Directory

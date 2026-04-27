@@ -3,14 +3,17 @@ module pulse_echo;
 import pulse_echo_common;
 import util;
 
-[[vk::push_constant]]
-public ConstantBuffer<PulseEchoSettings> settings;
+layout(constant_id =  0) const uint  WorkgroupSizeX    = 64;
+layout(constant_id =  1) const uint  SampleCount       = 0;
+layout(constant_id =  2) const uint  TransmitCount     = 0;
+layout(constant_id =  3) const uint  ReceiveCount      = 0;
+layout(constant_id =  4) const uint  ScatterBatchCount = 0;
+layout(constant_id =  5) const bool  Cumulative        = false;
 
 float b2f(bool v) {
   return v ? 1.0f : 0.0f;
 }
 
-#if defined(PULSE_ECHO_CUMULATIVE)
 float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
   bool qDelta = rectSamples.x == rectSamples.w;
   bool qRect = !qDelta && (rectSamples.x == rectSamples.y);
@@ -30,14 +33,6 @@ float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
   return value;
 }
 
-float sample_transmit_aperture(in int i, in float4 nRectT) {
-  return sample_rect_aperture_cumulative(i, nRectT) - sample_rect_aperture_cumulative(i - 1, nRectT);
-}
-
-float sample_receive_aperture(in int n, in int i, in float4 nRectR) {
-  return sample_rect_aperture_cumulative(n - i + 1, nRectR) - sample_rect_aperture_cumulative(n - i, nRectR);
-}
-#else
 float sample_rect_aperture_discrete(in float n, in float4 rectSamples) {
   bool qDelta = rectSamples.w - rectSamples.x < 1;
   bool qRect = !qDelta && (rectSamples.y - rectSamples.x < 1);
@@ -73,53 +68,57 @@ float sample_rect_aperture_discrete(in float n, in float4 rectSamples) {
 }
 
 float sample_transmit_aperture(in int i, in float4 nRectT) {
-  return sample_rect_aperture_discrete(i, nRectT);
+	if (Cumulative) {
+		return sample_rect_aperture_cumulative(i, nRectT) - sample_rect_aperture_cumulative(i - 1, nRectT);
+	} else {
+		return sample_rect_aperture_discrete(i, nRectT);
+	}
 }
 
 float sample_receive_aperture(in int n, in int i, in float4 nRectR) {
-  return sample_rect_aperture_discrete(n - i, nRectR);
+	if (Cumulative) {
+		return sample_rect_aperture_cumulative(n - i + 1, nRectR) - sample_rect_aperture_cumulative(n - i, nRectR);
+	} else {
+		return sample_rect_aperture_discrete(n - i, nRectR);
+	}
 }
-#endif
 
-// TODO(rnp): spec constant
-#define SAMPLE_BATCH_SIZE 64
-
-groupshared float output_samples[SAMPLE_BATCH_SIZE];
+groupshared float output_samples[WorkgroupSizeX];
 
 [shader("compute")]
-[numthreads(SAMPLE_BATCH_SIZE, 1, 1)]
-void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
+[numthreads(WorkgroupSizeX, 1, 1)]
+void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_DispatchThreadID)
 {
-	const uint thread_count = SAMPLE_BATCH_SIZE;
+	const uint thread_count = WorkgroupSizeX;
 
-	uint base_sample   = SAMPLE_BATCH_SIZE * GroupID.x;
+	uint base_sample   = WorkgroupSizeX * GroupID.x;
 	uint receive_index = GroupID.y;
 
 	output_samples[ThreadID] = 0;
 
-	uint n_total       = settings.scatterBatchCount * settings.transmitCount;
+	uint n_total       = ScatterBatchCount * TransmitCount;
 	uint n_per_thread  = n_total / thread_count;
 	uint n_leftover    = n_total % thread_count;
 	uint n_this_thread = n_per_thread + uint(ThreadID < n_leftover);
 
 	for (uint n = 0; n < n_this_thread; n++) {
 		uint packed_index   = thread_count * n + ThreadID;
-		uint scatter_index  = packed_index / settings.transmitCount;
-		uint transmit_index = packed_index % settings.transmitCount;
+		uint scatter_index  = packed_index / TransmitCount;
+		uint transmit_index = packed_index % TransmitCount;
 
-		uint t_index = scatter_index * settings.transmitCount + transmit_index;
-		uint r_index = settings.scatterBatchCount * settings.transmitCount + scatter_index * settings.receiveCount + receive_index;
+		uint t_index = scatter_index * TransmitCount + transmit_index;
+		uint r_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveCount + receive_index;
 
 		float4 r_rect_samples = packed_scatter_rects[r_index];
 		float  r_scale        = packed_scatter_scales[r_index];
 		float4 t_rect_samples = packed_scatter_rects[t_index];
 		float  t_scale        = packed_scatter_scales[t_index];
 
-		for (int sample_index = 0; sample_index < SAMPLE_BATCH_SIZE; sample_index++) {
+		for (int sample_index = 0; sample_index < WorkgroupSizeX; sample_index++) {
 			GroupMemoryBarrierWithGroupSync();
-			int sample_n      = (sample_index + ThreadID) % SAMPLE_BATCH_SIZE;
+			int sample_n      = (sample_index + ThreadID) % WorkgroupSizeX;
 			int full_sample_n = base_sample + sample_n;
-			if (full_sample_n < settings.sampleCount) {
+			if (full_sample_n < SampleCount) {
 				int minK = int(max(floor(t_rect_samples.x - 0.5f), full_sample_n - ceil(r_rect_samples.w + 0.5f)));
 				int maxK = int(min(ceil(t_rect_samples.w + 0.5f),  full_sample_n - floor(r_rect_samples.x - 0.5f)));
 
@@ -136,6 +135,6 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 
 	GroupMemoryBarrierWithGroupSync();
 	uint sample_index = base_sample + ThreadID;
-	if (sample_index < settings.sampleCount)
-		response[receive_index * settings.sampleCount + sample_index] += output_samples[ThreadID];
+	if (sample_index < SampleCount)
+		response[receive_index * SampleCount + sample_index] += output_samples[ThreadID];
 }
