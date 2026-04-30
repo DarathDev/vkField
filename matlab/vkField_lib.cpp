@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include "mex.hpp"
 #include "mexAdapter.hpp"
 #include "vkField_lib.hpp"
@@ -60,15 +61,15 @@ public:
 
 		Simulator* simulator;
 
-		create_vulkan_simulator_c(&simulator, print, this);
+		create_vulkan_simulator_c(&simulator, (void *)print, this);
 
-		plan_simulation_c(&settings, transmitElements, receiveElements, scatters, print, this);
+		plan_simulation_c(&settings, transmitElements, receiveElements, scatters, (void *)print, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime", factory.createScalar<f32>(settings.startTime));
 		matlabPtr->setProperty(mxSimulator, u"SampleCount", factory.createScalar<u32>(settings.sampleCount));
 
 		auto pulseEchoBuffer = factory.createBuffer<float>(settings.sampleCount * settings.receiveElementCount);
 
-		simulate_c(simulator, &settings, transmitElements, receiveElements, scatters, pulseEchoBuffer.get(), print, this);
+		simulate_c(simulator, &settings, transmitElements, receiveElements, scatters, pulseEchoBuffer.get(), (void *)print, this);
 		matlabPtr->setProperty(mxSimulator, u"SimulationTime", factory.createScalar<f32>(settings.simulationTime));
 
 		ArrayDimensions pulseEchoDims;
@@ -76,7 +77,7 @@ public:
 		pulseEchoDims.push_back((uz)settings.receiveElementCount);
 		outputs[0] = factory.createArrayFromBuffer(pulseEchoDims, std::move(pulseEchoBuffer));
 
-		destroy_vulkan_simulator_c(simulator, print, this);
+		destroy_vulkan_simulator_c(simulator, (void *)print, this);
 
 		void mexUnlock();
 
