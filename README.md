@@ -27,3 +27,19 @@ Note: MATLAB will crash if a debug trap is hit and no debugger is attached.
 odin run . -- -test
 ./bin/release/vkField_tests
 ```
+
+## Citations
+
+The algorithm used in the simulator is based on this work:
+
+```
+J. A. Jensen and N. B. Svendsen, "Calculation of pressure fields from arbitrarily shaped, apodized, and excited ultrasound transducers," in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 39, no. 2, pp. 262-267, March 1992, doi: 10.1109/58.139123.
+```
+
+See the following for background knowledge on creating a linear model of ultrasound
+
+```
+J.A. Jensen: Linear description of ultrasound imaging systems, Notes for the International Summer School on Advanced Ultrasound Imaging, Technical University of Denmark July 5 to July 9, 1999, Technical University of Denmark, June, 1999.
+```
+
+And finally a special thanks to [Field II](https://field-ii.dk) for establishing a gold standard for ultrasound simulation.
