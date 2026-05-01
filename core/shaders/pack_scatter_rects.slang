@@ -25,9 +25,7 @@ ConstantBuffer<PackScatterRectSettings> settings;
 
 float aperture_power_denominator(in float4 rect_samples, in float dt, in float dt2)
 {
-	// TODO(rnp): are these supposed to be floating point equal? seems suspicious
-	if (Cumulative) return rect_samples.x == rect_samples.w ? dt : dt2;
-	else            return rect_samples.w - rect_samples.x <= 1 ? dt : dt2;
+  return rect_samples.w - rect_samples.x <= 1 ? dt : dt2;
 }
 
 [shader("compute")]
