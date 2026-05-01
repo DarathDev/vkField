@@ -87,7 +87,7 @@ groupshared float output_samples[WorkgroupSizeX];
 
 [shader("compute")]
 [numthreads(WorkgroupSizeX, 1, 1)]
-void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_DispatchThreadID)
+void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 {
 	const uint thread_count = WorkgroupSizeX;
 
