@@ -5,17 +5,11 @@ import "core:log"
 import "core:math/rand"
 import "core:slice"
 import "core:testing"
+import vk "vendor:vulkan"
 import vkField "vkField:."
 import utility "vkField:utility"
 
-@(test)
-oneRectSimulation :: proc(t: ^testing.T) {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
-
-	simulator, _ := utility.expect(t, vkField.create_vulkan_simulator())
-	defer vkField.destroy_vulkan_simulator(&simulator)
-
+oneRectSimulation :: proc() -> (ok := true) {
 	settings := vkField.SimulationSettings {
 		samplingFrequency    = 100e6,
 		speedOfSound         = 1540,
@@ -25,6 +19,13 @@ oneRectSimulation :: proc(t: ^testing.T) {
 		cumulative           = true,
 		dispatchWorkLimit    = 1 << 24,
 	}
+
+	simulator, vk_result := vkField.create_vulkan_simulator();
+	if vk_result != vk.Result.SUCCESS {
+		ok = false
+		return
+	}
+	defer vkField.destroy_vulkan_simulator(&simulator)
 
 	transmitElement: vkField.Element = {
 		aperture = {rectangle = {position = {0, 0, 0}, normal = {0, 0, 1}, size = {2.2e-4, 2.2e-4}}},
@@ -47,23 +48,25 @@ oneRectSimulation :: proc(t: ^testing.T) {
 
 	vkField.plan_simulation(&settings, transmitElements, receiveElements, scatters)
 
-	data, _ := utility.expect(t, vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters))
+	data : []f32
+	data, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
 	defer delete(data)
 	fmt.println(data)
+	return
 }
 
-@(test)
-linearArraySimulation :: proc(t: ^testing.T) {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
-
+linearArraySimulation :: proc() -> (ok := true) {
 	scatterCount :: 16
 	elementCount :: 128
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator, _ := utility.expect(t, vkField.create_vulkan_simulator())
+	simulator, vk_result := vkField.create_vulkan_simulator();
+	if vk_result != vk.Result.SUCCESS {
+		ok = false
+		return
+	}
 	defer vkField.destroy_vulkan_simulator(&simulator)
 
 	settings := vkField.SimulationSettings {
@@ -82,21 +85,22 @@ linearArraySimulation :: proc(t: ^testing.T) {
 	defer delete(scatters)
 
 	vkField.plan_simulation(&settings, transmitElements, receiveElements, scatters)
-	_, _ = utility.expect(t, vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters))
+	_, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
+	return
 }
 
-@(test)
-matrixArraySimulation :: proc(t: ^testing.T) {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
-
+matrixArraySimulation :: proc() -> (ok := true) {
 	scatterCount :: 16
 	elementCount :: 128
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator, _ := utility.expect(t, vkField.create_vulkan_simulator())
+	simulator, vk_result := vkField.create_vulkan_simulator();
+	if vk_result != vk.Result.SUCCESS {
+		ok = false
+		return
+	}
 	defer vkField.destroy_vulkan_simulator(&simulator)
 
 	settings := vkField.SimulationSettings {
@@ -115,7 +119,38 @@ matrixArraySimulation :: proc(t: ^testing.T) {
 	defer delete(scatters)
 
 	vkField.plan_simulation(&settings, transmitElements, receiveElements, scatters)
-	_, _ = utility.expect(t, vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters))
+	_, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
+	return
+}
+
+@(test)
+oneRectSimulationTest :: proc(t: ^testing.T) {
+	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
+	_ = utility.expect(t, oneRectSimulation())
+}
+
+@(test)
+linearArraySimulationTest :: proc(t: ^testing.T) {
+	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
+	_ = utility.expect(t, linearArraySimulation())
+}
+
+@(test)
+matrixArraySimulationTest :: proc(t: ^testing.T) {
+	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
+	_ = utility.expect(t, matrixArraySimulation())
+}
+
+main :: proc() {
+	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
+
+	//oneRectSimulation()
+	linearArraySimulation()
+	//matrixArraySimulation()
 }
 
 make_random_scatters :: proc(count: int) -> []vkField.Scatter {
