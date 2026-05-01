@@ -984,3 +984,11 @@ cmd_download_from_image :: proc(commandBuffer: vk.CommandBuffer, image: Image, r
 cmd_populate_mip :: proc(commandBuffer: vk.CommandBuffer, image: Image) {
 	unimplemented()
 }
+
+cmd_clear_buffer :: proc (commandBuffer: vk.CommandBuffer, buffer: Buffer) {
+	cmd_fill_buffer(commandBuffer, buffer, 0)
+}
+
+cmd_fill_buffer :: proc (commandBuffer: vk.CommandBuffer, buffer: Buffer, value: u32) {
+	vk.CmdFillBuffer(commandBuffer, buffer.buffer, buffer.offset, buffer.size, value)
+}

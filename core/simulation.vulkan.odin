@@ -388,9 +388,8 @@ vkSimulate :: proc(
 		}
 	}
 
-	// TODO(rnp): clear should be done in a shader
 	// Initialize response to zero for atomic accumulation.
-	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(response), responseBuffer)
+	vkField_vk.cmd_clear_buffer(commandBuffer, responseBuffer)
 
 	vkField_vk.cmd_pipeline_barrier(
 		commandBuffer,
@@ -689,11 +688,11 @@ prepare_readback :: proc(
 	readbackBuffer: Maybe(vkField_vk.Buffer),
 	result: vk.Result,
 ) {
-	buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
+	buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
 	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
 	if !memoryTypeOk {
 		vkField_vk.destroy_buffer(device, buffer)
-		buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_SRC}) or_return
+		buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_SRC, .TRANSFER_DST}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer));
 		   !memoryTypeOk {
 			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
