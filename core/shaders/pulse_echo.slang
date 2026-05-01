@@ -6,9 +6,16 @@ import util;
 layout(constant_id =  0) const uint  WorkgroupSizeX    = 64;
 layout(constant_id =  1) const uint  SampleCount       = 0;
 layout(constant_id =  2) const uint  TransmitCount     = 0;
-layout(constant_id =  3) const uint  ReceiveCount      = 0;
+layout(constant_id =  3) const uint  ReceiveBatchCount = 0;
 layout(constant_id =  4) const uint  ScatterBatchCount = 0;
 layout(constant_id =  5) const bool  Cumulative        = false;
+
+struct PulseEchoSettings {
+	uint receiveBatchOffset;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<PulseEchoSettings> settings;
 
 float b2f(bool v) {
   return v ? 1.0f : 0.0f;
@@ -107,7 +114,7 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 		uint transmit_index = packed_index % TransmitCount;
 
 		uint t_index = scatter_index * TransmitCount + transmit_index;
-		uint r_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveCount + receive_index;
+		uint r_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
 
 		float4 r_rect_samples = packed_scatter_rects[r_index];
 		float  r_scale        = packed_scatter_scales[r_index];
@@ -134,7 +141,8 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 	}
 
 	GroupMemoryBarrierWithGroupSync();
-	uint sample_index = base_sample + ThreadID;
+	uint sample_index      = base_sample + ThreadID;
+	uint receive_out_index = settings.receiveBatchOffset + receive_index;
 	if (sample_index < SampleCount)
-		response[receive_index * SampleCount + sample_index] += output_samples[ThreadID];
+		response[receive_out_index * SampleCount + sample_index] += output_samples[ThreadID];
 }

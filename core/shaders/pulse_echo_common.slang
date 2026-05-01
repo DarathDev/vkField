@@ -1,9 +1,5 @@
 module pulse_echo_common;
 
-public struct PackScatterRectSettings {
-	public uint scatterBatchOffset;
-};
-
 public struct RectangularAperture {
   public float3 position;
   public uint padding0;

@@ -8,15 +8,20 @@ layout(constant_id =  1) const uint  WorkgroupSizeY    = 4;
 layout(constant_id =  2) const uint  WorkgroupSizeZ    = 4;
 
 layout(constant_id =  3) const uint  ScatterBatchCount = 0;
-layout(constant_id =  4) const uint  TransmitCount     = 0;
-layout(constant_id =  5) const uint  ReceiveCount      = 0;
+layout(constant_id =  4) const uint  ReceiveBatchCount = 0;
+layout(constant_id =  5) const uint  TransmitCount     = 0;
 layout(constant_id =  6) const bool  Cumulative        = false;
 layout(constant_id =  7) const float StartTime         = 0;
 layout(constant_id =  8) const float SamplingFrequency = 0;
 layout(constant_id =  9) const float SpeedOfSound      = 0;
 
+struct PackScatterRectSettings {
+	uint scatterBatchOffset;
+	uint receiveBatchOffset;
+};
+
 [[vk::push_constant]]
-public ConstantBuffer<PackScatterRectSettings> settings;
+ConstantBuffer<PackScatterRectSettings> settings;
 
 float aperture_power_denominator(in float4 rect_samples, in float dt, in float dt2)
 {
@@ -33,11 +38,11 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	uint receive_index  = GlobalInvocationID.y;
 	uint transmit_index = GlobalInvocationID.z;
 
-	uint3 dispatch_test = uint3(ScatterBatchCount, ReceiveCount, TransmitCount);
+	uint3 dispatch_test = uint3(ScatterBatchCount, ReceiveBatchCount, TransmitCount);
 	if (any(GlobalInvocationID >= dispatch_test))
 		return;
 
-	RectangularAperture r_aperture = receiveApertures[receive_index];
+	RectangularAperture r_aperture = receiveApertures[settings.receiveBatchOffset + receive_index];
 	RectangularAperture t_aperture = transmitApertures[transmit_index];
 	Scatter             scatter    = scatters[settings.scatterBatchOffset + scatter_index];
 
@@ -79,7 +84,7 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	                / (2 * PI * sqrt(r_scatter_dist_square) * r_denom);
 
 	uint t_out_index = scatter_index * TransmitCount + transmit_index;
-	uint r_out_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveCount + receive_index;
+	uint r_out_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
 	packed_scatter_rects[t_out_index]  = t_rect_samples;
 	packed_scatter_rects[r_out_index]  = r_rect_samples;
 	packed_scatter_scales[t_out_index] = t_scale;

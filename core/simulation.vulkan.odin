@@ -60,6 +60,7 @@ vkSimulator :: struct {
 
 vkPackScatterRectsPushConstants :: struct {
 	scatterBatchOffset : u32,
+	receiveBatchOffset : u32,
 }
 
 vkPackScatterRectsSpecConstants :: struct {
@@ -67,19 +68,23 @@ vkPackScatterRectsSpecConstants :: struct {
 	WorkgroupSizeY    : u32,
 	WorkgroupSizeZ    : u32,
 	ScatterBatchCount : u32,
+	ReceiveBatchCount : u32,
 	TransmitCount     : u32,
-	ReceiveCount      : u32,
 	Cumulative        : u32,
 	StartTime         : f32,
 	SamplingFrequency : f32,
 	SpeedOfSound      : f32,
 }
 
+vkPulseEchoPushConstants :: struct {
+	receiveBatchOffset : u32,
+}
+
 vkPulseEchoSpecConstants :: struct {
 	WorkgroupSizeX    : u32,
 	SampleCount       : u32,
 	TransmitCount     : u32,
-	ReceiveCount      : u32,
+	ReceiveBatchCount : u32,
 	ScatterBatchCount : u32,
 	Cumulative        : u32,
 }
@@ -96,7 +101,7 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 	}
 
 	simulator.physicalDevices = vkField_vk.get_physical_devices(simulator.instance.instance) or_return
-	requiredCapabilities: vkField_vk.DeviceCapabilities = {.Synchronization2}
+	requiredCapabilities: vkField_vk.DeviceCapabilities = {.Synchronization2, .Maintenance4}
 	physicalDevice, physicalDeviceAvailable := vkField_vk.pick_physical_device(
 		simulator.instance.instance,
 		simulator.physicalDevices,
@@ -123,7 +128,7 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 		vkField_vk.create_pipeline_layout(
 			simulator.device,
 			{simulator.computeDescriptorSetLayout.layout},
-			{{stageFlags = {.COMPUTE}, size = 0, offset = 0}},
+			{{stageFlags = {.COMPUTE}, size = size_of(vkPulseEchoPushConstants), offset = 0}},
 		),
 	) or_return
 
@@ -177,10 +182,18 @@ vkSimulate :: proc(
 	device := simulator.device
 	computeFence := simulator.computeFence
 
-	packRectsBufferSize       :: 32 * 1024 * 1024
-	packRectSingleScatterSize := (4 * size_of(f32) + 4 * size_of(f32)) * (settings.receiveElementCount + settings.transmitElementCount)
-	scatterBatchCount         := u32(math.min(settings.scatterCount, packRectsBufferSize / packRectSingleScatterSize))
-	packRectsScaleBufferSize  := size_of(f32) * scatterBatchCount * u32(settings.receiveElementCount + settings.transmitElementCount)
+	packRectsBufferSize  :: u32(32 * 1024 * 1024)
+	scatterBatchCount    := u32(settings.scatterCount)
+	receiveBatchCount    := u32(1)
+	packRectScatterSize  := u32(4 * size_of(f32) * scatterBatchCount * (u32(receiveBatchCount) + u32(settings.transmitElementCount)))
+
+	if packRectScatterSize > packRectsBufferSize {
+		scatterBatchCount = packRectsBufferSize / (4 * size_of(f32) * (u32(receiveBatchCount) + u32(settings.transmitElementCount)))
+	} else {
+		receiveBatchCount = packRectsBufferSize / (4 * size_of(f32) * scatterBatchCount * u32(settings.transmitElementCount))
+	}
+
+	packRectsScaleBufferSize := size_of(f32) * scatterBatchCount * (u32(receiveBatchCount) + u32(settings.transmitElementCount))
 
 	// NOTE(rnp): specialize shaders
 	pulseEchoPipeline        : vkField_vk.ComputePipeline
@@ -189,9 +202,9 @@ vkSimulate :: proc(
 		WorkgroupSizeX    = 4,
 		WorkgroupSizeY    = 4,
 		WorkgroupSizeZ    = 4,
-		ScatterBatchCount = scatterBatchCount,
+		ScatterBatchCount = u32(scatterBatchCount),
+		ReceiveBatchCount = u32(receiveBatchCount),
 		TransmitCount     = u32(settings.transmitElementCount),
-		ReceiveCount      = u32(settings.receiveElementCount),
 		Cumulative        = settings.cumulative ? 1 : 0,
 		StartTime         = settings.startTime,
 		SamplingFrequency = settings.samplingFrequency,
@@ -203,8 +216,8 @@ vkSimulate :: proc(
 		WorkgroupSizeX    = 64,
 		SampleCount       = u32(settings.sampleCount),
 		TransmitCount     = u32(settings.transmitElementCount),
-		ReceiveCount      = u32(settings.receiveElementCount),
-		ScatterBatchCount = scatterBatchCount,
+		ReceiveBatchCount = u32(receiveBatchCount),
+		ScatterBatchCount = u32(scatterBatchCount),
 		Cumulative        = settings.cumulative ? 1 : 0,
 	}
 
@@ -233,12 +246,12 @@ vkSimulate :: proc(
 			},
 			{
 				constantID = 4,
-				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, TransmitCount)),
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, ReceiveBatchCount)),
 				size       = size_of(u32),
 			},
 			{
 				constantID = 5,
-				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, ReceiveCount)),
+				offset     = u32(offset_of(vkPackScatterRectsSpecConstants, TransmitCount)),
 				size       = size_of(u32),
 			},
 			{
@@ -298,7 +311,7 @@ vkSimulate :: proc(
 			},
 			{
 				constantID = 3,
-				offset     = u32(offset_of(vkPulseEchoSpecConstants, ReceiveCount)),
+				offset     = u32(offset_of(vkPulseEchoSpecConstants, ReceiveBatchCount)),
 				size       = size_of(u32),
 			},
 			{
@@ -466,94 +479,101 @@ vkSimulate :: proc(
 		},
 	)
 
-	for scatterOffset : u32 = 0; scatterOffset < u32(settings.scatterCount); scatterOffset += u32(scatterBatchCount) {
-		packScatterRectsPushConstants := vkPackScatterRectsPushConstants {
-			scatterBatchOffset = scatterOffset,
+	for receiveOffset : u32 = 0; receiveOffset < u32(settings.receiveElementCount); receiveOffset += u32(receiveBatchCount) {
+		for scatterOffset : u32 = 0; scatterOffset < u32(settings.scatterCount); scatterOffset += u32(scatterBatchCount) {
+			packScatterRectsPushConstants := vkPackScatterRectsPushConstants {
+				scatterBatchOffset = scatterOffset,
+				receiveBatchOffset = receiveOffset,
+			}
+			vkField_vk.cmd_pipeline_barrier(
+				commandBuffer,
+				{},
+				{
+					{
+						buffer        = packRectsBuffer.buffer,
+						size          = packRectsBuffer.size,
+						offset        = 0,
+						srcStageMask  = {.COMPUTE_SHADER},
+						srcAccessMask = {.SHADER_READ},
+						dstStageMask  = {.COMPUTE_SHADER},
+						dstAccessMask = {.SHADER_WRITE},
+					},
+					{
+						buffer        = packRectsScaleBuffer.buffer,
+						size          = packRectsScaleBuffer.size,
+						offset        = 0,
+						srcStageMask  = {.COMPUTE_SHADER},
+						srcAccessMask = {.SHADER_READ},
+						dstStageMask  = {.COMPUTE_SHADER},
+						dstAccessMask = {.SHADER_WRITE},
+					},
+				},
+				{},
+			)
+
+			vk.CmdBindPipeline(commandBuffer, .COMPUTE, packScatterRectsPipeline.pipeline)
+			vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.packScatterRectsPipelineLayout,
+			                         0, 1, &descriptorSet, 0, nil)
+			vkField_vk.cmd_push_constants(commandBuffer, simulator.packScatterRectsPipelineLayout,
+			                              {.COMPUTE}, packScatterRectsPushConstants)
+
+			vk.CmdDispatch(
+				commandBuffer,
+				u32(math.ceil(f32(packScatterRectsSpecConstants.ScatterBatchCount) / f32(packScatterRectsSpecConstants.WorkgroupSizeX))),
+				u32(math.ceil(f32(packScatterRectsSpecConstants.ReceiveBatchCount) / f32(packScatterRectsSpecConstants.WorkgroupSizeY))),
+				u32(math.ceil(f32(packScatterRectsSpecConstants.TransmitCount)     / f32(packScatterRectsSpecConstants.WorkgroupSizeZ))),
+			)
+
+			vkField_vk.cmd_pipeline_barrier(
+				commandBuffer,
+				{},
+				{
+					{
+						buffer        = packRectsBuffer.buffer,
+						size          = packRectsBuffer.size,
+						offset        = 0,
+						srcStageMask  = {.COMPUTE_SHADER},
+						srcAccessMask = {.SHADER_WRITE},
+						dstStageMask  = {.COMPUTE_SHADER},
+						dstAccessMask = {.SHADER_READ},
+					},
+					{
+						buffer        = packRectsScaleBuffer.buffer,
+						size          = packRectsScaleBuffer.size,
+						offset        = 0,
+						srcStageMask  = {.COMPUTE_SHADER},
+						srcAccessMask = {.SHADER_WRITE},
+						dstStageMask  = {.COMPUTE_SHADER},
+						dstAccessMask = {.SHADER_READ},
+					},
+					{
+						buffer        = responseBuffer.buffer,
+						size          = responseBuffer.size,
+						offset        = 0,
+						srcStageMask  = {.COMPUTE_SHADER},
+						srcAccessMask = {.SHADER_WRITE},
+						dstStageMask  = {.COMPUTE_SHADER},
+						dstAccessMask = {.SHADER_READ},
+					},
+				},
+				{},
+			)
+
+			pulseEchoPushConstants := vkPulseEchoPushConstants {
+				receiveBatchOffset = receiveOffset,
+			}
+			vkField_vk.cmd_push_constants(commandBuffer, simulator.pulseEchoPipelineLayout,
+			                              {.COMPUTE}, pulseEchoPushConstants)
+			vk.CmdBindPipeline(commandBuffer, .COMPUTE, pulseEchoPipeline.pipeline)
+			vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.pulseEchoPipelineLayout,
+			                         0, 1, &descriptorSet, 0, nil)
+			vk.CmdDispatch(
+				commandBuffer,
+				u32(math.ceil(f32(pulseEchoSpecConstants.SampleCount) / f32(pulseEchoSpecConstants.WorkgroupSizeX))),
+				pulseEchoSpecConstants.ReceiveBatchCount,
+				1,
+			)
 		}
-
-		vkField_vk.cmd_pipeline_barrier(
-			commandBuffer,
-			{},
-			{
-				{
-					buffer        = packRectsBuffer.buffer,
-					size          = packRectsBuffer.size,
-					offset        = 0,
-					srcStageMask  = {.COMPUTE_SHADER},
-					srcAccessMask = {.SHADER_READ},
-					dstStageMask  = {.COMPUTE_SHADER},
-					dstAccessMask = {.SHADER_WRITE},
-				},
-				{
-					buffer        = packRectsScaleBuffer.buffer,
-					size          = packRectsScaleBuffer.size,
-					offset        = 0,
-					srcStageMask  = {.COMPUTE_SHADER},
-					srcAccessMask = {.SHADER_READ},
-					dstStageMask  = {.COMPUTE_SHADER},
-					dstAccessMask = {.SHADER_WRITE},
-				},
-			},
-			{},
-		)
-
-		vk.CmdBindPipeline(commandBuffer, .COMPUTE, packScatterRectsPipeline.pipeline)
-		vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.packScatterRectsPipelineLayout,
-		                         0, 1, &descriptorSet, 0, nil)
-		vkField_vk.cmd_push_constants(commandBuffer, simulator.packScatterRectsPipelineLayout,
-		                              {.COMPUTE}, packScatterRectsPushConstants)
-
-		vk.CmdDispatch(
-			commandBuffer,
-			u32(math.ceil(f32(packScatterRectsSpecConstants.ScatterBatchCount) / f32(packScatterRectsSpecConstants.WorkgroupSizeX))),
-			u32(math.ceil(f32(packScatterRectsSpecConstants.ReceiveCount)      / f32(packScatterRectsSpecConstants.WorkgroupSizeY))),
-			u32(math.ceil(f32(packScatterRectsSpecConstants.TransmitCount)     / f32(packScatterRectsSpecConstants.WorkgroupSizeZ))),
-		)
-
-		vkField_vk.cmd_pipeline_barrier(
-			commandBuffer,
-			{},
-			{
-				{
-					buffer        = packRectsBuffer.buffer,
-					size          = packRectsBuffer.size,
-					offset        = 0,
-					srcStageMask  = {.COMPUTE_SHADER},
-					srcAccessMask = {.SHADER_WRITE},
-					dstStageMask  = {.COMPUTE_SHADER},
-					dstAccessMask = {.SHADER_READ},
-				},
-				{
-					buffer        = packRectsScaleBuffer.buffer,
-					size          = packRectsScaleBuffer.size,
-					offset        = 0,
-					srcStageMask  = {.COMPUTE_SHADER},
-					srcAccessMask = {.SHADER_WRITE},
-					dstStageMask  = {.COMPUTE_SHADER},
-					dstAccessMask = {.SHADER_READ},
-				},
-				{
-					buffer        = responseBuffer.buffer,
-					size          = responseBuffer.size,
-					offset        = 0,
-					srcStageMask  = {.COMPUTE_SHADER},
-					srcAccessMask = {.SHADER_WRITE},
-					dstStageMask  = {.COMPUTE_SHADER},
-					dstAccessMask = {.SHADER_READ},
-				},
-			},
-			{},
-		)
-
-		vk.CmdBindPipeline(commandBuffer, .COMPUTE, pulseEchoPipeline.pipeline)
-		vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.pulseEchoPipelineLayout,
-		                         0, 1, &descriptorSet, 0, nil)
-		vk.CmdDispatch(
-			commandBuffer,
-			u32(math.ceil(f32(pulseEchoSpecConstants.SampleCount) / f32(pulseEchoSpecConstants.WorkgroupSizeX))),
-			u32(pulseEchoSpecConstants.ReceiveCount),
-			1,
-		)
 	}
 
 	vkField_vk.cmd_pipeline_barrier(
