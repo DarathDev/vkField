@@ -1,5 +1,6 @@
 package vkfield
 
+import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:slice"
@@ -182,18 +183,30 @@ vkSimulate :: proc(
 	device := simulator.device
 	computeFence := simulator.computeFence
 
-	packRectsBufferSize  :: u32(32 * 1024 * 1024)
-	scatterBatchCount    := u32(settings.scatterCount)
-	receiveBatchCount    := u32(1)
-	packRectScatterSize  := u32(4 * size_of(f32) * scatterBatchCount * (u32(receiveBatchCount) + u32(settings.transmitElementCount)))
+	packScatterRectsWorkGroupSize :[3]u32: {4, 4, 4}
 
+	packRectsBufferSize  :: 32 * runtime.Megabyte
+	scatterBatchCount    := u32(settings.scatterCount)
+	receiveBatchCount    := u32(settings.receiveElementCount)
+	packRectScatterSize  := u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+
+	// Batch Receives to reduce temp buffer size
 	if packRectScatterSize > packRectsBufferSize {
-		scatterBatchCount = packRectsBufferSize / (4 * size_of(f32) * (u32(receiveBatchCount) + u32(settings.transmitElementCount)))
-	} else {
-		receiveBatchCount = packRectsBufferSize / (4 * size_of(f32) * scatterBatchCount * u32(settings.transmitElementCount))
+		maxReceiveBatchCount := min(u32(settings.receiveElementCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.y * packScatterRectsWorkGroupSize.y)
+		receiveBatchCount     = clamp((packRectsBufferSize / (size_of([4]f32) * scatterBatchCount)) - u32(settings.transmitElementCount), 1, maxReceiveBatchCount)
+		packRectScatterSize   = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
 	}
 
-	packRectsScaleBufferSize := size_of(f32) * scatterBatchCount * (u32(receiveBatchCount) + u32(settings.transmitElementCount))
+	// Batch Scatters to reduce temp buffer size
+	if packRectScatterSize > packRectsBufferSize {
+		maxScatterBatchCount := min(u32(settings.scatterCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.x * packScatterRectsWorkGroupSize.x)
+		scatterBatchCount = clamp(packRectsBufferSize / (size_of([4]f32) * (receiveBatchCount + u32(settings.transmitElementCount))), 1, maxScatterBatchCount)
+		packRectScatterSize  = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+	}
+
+	assert(packRectScatterSize <= packRectsBufferSize)
+
+	packRectsScaleBufferSize := packRectScatterSize / (size_of([4]f32) / size_of(f32))
 
 	// NOTE(rnp): specialize shaders
 	pulseEchoPipeline        : vkField_vk.ComputePipeline
@@ -220,6 +233,8 @@ vkSimulate :: proc(
 		ScatterBatchCount = u32(scatterBatchCount),
 		Cumulative        = settings.cumulative ? 1 : 0,
 	}
+
+
 
 	{
 		// TODO(rnp): doesn't odin have a compile time way to generate this?
