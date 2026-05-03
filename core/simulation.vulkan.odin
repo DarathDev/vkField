@@ -376,18 +376,18 @@ vkSimulate :: proc(
 	receiveElementsBuffer,  receiveElementsStagingBuffer  := check(stream(device, commandBuffer, receiveElements)) or_return
 	scattersBuffer, scattersStagingBuffer                 := check(stream(device, commandBuffer, scatters)) or_return
 	responseBuffer, responseReadbackBuffer                := check(prepare_readback(device, commandBuffer, response)) or_return
-
-	// TODO(rnp): these can really just be the same buffer
-	packRectsBuffer                                       := check(device_buffer(device, auto_cast packRectsBufferSize)) or_return
-	packRectsScaleBuffer                                  := check(device_buffer(device, auto_cast packRectsScaleBufferSize)) or_return
+	packRectsBufferMemory, packRectsBuffers               := check(device_buffers(device, []vk.DeviceSize { auto_cast packRectScatterSize, auto_cast packRectsScaleBufferSize})) or_return
 
 	defer {
 		vkField_vk.release_buffer(device, transmitElementsBuffer)
 		vkField_vk.release_buffer(device, receiveElementsBuffer)
 		vkField_vk.release_buffer(device, scattersBuffer)
 		vkField_vk.release_buffer(device, responseBuffer)
-		vkField_vk.release_buffer(device, packRectsBuffer)
-		vkField_vk.release_buffer(device, packRectsScaleBuffer)
+		for buffer in packRectsBuffers {
+			vkField_vk.destroy_buffer(device, buffer)
+		}
+		vkField_vk.free_memory(device, packRectsBufferMemory)
+		delete(packRectsBuffers)
 
 		if buffer, bufferOk := transmitElementsStagingBuffer.?; bufferOk {
 			vkField_vk.release_buffer(device, buffer)
@@ -471,13 +471,13 @@ vkSimulate :: proc(
 		offset = 0,
 	}
 	packRectsDescriptor: vk.DescriptorBufferInfo = {
-		buffer = packRectsBuffer.buffer,
-		range  = packRectsBuffer.size,
+		buffer = packRectsBuffers[0].buffer,
+		range  = packRectsBuffers[0].size,
 		offset = 0,
 	}
 	packRectsScaleDescriptor: vk.DescriptorBufferInfo = {
-		buffer = packRectsScaleBuffer.buffer,
-		range  = packRectsScaleBuffer.size,
+		buffer = packRectsBuffers[1].buffer,
+		range  = packRectsBuffers[1].size,
 		offset = 0,
 	}
 
@@ -504,8 +504,8 @@ vkSimulate :: proc(
 				{},
 				{
 					{
-						buffer        = packRectsBuffer.buffer,
-						size          = packRectsBuffer.size,
+						buffer        = packRectsBuffers[0].buffer,
+						size          = packRectsBuffers[0].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_READ},
@@ -513,8 +513,8 @@ vkSimulate :: proc(
 						dstAccessMask = {.SHADER_WRITE},
 					},
 					{
-						buffer        = packRectsScaleBuffer.buffer,
-						size          = packRectsScaleBuffer.size,
+						buffer        = packRectsBuffers[1].buffer,
+						size          = packRectsBuffers[1].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_READ},
@@ -543,8 +543,8 @@ vkSimulate :: proc(
 				{},
 				{
 					{
-						buffer        = packRectsBuffer.buffer,
-						size          = packRectsBuffer.size,
+						buffer        = packRectsBuffers[0].buffer,
+						size          = packRectsBuffers[0].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_WRITE},
@@ -552,8 +552,8 @@ vkSimulate :: proc(
 						dstAccessMask = {.SHADER_READ},
 					},
 					{
-						buffer        = packRectsScaleBuffer.buffer,
-						size          = packRectsScaleBuffer.size,
+						buffer        = packRectsBuffers[1].buffer,
+						size          = packRectsBuffers[1].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_WRITE},
@@ -654,6 +654,43 @@ device_buffer :: proc(
 		}
 	}
 	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
+	return
+}
+
+device_buffers :: proc(
+	device : vkField_vk.Device,
+	sizes   : []vk.DeviceSize,
+	alignment: vk.DeviceSize = 1
+) -> (
+	memory: vkField_vk.Memory,
+	buffers : []vkField_vk.Buffer,
+	result : vk.Result,
+) {
+	totalSize : vk.DeviceSize
+	offsets := make([]vk.DeviceSize, len(sizes), context.temp_allocator)
+	for index in 0..<len(sizes) {
+		offsets[index] = auto_cast runtime.align_forward(cast(uint)totalSize, cast(uint)alignment)
+		totalSize = offsets[index] + sizes[index]
+	}
+	{
+		buffer := vkField_vk.create_buffer(device, totalSize, {.STORAGE_BUFFER}) or_return
+		memoryType, memoryTypeOk := vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
+		if !memoryTypeOk {
+			vkField_vk.destroy_buffer(device, buffer)
+			buffer = vkField_vk.create_buffer(device, totalSize, {.STORAGE_BUFFER}) or_return
+			if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer));
+			!memoryTypeOk {
+				return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
+			}
+		}
+		vkField_vk.destroy_buffer(device, buffer)
+		memory = vkField_vk.allocate_memory(device, memoryType, totalSize) or_return
+	}
+	buffers = make([]vkField_vk.Buffer, len(sizes))
+	for &buffer, index in buffers {
+		buffer = vkField_vk.create_buffer(device, sizes[index], {.STORAGE_BUFFER}) or_return
+		vkField_vk.bind(device, &buffer, memory, offsets[index]) or_return
+	}
 	return
 }
 
