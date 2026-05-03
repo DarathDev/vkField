@@ -653,7 +653,7 @@ device_buffer :: proc(
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	_ = vkField_vk.bind_buffer_to_dedicated_memory(&buffer, device, memoryType) or_return
+	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
 	return
 }
 
@@ -676,9 +676,9 @@ stream :: proc(
 			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	_ = vkField_vk.bind_buffer_to_dedicated_memory(&buffer, device, memoryType) or_return
+	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
 
-	if buffer.mappedData == nil {
+	if buffer.memory.mappedData == nil {
 		stagingBuffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_staging_memory_type(
 			device.physicalDevice,
@@ -686,7 +686,7 @@ stream :: proc(
 		); !memoryTypeOk {
 			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
-		_ = vkField_vk.bind_buffer_to_dedicated_memory(&stagingBuffer.(vkField_vk.Buffer), device, memoryType) or_return
+		vkField_vk.bind_buffer_to_dedicated_memory(device, &stagingBuffer.(vkField_vk.Buffer), memoryType) or_return
 		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer, stagingBuffer = stagingBuffer.(vkField_vk.Buffer))
 	} else {
 		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer)
@@ -713,9 +713,9 @@ prepare_readback :: proc(
 			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	_ = vkField_vk.bind_buffer_to_dedicated_memory(&buffer, device, memoryType) or_return
+	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
 
-	if buffer.mappedData == nil {
+	if buffer.memory.mappedData == nil {
 		readbackBuffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_readback_memory_type(
 			device.physicalDevice,
@@ -723,7 +723,7 @@ prepare_readback :: proc(
 		); !memoryTypeOk {
 			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
-		_ = vkField_vk.bind_buffer_to_dedicated_memory(&readbackBuffer.(vkField_vk.Buffer), device, memoryType) or_return
+		vkField_vk.bind_buffer_to_dedicated_memory(device, &readbackBuffer.(vkField_vk.Buffer), memoryType) or_return
 	}
 	return
 }

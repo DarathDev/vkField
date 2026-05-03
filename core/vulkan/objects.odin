@@ -1467,30 +1467,69 @@ destroy_compute_pipeline :: proc(device: Device, pipeline: ComputePipeline) {
 	destroy_pipeline(device, pipeline.pipeline)
 }
 
+/* ------------------ */
+/* ----- Memory ----- */
+/* ------------------ */
+
+Memory :: struct {
+	memory:      vk.DeviceMemory,
+	type:        u32,
+	properties:  vk.MemoryPropertyFlags,
+	size:        vk.DeviceSize,
+	mappedData:  rawptr,
+}
+
+allocate_memory :: proc(device: Device, memoryType: u32, size: vk.DeviceSize, label := "") -> (memory: Memory, result: vk.Result) {
+	checkLabel(label)
+	flags_info: vk.MemoryAllocateFlagsInfo
+	alloc_info: vk.MemoryAllocateInfo = {
+		sType           = .MEMORY_ALLOCATE_INFO,
+		memoryTypeIndex = memoryType,
+		allocationSize  = size,
+	}
+	if .BufferDeviceAddress in device.enabledCapabilities {
+		flags_info = {
+			sType = .MEMORY_ALLOCATE_FLAGS_INFO,
+			flags = {.DEVICE_ADDRESS},
+		}
+		alloc_info.pNext = &flags_info
+	}
+	check(vk.AllocateMemory(device.device, &alloc_info, nil, &memory.memory)) or_return
+	memory.type = memoryType
+	memory.properties = get_memory_properties(device.physicalDevice, memoryType)
+	memory.size = size
+	if .HOST_VISIBLE in memory.properties {
+		check(vk.MapMemory(device.device, memory.memory, 0, memory.size, {}, &memory.mappedData)) or_return
+	}
+	if len(label) > 0 {
+		name(device, memory.memory, label)
+	}
+	return
+}
+
+free_memory :: proc(device: Device, memory: Memory) {
+	vk.FreeMemory(device.device, memory.memory, nil)
+}
+
 /* --------------------- */
 /* ----- Resources ----- */
 /* --------------------- */
 
 GpuResource :: struct {
-	deviceMemory: vk.DeviceMemory,
+	memory:       Memory,
 	offset:       vk.DeviceSize,
 	size:         vk.DeviceSize,
-	memoryType:   u32,
-	memoryProps:  vk.MemoryPropertyFlags,
 	sharingMode:  vk.SharingMode,
-	mappedData:   rawptr,
 }
 
 @(require_results)
 bind :: proc {
+	bind_buffer_to_memory,
 	bind_buffer_to_dedicated_memory,
 	bind_buffer_to_dynamic_gpu_arena,
+	bind_image_to_memory,
 	bind_image_to_dedicated_memory,
 	bind_image_to_dynamic_gpu_arena,
-}
-
-destroy_device_memory :: proc(device: Device, memory: vk.DeviceMemory) {
-	vk.FreeMemory(device.device, memory, nil)
 }
 
 /* ------------------ */
@@ -1536,58 +1575,45 @@ create_buffer :: proc(
 	return
 }
 
-release_buffer :: proc(device: Device, buffer: Buffer) {
-	vk.FreeMemory(device.device, buffer.deviceMemory, nil)
-	vk.DestroyBuffer(device.device, buffer.buffer, nil)
-}
-
 destroy_buffer :: proc(device: Device, buffer: Buffer) {
 	vk.DestroyBuffer(device.device, buffer.buffer, nil)
 }
 
+release_buffer :: proc(device: Device, buffer: Buffer) {
+	free_memory(device, buffer.memory)
+	destroy_buffer(device, buffer)
+}
+
 @(require_results)
 bind_buffer :: proc {
+	bind_buffer_to_memory,
 	bind_buffer_to_dedicated_memory,
 	bind_buffer_to_dynamic_gpu_arena,
 }
 
 @(require_results)
-bind_buffer_to_dedicated_memory :: proc(buffer: ^Buffer, device: Device, memoryType: u32, label := "") -> (memory: vk.DeviceMemory, result: vk.Result) {
-	checkLabel(label)
-	memoryRequirements := get_memory_requirements(device, buffer^)
-	assert(bits.bitfield_extract(memoryRequirements.memoryTypeBits, auto_cast memoryType, 1) == 1)
-	flags_info: vk.MemoryAllocateFlagsInfo
-	alloc_info: vk.MemoryAllocateInfo = {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		memoryTypeIndex = memoryType,
-		allocationSize  = memoryRequirements.size,
-	}
-	if .BufferDeviceAddress in device.enabledCapabilities {
-		flags_info = {
-			sType = .MEMORY_ALLOCATE_FLAGS_INFO,
-			flags = {.DEVICE_ADDRESS},
-		}
-		alloc_info.pNext = &flags_info
-	}
-	check(vk.AllocateMemory(device.device, &alloc_info, nil, &memory)) or_return
-	check(vk.BindBufferMemory(device.device, buffer.buffer, memory, 0)) or_return
-	buffer.deviceMemory, buffer.memoryType, buffer.memoryProps = memory, memoryType, get_memory_properties(device.physicalDevice, memoryType)
-	if .HOST_VISIBLE in buffer.memoryProps {
-		check(vk.MapMemory(device.device, buffer.deviceMemory, buffer.offset, buffer.size, {}, &buffer.mappedData)) or_return
-	}
-	if len(label) > 0 {
-		name(device, buffer.deviceMemory, label)
-	}
+bind_buffer_to_memory :: proc(device: Device, buffer: ^Buffer, memory: Memory, offset: vk.DeviceSize) -> (result: vk.Result) {
+	check(vk.BindBufferMemory(device.device, buffer.buffer, memory.memory, offset)) or_return
+	buffer.memory = memory
+	buffer.offset = offset
 	return
 }
 
 @(require_results)
-bind_buffer_to_dynamic_gpu_arena :: proc(buffer: ^Buffer, arena: ^DynamicGpuArena) -> (result: vk.Result) {
+bind_buffer_to_dedicated_memory :: proc(device: Device, buffer: ^Buffer, memoryType: u32, label := "") -> (result: vk.Result) {
+	checkLabel(label)
+	memoryRequirements := get_memory_requirements(device, buffer^)
+	assert(bits.bitfield_extract(memoryRequirements.memoryTypeBits, auto_cast memoryType, 1) == 1)
+	memory := check(allocate_memory(device, memoryType, memoryRequirements.size)) or_return
+	check(bind(device, buffer, memory, 0)) or_return
+	return
+}
+
+@(require_results)
+bind_buffer_to_dynamic_gpu_arena :: proc(arena: ^DynamicGpuArena, buffer: ^Buffer) -> (result: vk.Result) {
 	memoryRequirements := get_memory_requirements(arena.device, buffer^)
-	memory, offset, memoryType, mappedData := check(dynamic_gpu_arena_allocate_by_requirements(arena, memoryRequirements)) or_return
-	check(vk.BindBufferMemory(arena.device.device, buffer.buffer, memory, offset)) or_return
-	buffer.deviceMemory, buffer.offset, buffer.memoryType, buffer.memoryProps, buffer.mappedData =
-		memory, offset, memoryType, get_memory_properties(arena.device.physicalDevice, memoryType), mappedData
+	memory, offset := check(dynamic_gpu_arena_allocate_by_requirements(arena, memoryRequirements)) or_return
+	check(bind(arena.device, buffer, memory, offset)) or_return
 	return
 }
 
@@ -1704,48 +1730,34 @@ destroy_image :: proc(device: Device, image: Image) {
 
 @(require_results)
 bind_image :: proc {
+	bind_image_to_memory,
 	bind_image_to_dedicated_memory,
 	bind_image_to_dynamic_gpu_arena,
 }
 
 @(require_results)
-bind_image_to_dedicated_memory :: proc(image: ^Image, device: Device, memoryType: u32, label := "") -> (memory: vk.DeviceMemory, result: vk.Result) {
-	checkLabel(label)
-	memoryRequirements := get_memory_requirements(device, image^)
-	assert(bits.bitfield_extract(memoryRequirements.memoryTypeBits, auto_cast memoryType, 1) == 1)
-	flags_info: vk.MemoryAllocateFlagsInfo
-	alloc_info: vk.MemoryAllocateInfo = {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		memoryTypeIndex = memoryType,
-		allocationSize  = memoryRequirements.size,
-	}
-	if .BufferDeviceAddress in device.enabledCapabilities {
-		flags_info = {
-			sType = .MEMORY_ALLOCATE_FLAGS_INFO,
-			flags = {.DEVICE_ADDRESS},
-		}
-		alloc_info.pNext = &flags_info
-	}
-	check(vk.AllocateMemory(device.device, &alloc_info, nil, &memory)) or_return
-	check(vk.BindImageMemory(device.device, image.image, memory, 0)) or_return
-	image.deviceMemory, image.memoryType, image.memoryProps = memory, memoryType, get_memory_properties(device.physicalDevice, memoryType)
-	if .HOST_VISIBLE in image.memoryProps && image.tiling == .LINEAR {
-		check(vk.MapMemory(device.device, image.deviceMemory, image.offset, image.size, {}, &image.mappedData)) or_return
-	}
-	if len(label) > 0 {
-		name(device, image.deviceMemory, label)
-	}
+bind_image_to_memory :: proc(device: Device, image: ^Image, memory: Memory, offset: vk.DeviceSize) -> (result: vk.Result) {
+	check(vk.BindImageMemory(device.device, image.image, memory.memory, offset)) or_return
+	image.memory = memory
+	image.offset = offset
 	return
 }
 
 @(require_results)
-bind_image_to_dynamic_gpu_arena :: proc(image: ^Image, arena: ^DynamicGpuArena) -> (result: vk.Result) {
-	memoryRequirements := get_memory_requirements(arena.device, image^)
-	memory, offset, memoryType, mappedData := check(dynamic_gpu_arena_allocate_by_requirements(arena, memoryRequirements)) or_return
-	check(vk.BindImageMemory(arena.device.device, image.image, memory, offset)) or_return
-	image.deviceMemory, image.offset, image.memoryType, image.memoryProps, image.mappedData =
-		memory, offset, memoryType, get_memory_properties(arena.device.physicalDevice, memoryType), mappedData
+bind_image_to_dedicated_memory :: proc(device: Device, image: ^Image, memoryType: u32, label := "") -> (result: vk.Result) {
+	checkLabel(label)
+	memoryRequirements := get_memory_requirements(device, image^)
+	assert(bits.bitfield_extract(memoryRequirements.memoryTypeBits, auto_cast memoryType, 1) == 1)
+	memory := check(allocate_memory(device, memoryType, memoryRequirements.size, label)) or_return
+	bind(device, image, memory, 0) or_return
+	return
+}
 
+@(require_results)
+bind_image_to_dynamic_gpu_arena :: proc(arena: ^DynamicGpuArena, image: ^Image) -> (result: vk.Result) {
+	memoryRequirements := get_memory_requirements(arena.device, image^)
+	memory, offset := check(dynamic_gpu_arena_allocate_by_requirements(arena, memoryRequirements)) or_return
+	bind(arena.device, image, memory, offset) or_return
 	return
 }
 

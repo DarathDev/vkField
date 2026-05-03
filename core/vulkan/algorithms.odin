@@ -620,16 +620,6 @@ get_memory_properties :: proc(physicalDevice: PhysicalDevice, memoryType: u32) -
 	return physicalDevice.memoryTypes[memoryType].propertyFlags
 }
 
-allocate_memory :: proc(device: Device, memoryType: u32, size: vk.DeviceSize) -> (memory: vk.DeviceMemory, result := vk.Result.SUCCESS) {
-	memory_alloc_info: vk.MemoryAllocateInfo = {
-		sType           = .MEMORY_ALLOCATE_INFO,
-		memoryTypeIndex = memoryType,
-		allocationSize  = size,
-	}
-	check(vk.AllocateMemory(device.device, &memory_alloc_info, nil, &memory)) or_return
-	return
-}
-
 DYNAMIC_GPU_ARENA_STARTING_ALLOCATION_SIZE :: 256 * runtime.Megabyte
 DYNAMIC_GPU_ARENA_BLOCK_COUNT :: 16
 DYNAMIC_GPU_ARENA_GROW_RATE :: 1.25
@@ -639,16 +629,9 @@ DynamicGpuArena :: struct {
 	label:            string,
 	device:           Device,
 	memoryTypes:      [dynamic; vk.MAX_MEMORY_TYPES]u32,
-	blocks:           [dynamic; DYNAMIC_GPU_ARENA_BLOCK_COUNT]AllocationBlock,
+	blocks:           [dynamic; DYNAMIC_GPU_ARENA_BLOCK_COUNT]Memory,
+	offsets:           [dynamic; DYNAMIC_GPU_ARENA_BLOCK_COUNT]vk.DeviceSize,
 	currentBlockSize: vk.DeviceSize,
-}
-
-AllocationBlock :: struct {
-	memory:          vk.DeviceMemory,
-	memoryTypeIndex: u32,
-	size:            vk.DeviceSize,
-	offset:          vk.DeviceSize,
-	mappedData:      rawptr,
 }
 
 dynamic_gpu_arena_init :: proc(device: Device, memoryTypes: [dynamic; vk.MAX_MEMORY_TYPES]u32, label := "") -> (arena: DynamicGpuArena, ok := true) {
@@ -668,10 +651,8 @@ dynamic_gpu_arena_allocate_by_requirements :: proc(
 	arena: ^DynamicGpuArena,
 	requirements: vk.MemoryRequirements,
 ) -> (
-	memory: vk.DeviceMemory,
+	memory: Memory,
 	offset: vk.DeviceSize,
-	memoryType: u32 = bits.U32_MAX,
-	mappedData: rawptr,
 	result := vk.Result.ERROR_OUT_OF_DEVICE_MEMORY,
 ) {
 	return dynamic_gpu_arena_allocate(arena, requirements.size, requirements.alignment, requirements.memoryTypeBits)
@@ -682,22 +663,17 @@ dynamic_gpu_arena_allocate :: proc(
 	size, alignment: vk.DeviceSize,
 	validMemoryTypes: u32 = bits.U32_MAX,
 ) -> (
-	memory: vk.DeviceMemory,
+	memory: Memory,
 	offset: vk.DeviceSize,
-	memoryType: u32 = bits.U32_MAX,
-	mappedData: rawptr,
-	result := vk.Result.ERROR_OUT_OF_DEVICE_MEMORY,
+	result : vk.Result,
 ) {
 	assert(size <= DYNAMIC_GPU_ARENA_MAX_ALLOCATION_SIZE)
-	for &block in arena.blocks {
-		if bits.bitfield_extract(validMemoryTypes, auto_cast block.memoryTypeIndex, 1) != 1 do continue
-		offset = auto_cast runtime.align_forward(cast(uint)block.offset, cast(uint)alignment)
-		if block.size >= size + offset {
-			block.offset = offset + size
-			memory, offset, memoryType, result = block.memory, offset, block.memoryTypeIndex, .SUCCESS
-			if block.mappedData != nil {
-				mappedData = cast(rawptr)(cast(uintptr)block.mappedData + auto_cast offset)
-			}
+	for index in 0..<len(arena.blocks) {
+		memory = arena.blocks[index]
+		if bits.bitfield_extract(validMemoryTypes, auto_cast memory.type, 1) != 1 do continue
+		offset = auto_cast runtime.align_forward(cast(uint)arena.offsets[index], cast(uint)alignment)
+		if memory.size >= size + offset {
+			arena.offsets[index] = offset + size
 			return
 		}
 	}
@@ -709,38 +685,21 @@ dynamic_gpu_arena_allocate :: proc(
 				cast(f32)arena.currentBlockSize * DYNAMIC_GPU_ARENA_GROW_RATE,
 				DYNAMIC_GPU_ARENA_MAX_ALLOCATION_SIZE,
 			)
-			flags_info: vk.MemoryAllocateFlagsInfo
-			alloc_info: vk.MemoryAllocateInfo = {
-				sType           = .MEMORY_ALLOCATE_INFO,
-				memoryTypeIndex = mt,
-				allocationSize  = arena.currentBlockSize,
-			}
-			if .BufferDeviceAddress in arena.device.enabledCapabilities {
-				flags_info = {
-					sType = .MEMORY_ALLOCATE_FLAGS_INFO,
-					flags = {.DEVICE_ADDRESS},
-				}
-				alloc_info.pNext = &flags_info
-			}
-			m: vk.DeviceMemory
-			check(vk.AllocateMemory(arena.device.device, &alloc_info, nil, &m)) or_continue
-			if .HOST_VISIBLE in get_memory_properties(arena.device.physicalDevice, mt) {
-				check(vk.MapMemory(arena.device.device, m, 0, arena.currentBlockSize, {}, &mappedData)) or_return
-			}
-			append(&arena.blocks, AllocationBlock{memory = m, size = arena.currentBlockSize, memoryTypeIndex = mt, offset = size, mappedData = mappedData})
+			label: string
 			if len(arena.label) > 0 {
-				name(arena.device, m, fmt.tprintf("%s Block #%d", arena.label, len(arena.blocks)))
+				label = fmt.tprintf("%s Block #%d", arena.label, len(arena.blocks))
 			}
-			memory, offset, memoryType, result = m, 0, mt, .SUCCESS
+			memory = allocate_memory(arena.device, mt, arena.currentBlockSize, label) or_continue
+			append(&arena.blocks, memory)
 			return
 		}
 	}
-	return
+	return {}, {}, vk.Result.ERROR_OUT_OF_DEVICE_MEMORY
 }
 
 dynamic_gpu_arena_clear :: proc(arena: ^DynamicGpuArena) {
-	for &block in arena.blocks {
-		block.offset = 0
+	for &offset in arena.offsets {
+		offset = 0
 	}
 }
 
@@ -782,13 +741,13 @@ create_staging_buffer :: proc {
 
 create_staging_buffer_for_buffer :: proc(arena: ^DynamicGpuArena, buffer: Buffer, label := "") -> (stagingBuffer: Buffer, result: vk.Result) {
 	stagingBuffer = create_buffer(arena.device, buffer.size, {.TRANSFER_SRC}, .EXCLUSIVE, label = label) or_return
-	bind_buffer_to_dynamic_gpu_arena(&stagingBuffer, arena) or_return
+	bind_buffer_to_dynamic_gpu_arena(arena, &stagingBuffer) or_return
 	return
 }
 
 create_staging_buffer_for_image :: proc(arena: ^DynamicGpuArena, image: Image, label := "") -> (stagingBuffer: Buffer, result: vk.Result) {
 	stagingBuffer = create_buffer(arena.device, image.size, {.TRANSFER_SRC}, .EXCLUSIVE, label = label) or_return
-	bind_buffer_to_dynamic_gpu_arena(&stagingBuffer, arena) or_return
+	bind_buffer_to_dynamic_gpu_arena(arena, &stagingBuffer) or_return
 	return
 }
 
@@ -799,14 +758,32 @@ create_readback_buffer :: proc {
 
 create_readback_buffer_for_buffer :: proc(arena: ^DynamicGpuArena, buffer: Buffer, label := "") -> (readbackBuffer: Buffer, result: vk.Result) {
 	readbackBuffer = create_buffer(arena.device, buffer.size, {.TRANSFER_DST}, .EXCLUSIVE, label = label) or_return
-	bind_buffer_to_dynamic_gpu_arena(&readbackBuffer, arena) or_return
+	bind_buffer_to_dynamic_gpu_arena(arena, &readbackBuffer) or_return
 	return
 }
 
 create_readback_buffer_for_image :: proc(arena: ^DynamicGpuArena, image: Image, label := "") -> (readbackBuffer: Buffer, result: vk.Result) {
 	readbackBuffer = create_buffer(arena.device, image.size, {.TRANSFER_DST}, .EXCLUSIVE, label = label) or_return
-	bind_buffer_to_dynamic_gpu_arena(&readbackBuffer, arena) or_return
+	bind_buffer_to_dynamic_gpu_arena(arena, &readbackBuffer) or_return
 	return
+}
+
+get_mapped_data :: proc {
+	get_buffer_mapped_data,
+	get_image_mapped_data,
+}
+
+get_buffer_mapped_data :: proc(buffer: Buffer) -> rawptr {
+	assert(.HOST_VISIBLE in buffer.memory.properties)
+	assert(buffer.memory.mappedData != nil)
+	return auto_cast (cast(uintptr)buffer.memory.mappedData + auto_cast buffer.offset)
+}
+
+get_image_mapped_data :: proc(image: Image) -> rawptr {
+	assert(.HOST_VISIBLE in image.memory.properties)
+	assert(image.memory.mappedData != nil)
+	assert(image.tiling == .LINEAR)
+	return auto_cast (cast(uintptr)image.memory.mappedData + auto_cast image.offset)
 }
 
 /* --------------------- */
@@ -837,9 +814,8 @@ wait_semaphores :: proc(
 }
 
 read_from_buffer :: proc(buffer: Buffer, data: []byte, regions: []vk.BufferCopy2 = {}) {
-	assert(buffer.mappedData != nil)
-	assert(.HOST_VISIBLE in buffer.memoryProps && .HOST_COHERENT in buffer.memoryProps)
-	assume(.HOST_CACHED not_in buffer.memoryProps)
+	assert(.HOST_VISIBLE in buffer.memory.properties && .HOST_COHERENT in buffer.memory.properties)
+	assume(.HOST_CACHED not_in buffer.memory.properties)
 
 	regions := regions
 	if len(regions) == 0 {
@@ -847,7 +823,7 @@ read_from_buffer :: proc(buffer: Buffer, data: []byte, regions: []vk.BufferCopy2
 	}
 
 	for region in regions {
-		copy(data[region.dstOffset:][:region.size], ([^]byte)(buffer.mappedData)[region.srcOffset:][:region.size])
+		copy(data[region.dstOffset:][:region.size], ([^]byte)(get_buffer_mapped_data(buffer))[region.srcOffset:][:region.size])
 	}
 }
 
@@ -887,13 +863,12 @@ cmd_upload_to_buffer :: proc(commandBuffer: vk.CommandBuffer, data: []byte, buff
 		regions = {{sType = .BUFFER_COPY_2, size = min(vk.DeviceSize(len(data)), buffer.size)}}
 	}
 
-	mappedBuffer := (stagingBuffer.mappedData == nil) ? buffer : stagingBuffer
-	assert(mappedBuffer.mappedData != nil)
-	assert(.HOST_VISIBLE in mappedBuffer.memoryProps && .HOST_COHERENT in mappedBuffer.memoryProps)
-	assume(.HOST_CACHED not_in mappedBuffer.memoryProps)
+	mappedBuffer := (stagingBuffer.memory.mappedData == nil) ? buffer : stagingBuffer
+	assert(.HOST_VISIBLE in mappedBuffer.memory.properties && .HOST_COHERENT in mappedBuffer.memory.properties)
+	assume(.HOST_CACHED not_in mappedBuffer.memory.properties)
 
 	for region in regions {
-		copy(([^]byte)(mappedBuffer.mappedData)[region.dstOffset:][:region.size], data[region.srcOffset:][:region.size])
+		copy(([^]byte)(get_buffer_mapped_data(mappedBuffer))[region.dstOffset:][:region.size], data[region.srcOffset:][:region.size])
 	}
 
 	if stagingBuffer.buffer == mappedBuffer.buffer {
@@ -910,11 +885,10 @@ cmd_upload_to_buffer :: proc(commandBuffer: vk.CommandBuffer, data: []byte, buff
 
 cmd_upload_to_image :: proc(commandBuffer: vk.CommandBuffer, data: []byte, image: Image, stagingBuffer: Buffer) {
 	assert(image.size == vk.DeviceSize(len(data)))
-	assert(.HOST_VISIBLE in stagingBuffer.memoryProps && .HOST_COHERENT in stagingBuffer.memoryProps)
-	assert(stagingBuffer.mappedData != nil)
-	assume(.HOST_CACHED not_in stagingBuffer.memoryProps)
+	assert(.HOST_VISIBLE in stagingBuffer.memory.properties && .HOST_COHERENT in stagingBuffer.memory.properties)
+	assume(.HOST_CACHED not_in stagingBuffer.memory.properties)
 
-	copy(([^]byte)(stagingBuffer.mappedData)[:len(data)], data)
+	copy(([^]byte)(get_buffer_mapped_data(stagingBuffer))[:len(data)], data)
 
 	regionInfo: vk.BufferImageCopy2 = {
 		sType = .BUFFER_IMAGE_COPY_2,
@@ -939,9 +913,9 @@ cmd_download :: proc {
 }
 
 cmd_download_from_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer, readbackBuffer: Buffer, regions: []vk.BufferCopy2 = {}) {
-	assert(readbackBuffer.mappedData != nil)
-	assert(.HOST_VISIBLE in readbackBuffer.memoryProps && .HOST_COHERENT in readbackBuffer.memoryProps)
-	assume(.HOST_CACHED in readbackBuffer.memoryProps)
+	assert(readbackBuffer.memory.mappedData != nil)
+	assert(.HOST_VISIBLE in readbackBuffer.memory.properties && .HOST_COHERENT in readbackBuffer.memory.properties)
+	assume(.HOST_CACHED in readbackBuffer.memory.properties)
 
 	regions := regions
 	if len(regions) == 0 {
@@ -959,9 +933,9 @@ cmd_download_from_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer, readba
 }
 
 cmd_download_from_image :: proc(commandBuffer: vk.CommandBuffer, image: Image, readbackBuffer: Buffer) {
-	assert(readbackBuffer.mappedData != nil)
-	assert(.HOST_VISIBLE in readbackBuffer.memoryProps && .HOST_COHERENT in readbackBuffer.memoryProps)
-	assume(.HOST_CACHED in readbackBuffer.memoryProps)
+	assert(readbackBuffer.memory.mappedData != nil)
+	assert(.HOST_VISIBLE in readbackBuffer.memory.properties && .HOST_COHERENT in readbackBuffer.memory.properties)
+	assume(.HOST_CACHED in readbackBuffer.memory.properties)
 
 	regionInfo: vk.BufferImageCopy2 = {
 		sType = .BUFFER_IMAGE_COPY_2,
