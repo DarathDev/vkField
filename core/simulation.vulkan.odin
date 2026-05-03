@@ -90,6 +90,11 @@ vkPulseEchoSpecConstants :: struct {
 	Cumulative        : u32,
 }
 
+vkStagableBuffer :: struct {
+	main: vkField_vk.Buffer,
+	staging : Maybe(vkField_vk.Buffer),
+}
+
 create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
@@ -372,75 +377,69 @@ vkSimulate :: proc(
 	}
 	check(vk.BeginCommandBuffer(commandBuffer, &commandBeginInfo)) or_return
 
-	transmitElementsBuffer, transmitElementsStagingBuffer     := check(stream(device, commandBuffer, transmitElements)) or_return
-	receiveElementsBuffer,  receiveElementsStagingBuffer      := check(stream(device, commandBuffer, receiveElements)) or_return
-	scattersBuffer, scattersStagingBuffer                     := check(stream(device, commandBuffer, scatters)) or_return
-	responseBuffer, responseReadbackBuffer                    := check(prepare_readback(device, commandBuffer, response)) or_return
+
+	transmitElementsBuffer := check(stream(device, commandBuffer, transmitElements)) or_return
+	receiveElementsBuffer  := check(stream(device, commandBuffer, receiveElements)) or_return
+	scattersBuffer         := check(stream(device, commandBuffer, scatters)) or_return
+	responseBuffer         := check(prepare_readback(device, commandBuffer, response)) or_return
+
 	packSpatialImpulseBufferMemory, packSpatialImpulseBuffers := check(device_buffers(device, []vk.DeviceSize { auto_cast packSpatialImpulseScatterSize, auto_cast packSpatialImpulseScaleBufferSize})) or_return
 
 	defer {
-		vkField_vk.release_buffer(device, transmitElementsBuffer)
-		vkField_vk.release_buffer(device, receiveElementsBuffer)
-		vkField_vk.release_buffer(device, scattersBuffer)
-		vkField_vk.release_buffer(device, responseBuffer)
+		release_staged_buffer(device, transmitElementsBuffer)
+		release_staged_buffer(device, receiveElementsBuffer)
+		release_staged_buffer(device, scattersBuffer)
+		release_staged_buffer(device, responseBuffer)
 		for buffer in packSpatialImpulseBuffers {
 			vkField_vk.destroy_buffer(device, buffer)
 		}
 		vkField_vk.free_memory(device, packSpatialImpulseBufferMemory)
 		delete(packSpatialImpulseBuffers)
-
-		if buffer, bufferOk := transmitElementsStagingBuffer.?; bufferOk {
-			vkField_vk.release_buffer(device, buffer)
-		}
-		if buffer, bufferOk := receiveElementsStagingBuffer.?; bufferOk {
-			vkField_vk.release_buffer(device, buffer)
-		}
-		if buffer, bufferOk := scattersStagingBuffer.?; bufferOk {
-			vkField_vk.release_buffer(device, buffer)
-		}
-		if buffer, bufferOk := responseReadbackBuffer.?; bufferOk {
+	}
+	release_staged_buffer :: proc(device: vkField_vk.Device, buffer: vkStagableBuffer) {
+		vkField_vk.release_buffer(device, buffer.main)
+		if buffer, bufferOk := buffer.staging.?; bufferOk {
 			vkField_vk.release_buffer(device, buffer)
 		}
 	}
-
 	// Initialize response to zero for atomic accumulation.
-	vkField_vk.cmd_clear_buffer(commandBuffer, responseBuffer)
+	vkField_vk.cmd_clear_buffer(commandBuffer, responseBuffer.main)
 
 	vkField_vk.cmd_pipeline_barrier(
 		commandBuffer,
 		{},
 		{
 			{
-				buffer = transmitElementsBuffer.buffer,
-				size = transmitElementsBuffer.size,
-				srcStageMask = {.TRANSFER, .HOST},
+				buffer = transmitElementsBuffer.main.buffer,
+				size   = transmitElementsBuffer.main.size,
+				srcStageMask  = {.TRANSFER, .HOST},
 				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask = {.COMPUTE_SHADER},
+				dstStageMask  = {.COMPUTE_SHADER},
 				dstAccessMask = {.SHADER_READ},
 			},
 			{
-				buffer = receiveElementsBuffer.buffer,
-				size = receiveElementsBuffer.size,
-				srcStageMask = {.TRANSFER, .HOST},
+				buffer = receiveElementsBuffer.main.buffer,
+				size   = receiveElementsBuffer.main.size,
+				srcStageMask  = {.TRANSFER, .HOST},
 				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask = {.COMPUTE_SHADER},
+				dstStageMask  = {.COMPUTE_SHADER},
 				dstAccessMask = {.SHADER_READ},
 			},
 			{
-				buffer = scattersBuffer.buffer,
-				size = scattersBuffer.size,
-				srcStageMask = {.TRANSFER, .HOST},
+				buffer = scattersBuffer.main.buffer,
+				size   = scattersBuffer.main.size,
+				srcStageMask  = {.TRANSFER, .HOST},
 				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask = {.COMPUTE_SHADER},
+				dstStageMask  = {.COMPUTE_SHADER},
 				dstAccessMask = {.SHADER_READ},
 			},
 			{
-				buffer = responseBuffer.buffer,
-				size = responseBuffer.size,
+				buffer = responseBuffer.main.buffer,
+				size   = responseBuffer.main.size,
 				offset = 0,
-				srcStageMask = {.TRANSFER, .HOST},
+				srcStageMask  = {.TRANSFER, .HOST},
 				srcAccessMask = {.TRANSFER_WRITE, .HOST_WRITE},
-				dstStageMask = {.COMPUTE_SHADER},
+				dstStageMask  = {.COMPUTE_SHADER},
 				dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
 			},
 		},
@@ -451,23 +450,23 @@ vkSimulate :: proc(
 
 	// TODO(rnp): if this is vulkan 1.3 then BDA should just be used for most of these
 	transmitElementsDescriptor: vk.DescriptorBufferInfo = {
-		buffer = transmitElementsBuffer.buffer,
-		range  = transmitElementsBuffer.size,
+		buffer = transmitElementsBuffer.main.buffer,
+		range  = transmitElementsBuffer.main.size,
 		offset = 0,
 	}
 	receiveElementsDescriptor: vk.DescriptorBufferInfo = {
-		buffer = receiveElementsBuffer.buffer,
-		range  = receiveElementsBuffer.size,
+		buffer = receiveElementsBuffer.main.buffer,
+		range  = receiveElementsBuffer.main.size,
 		offset = 0,
 	}
 	scattersDescriptor: vk.DescriptorBufferInfo = {
-		buffer = scattersBuffer.buffer,
-		range  = scattersBuffer.size,
+		buffer = scattersBuffer.main.buffer,
+		range  = scattersBuffer.main.size,
 		offset = 0,
 	}
 	responseDescriptor: vk.DescriptorBufferInfo = {
-		buffer = responseBuffer.buffer,
-		range  = responseBuffer.size,
+		buffer = responseBuffer.main.buffer,
+		range  = responseBuffer.main.size,
 		offset = 0,
 	}
 	packSpatialImpulseDescriptor: vk.DescriptorBufferInfo = {
@@ -561,8 +560,8 @@ vkSimulate :: proc(
 						dstAccessMask = {.SHADER_READ},
 					},
 					{
-						buffer        = responseBuffer.buffer,
-						size          = responseBuffer.size,
+						buffer        = responseBuffer.main.buffer,
+						size          = responseBuffer.main.size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_WRITE},
@@ -595,8 +594,8 @@ vkSimulate :: proc(
 		{},
 		{
 			{
-				buffer = responseBuffer.buffer,
-				size = responseBuffer.size,
+				buffer = responseBuffer.main.buffer,
+				size   = responseBuffer.main.size,
 				offset = 0,
 				srcStageMask = {.COMPUTE_SHADER},
 				srcAccessMask = {.SHADER_WRITE},
@@ -608,11 +607,11 @@ vkSimulate :: proc(
 	)
 
 	downloadBuffer: vkField_vk.Buffer
-	if buffer, bufferOk := responseReadbackBuffer.(vkField_vk.Buffer); bufferOk {
-		vkField_vk.cmd_download_from_buffer(commandBuffer, responseBuffer, buffer)
+	if buffer, bufferOk := responseBuffer.staging.(vkField_vk.Buffer); bufferOk {
+		vkField_vk.cmd_download_from_buffer(commandBuffer, responseBuffer.main, buffer)
 		downloadBuffer = buffer
 	} else {
-		downloadBuffer = responseBuffer
+		downloadBuffer = responseBuffer.main
 	}
 
 	check(vk.EndCommandBuffer(commandBuffer)) or_return
@@ -699,34 +698,34 @@ stream :: proc(
 	commandBuffer: vk.CommandBuffer,
 	data: []$T,
 ) -> (
-	buffer: vkField_vk.Buffer,
-	stagingBuffer: Maybe(vkField_vk.Buffer),
+	buffer: vkStagableBuffer,
 	result: vk.Result,
 ) {
-	buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
-	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
+	buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
+	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main))
 	if !memoryTypeOk {
-		vkField_vk.destroy_buffer(device, buffer)
-		buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
-		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer));
+		vkField_vk.destroy_buffer(device, buffer.main)
+		buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
+		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main));
 		   !memoryTypeOk {
-			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
+			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
+	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
 
-	if !vkField_vk.is_mapped(buffer) {
-		stagingBuffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
+	if !vkField_vk.is_mapped(buffer.main) {
+		stagingBuffer := vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_staging_memory_type(
 			device.physicalDevice,
-			vkField_vk.get_memory_requirements(device, stagingBuffer.(vkField_vk.Buffer)),
+			vkField_vk.get_memory_requirements(device, stagingBuffer),
 		); !memoryTypeOk {
-			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
+			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
-		vkField_vk.bind_buffer_to_dedicated_memory(device, &stagingBuffer.(vkField_vk.Buffer), memoryType) or_return
-		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer, stagingBuffer = stagingBuffer.(vkField_vk.Buffer))
+		vkField_vk.bind_buffer_to_dedicated_memory(device, &stagingBuffer, memoryType) or_return
+		buffer.staging = stagingBuffer
+		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer.main, stagingBuffer)
 	} else {
-		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer)
+		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer.main)
 	}
 	return
 }
@@ -736,31 +735,31 @@ prepare_readback :: proc(
 	commandBuffer: vk.CommandBuffer,
 	data: []$T,
 ) -> (
-	buffer: vkField_vk.Buffer,
-	readbackBuffer: Maybe(vkField_vk.Buffer),
+	buffer: vkStagableBuffer,
 	result: vk.Result,
 ) {
-	buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
-	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
+	buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
+	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main))
 	if !memoryTypeOk {
-		vkField_vk.destroy_buffer(device, buffer)
-		buffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_SRC, .TRANSFER_DST}) or_return
-		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer));
+		vkField_vk.destroy_buffer(device, buffer.main)
+		buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_SRC, .TRANSFER_DST}) or_return
+		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main));
 		   !memoryTypeOk {
-			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
+			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
+	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
 
-	if !vkField_vk.is_mapped(buffer) {
-		readbackBuffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
+	if !vkField_vk.is_mapped(buffer.main) {
+		readbackBuffer := vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_readback_memory_type(
 			device.physicalDevice,
-			vkField_vk.get_memory_requirements(device, readbackBuffer.(vkField_vk.Buffer)),
+			vkField_vk.get_memory_requirements(device, readbackBuffer),
 		); !memoryTypeOk {
-			return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
+			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
-		vkField_vk.bind_buffer_to_dedicated_memory(device, &readbackBuffer.(vkField_vk.Buffer), memoryType) or_return
+		vkField_vk.bind_buffer_to_dedicated_memory(device, &readbackBuffer, memoryType) or_return
+		buffer.staging = readbackBuffer
 	}
 	return
 }
