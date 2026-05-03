@@ -387,6 +387,37 @@ get_all_shader_stages :: proc(device: Device) -> (stageFlags: vk.ShaderStageFlag
 	return
 }
 
+is_mapped :: proc {
+	buffer_is_mapped,
+	image_is_mapped,
+}
+
+buffer_is_mapped :: proc(buffer: Buffer) -> bool {
+	return .HOST_VISIBLE in buffer.memory.properties && buffer.memory.mappedData != nil
+}
+
+image_is_mapped :: proc(image: Image) -> bool {
+	return .HOST_VISIBLE in image.memory.properties && image.memory.mappedData != nil
+}
+
+get_mapped_data :: proc {
+	get_buffer_mapped_data,
+	get_image_mapped_data,
+}
+
+get_buffer_mapped_data :: proc(buffer: Buffer) -> []byte {
+	assert(is_mapped(buffer))
+	assert(buffer.memory.size >= auto_cast (buffer.offset + buffer.size))
+	return (cast([^]byte)buffer.memory.mappedData)[buffer.offset:][:buffer.size]
+}
+
+get_image_mapped_data :: proc(image: Image) -> []byte {
+	assert(is_mapped(image))
+	assert(image.tiling == .LINEAR)
+	assert(image.memory.size >= auto_cast (image.offset + image.size))
+	return (cast([^]byte)image.memory.mappedData)[image.offset:][:image.size]
+}
+
 cmd_push_constants :: proc(commandBuffer: vk.CommandBuffer, layout: vk.PipelineLayout, stages: vk.ShaderStageFlags, data: $T) {
 	data := data
 	vk.CmdPushConstants(commandBuffer, layout, stages, 0, size_of(T), &data)

@@ -768,26 +768,6 @@ create_readback_buffer_for_image :: proc(arena: ^DynamicGpuArena, image: Image, 
 	return
 }
 
-get_mapped_data :: proc {
-	get_buffer_mapped_data,
-	get_image_mapped_data,
-}
-
-get_buffer_mapped_data :: proc(buffer: Buffer) -> []byte {
-	assert(.HOST_VISIBLE in buffer.memory.properties)
-	assert(buffer.memory.mappedData != nil)
-	assert(buffer.memory.size >= auto_cast (buffer.offset + buffer.size))
-	return (cast([^]byte)buffer.memory.mappedData)[buffer.offset:][:buffer.size]
-}
-
-get_image_mapped_data :: proc(image: Image) -> []byte {
-	assert(.HOST_VISIBLE in image.memory.properties)
-	assert(image.memory.mappedData != nil)
-	assert(image.tiling == .LINEAR)
-	assert(image.memory.size >= auto_cast (image.offset + image.size))
-	return (cast([^]byte)image.memory.mappedData)[image.offset:][:image.size]
-}
-
 /* --------------------- */
 /* ----- Commands ----- */
 /* --------------------- */
@@ -865,15 +845,18 @@ cmd_upload_to_buffer :: proc(commandBuffer: vk.CommandBuffer, data: []byte, buff
 		regions = {{sType = .BUFFER_COPY_2, size = min(vk.DeviceSize(len(data)), buffer.size)}}
 	}
 
-	mappedBuffer := (stagingBuffer.memory.mappedData == nil) ? buffer : stagingBuffer
-	assert(.HOST_VISIBLE in mappedBuffer.memory.properties && .HOST_COHERENT in mappedBuffer.memory.properties)
+	staged := !buffer_is_mapped(buffer)
+	if staged do assert(buffer_is_mapped(stagingBuffer))
+
+	mappedBuffer := (!staged) ? buffer : stagingBuffer
+	assert(.HOST_COHERENT in mappedBuffer.memory.properties)
 	assume(.HOST_CACHED not_in mappedBuffer.memory.properties)
 
 	for region in regions {
 		copy(get_buffer_mapped_data(mappedBuffer)[region.dstOffset:][:region.size], data[region.srcOffset:][:region.size])
 	}
 
-	if stagingBuffer.buffer == mappedBuffer.buffer {
+	if staged {
 		copyInfo: vk.CopyBufferInfo2 = {
 			sType       = .COPY_BUFFER_INFO_2,
 			srcBuffer   = stagingBuffer.buffer,
@@ -915,7 +898,7 @@ cmd_download :: proc {
 }
 
 cmd_download_from_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer, readbackBuffer: Buffer, regions: []vk.BufferCopy2 = {}) {
-	assert(readbackBuffer.memory.mappedData != nil)
+	assert(is_mapped(readbackBuffer))
 	assert(.HOST_VISIBLE in readbackBuffer.memory.properties && .HOST_COHERENT in readbackBuffer.memory.properties)
 	assume(.HOST_CACHED in readbackBuffer.memory.properties)
 
@@ -935,7 +918,7 @@ cmd_download_from_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer, readba
 }
 
 cmd_download_from_image :: proc(commandBuffer: vk.CommandBuffer, image: Image, readbackBuffer: Buffer) {
-	assert(readbackBuffer.memory.mappedData != nil)
+	assert(is_mapped(readbackBuffer))
 	assert(.HOST_VISIBLE in readbackBuffer.memory.properties && .HOST_COHERENT in readbackBuffer.memory.properties)
 	assume(.HOST_CACHED in readbackBuffer.memory.properties)
 

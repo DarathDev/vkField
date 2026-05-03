@@ -715,7 +715,7 @@ stream :: proc(
 	}
 	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
 
-	if buffer.memory.mappedData == nil {
+	if !vkField_vk.is_mapped(buffer) {
 		stagingBuffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_staging_memory_type(
 			device.physicalDevice,
@@ -752,7 +752,7 @@ prepare_readback :: proc(
 	}
 	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
 
-	if buffer.memory.mappedData == nil {
+	if !vkField_vk.is_mapped(buffer) {
 		readbackBuffer = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_readback_memory_type(
 			device.physicalDevice,
