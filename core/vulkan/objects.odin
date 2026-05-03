@@ -9,12 +9,12 @@ import "core:slice"
 import "core:strings"
 import win32 "core:sys/windows"
 import vk "vendor:vulkan"
-import rdm_util "vkField:utility"
+import vkField_util "vkField:utility"
 
 @(private = "file")
-assert :: rdm_util.assert
+assert :: vkField_util.assert
 @(private = "file")
-check :: rdm_util.check
+check :: vkField_util.check
 
 REQUIRE_RESOURCE_LABELS :: #config(REQUIRE_RESOURCE_LABELS, ODIN_DEBUG)
 @(thread_local)
@@ -26,9 +26,9 @@ EXCUSE_RESOURCE_LABELS: bool
 
 AppInfo :: struct {
 	appName:       string,
-	appVersion:    rdm_util.SemanticVersion,
+	appVersion:    vkField_util.SemanticVersion,
 	engineName:    string,
-	engineVersion: rdm_util.SemanticVersion,
+	engineVersion: vkField_util.SemanticVersion,
 	vulkanVersion: u32,
 	presentable:   bool,
 }
@@ -174,8 +174,7 @@ create_instance :: proc(
 	return
 }
 
-has_string :: proc(strs: []string, str: string) -> (result: bool)
-{
+has_string :: proc(strs: []string, str: string) -> (result: bool) {
 	result = true
 	for test in strs {
 		if strings.compare(test, str) == 0 {
