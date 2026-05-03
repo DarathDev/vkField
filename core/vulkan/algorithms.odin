@@ -773,17 +773,19 @@ get_mapped_data :: proc {
 	get_image_mapped_data,
 }
 
-get_buffer_mapped_data :: proc(buffer: Buffer) -> rawptr {
+get_buffer_mapped_data :: proc(buffer: Buffer) -> []byte {
 	assert(.HOST_VISIBLE in buffer.memory.properties)
 	assert(buffer.memory.mappedData != nil)
-	return auto_cast (cast(uintptr)buffer.memory.mappedData + auto_cast buffer.offset)
+	assert(buffer.memory.size >= auto_cast (buffer.offset + buffer.size))
+	return (cast([^]byte)buffer.memory.mappedData)[buffer.offset:][:buffer.size]
 }
 
-get_image_mapped_data :: proc(image: Image) -> rawptr {
+get_image_mapped_data :: proc(image: Image) -> []byte {
 	assert(.HOST_VISIBLE in image.memory.properties)
 	assert(image.memory.mappedData != nil)
 	assert(image.tiling == .LINEAR)
-	return auto_cast (cast(uintptr)image.memory.mappedData + auto_cast image.offset)
+	assert(image.memory.size >= auto_cast (image.offset + image.size))
+	return (cast([^]byte)image.memory.mappedData)[image.offset:][:image.size]
 }
 
 /* --------------------- */
@@ -823,7 +825,7 @@ read_from_buffer :: proc(buffer: Buffer, data: []byte, regions: []vk.BufferCopy2
 	}
 
 	for region in regions {
-		copy(data[region.dstOffset:][:region.size], ([^]byte)(get_buffer_mapped_data(buffer))[region.srcOffset:][:region.size])
+		copy(data[region.dstOffset:][:region.size], get_buffer_mapped_data(buffer)[region.srcOffset:][:region.size])
 	}
 }
 
@@ -868,7 +870,7 @@ cmd_upload_to_buffer :: proc(commandBuffer: vk.CommandBuffer, data: []byte, buff
 	assume(.HOST_CACHED not_in mappedBuffer.memory.properties)
 
 	for region in regions {
-		copy(([^]byte)(get_buffer_mapped_data(mappedBuffer))[region.dstOffset:][:region.size], data[region.srcOffset:][:region.size])
+		copy(get_buffer_mapped_data(mappedBuffer)[region.dstOffset:][:region.size], data[region.srcOffset:][:region.size])
 	}
 
 	if stagingBuffer.buffer == mappedBuffer.buffer {
@@ -888,7 +890,7 @@ cmd_upload_to_image :: proc(commandBuffer: vk.CommandBuffer, data: []byte, image
 	assert(.HOST_VISIBLE in stagingBuffer.memory.properties && .HOST_COHERENT in stagingBuffer.memory.properties)
 	assume(.HOST_CACHED not_in stagingBuffer.memory.properties)
 
-	copy(([^]byte)(get_buffer_mapped_data(stagingBuffer))[:len(data)], data)
+	copy(get_buffer_mapped_data(stagingBuffer)[:len(data)], data)
 
 	regionInfo: vk.BufferImageCopy2 = {
 		sType = .BUFFER_IMAGE_COPY_2,
