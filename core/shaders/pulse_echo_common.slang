@@ -31,7 +31,7 @@ public StructuredBuffer<Scatter> scatters;
 public RWStructuredBuffer<float> response;
 
 [[vk::binding(4, 0)]]
-public RWStructuredBuffer<float4> packed_scatter_rects;
+public RWStructuredBuffer<float4> packed_spatial_impulse_response_rects;
 
 [[vk::binding(5, 0)]]
-public RWStructuredBuffer<float> packed_scatter_scales;
+public RWStructuredBuffer<float> packed_spatial_impulse_response_scales;

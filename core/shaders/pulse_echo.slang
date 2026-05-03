@@ -116,10 +116,10 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 		uint t_index = scatter_index * TransmitCount + transmit_index;
 		uint r_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
 
-		float4 r_rect_samples = packed_scatter_rects[r_index];
-		float  r_scale        = packed_scatter_scales[r_index];
-		float4 t_rect_samples = packed_scatter_rects[t_index];
-		float  t_scale        = packed_scatter_scales[t_index];
+		float4 r_rect_samples = packed_spatial_impulse_response_rects[r_index];
+		float  r_scale        = packed_spatial_impulse_response_scales[r_index];
+		float4 t_rect_samples = packed_spatial_impulse_response_rects[t_index];
+		float  t_scale        = packed_spatial_impulse_response_scales[t_index];
 
 		for (int sample_index = 0; sample_index < WorkgroupSizeX; sample_index++) {
 			GroupMemoryBarrierWithGroupSync();

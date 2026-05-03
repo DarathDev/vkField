@@ -1,4 +1,4 @@
-module pack_scatter_rects;
+module pack_spatial_impulse_response;
 
 import pulse_echo_common;
 import util;
@@ -15,13 +15,13 @@ layout(constant_id =  7) const float StartTime         = 0;
 layout(constant_id =  8) const float SamplingFrequency = 0;
 layout(constant_id =  9) const float SpeedOfSound      = 0;
 
-struct PackScatterRectSettings {
+struct PackSpatialImpulseResponseSettings {
 	uint scatterBatchOffset;
 	uint receiveBatchOffset;
 };
 
 [[vk::push_constant]]
-ConstantBuffer<PackScatterRectSettings> settings;
+ConstantBuffer<PackSpatialImpulseResponseSettings> settings;
 
 float aperture_power_denominator(in float4 rect_samples, in float dt, in float dt2)
 {
@@ -47,7 +47,6 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	float fs = SamplingFrequency;
 	float dt = 1.f / fs;
 
-	// NOTE(rnp): transmit relative values
 	float4x4 t_aperture_transform = mul(rotate(t_aperture.normal, float3(0, 0, 1)),
 	                                    translate(t_aperture.position, 0));
 	float3   t_scatter_position    = mul(t_aperture_transform, float4(scatter.position, 1)).xyz;
@@ -64,7 +63,6 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	float t_scale = sqrt(scatter.amplitude) * t_aperture.apodization * t_aperture.size.x * t_aperture.size.y
 	                / (2 * PI * sqrt(t_scatter_dist_square) * t_denom);
 
-	// NOTE(rnp): receive relative values
 	float4x4 r_aperture_transform = mul(rotate(r_aperture.normal, float3(0, 0, 1)),
 	                                    translate(r_aperture.position, 0));
 	float3   r_scatter_position    = mul(r_aperture_transform, float4(scatter.position, 1)).xyz;
@@ -83,8 +81,8 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 
 	uint t_out_index = scatter_index * TransmitCount + transmit_index;
 	uint r_out_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
-	packed_scatter_rects[t_out_index]  = t_rect_samples;
-	packed_scatter_rects[r_out_index]  = r_rect_samples;
-	packed_scatter_scales[t_out_index] = t_scale;
-	packed_scatter_scales[r_out_index] = r_scale;
+	packed_spatial_impulse_response_rects[t_out_index]  = t_rect_samples;
+	packed_spatial_impulse_response_rects[r_out_index]  = r_rect_samples;
+	packed_spatial_impulse_response_scales[t_out_index] = t_scale;
+	packed_spatial_impulse_response_scales[r_out_index] = r_scale;
 }

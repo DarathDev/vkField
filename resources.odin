@@ -10,8 +10,8 @@ SHADER_FOLDER :: "core/shaders/"
 
 VKFIELD_PULSE_ECHO_SHADERS: []SlangShaderFile = {
 	{
-		path       = SHADER_FOLDER + "pack_scatter_rects.slang",
-		outputName = "pack_scatter_rects",
+		path       = SHADER_FOLDER + "pack_spatial_impulse_response.slang",
+		outputName = "pack_spatial_impulse_response",
 		type       = .Compute
 	},
 	{
