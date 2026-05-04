@@ -5,9 +5,11 @@ import "core:log"
 import "core:math/rand"
 import "core:slice"
 import "core:testing"
-import vk "vendor:vulkan"
 import vkField "vkField:."
 import utility "vkField:utility"
+
+check :: utility.check
+is_ok :: utility.is_ok
 
 oneRectSimulation :: proc() -> (ok := true) {
 	settings := vkField.SimulationSettings {
@@ -20,12 +22,9 @@ oneRectSimulation :: proc() -> (ok := true) {
 		dispatchWorkLimit    = 1 << 24,
 	}
 
-	simulator, vk_result := vkField.create_vulkan_simulator();
-	if vk_result != vk.Result.SUCCESS {
-		ok = false
-		return
-	}
-	defer vkField.destroy_vulkan_simulator(&simulator)
+	simulator: vkField.Simulator
+	simulator = is_ok(check(vkField.create_vulkan_simulator())) or_return
+	defer vkField.destroy_vulkan_simulator(&simulator.(vkField.vkSimulator))
 
 	transmitElement: vkField.Element = {
 		aperture = {rectangle = {position = {0, 0, 0}, normal = {0, 0, 1}, size = {2.2e-4, 2.2e-4}}},
@@ -46,7 +45,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 	receiveElements := slice.from_ptr(&receiveElement, 1)
 	scatters := slice.from_ptr(&scatter, 1)
 
-	vkField.plan_simulation(&settings, transmitElements, receiveElements, scatters)
+	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
 
 	data : []f32
 	data, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
@@ -62,12 +61,9 @@ linearArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator, vk_result := vkField.create_vulkan_simulator();
-	if vk_result != vk.Result.SUCCESS {
-		ok = false
-		return
-	}
-	defer vkField.destroy_vulkan_simulator(&simulator)
+	simulator: vkField.Simulator
+	simulator = is_ok(check(vkField.create_vulkan_simulator())) or_return
+	defer vkField.destroy_vulkan_simulator(&simulator.(vkField.vkSimulator))
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
@@ -84,7 +80,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 	scatters := make_random_scatters(scatterCount)
 	defer delete(scatters)
 
-	vkField.plan_simulation(&settings, transmitElements, receiveElements, scatters)
+	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
 	_, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
 	return
 }
@@ -96,12 +92,9 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator, vk_result := vkField.create_vulkan_simulator();
-	if vk_result != vk.Result.SUCCESS {
-		ok = false
-		return
-	}
-	defer vkField.destroy_vulkan_simulator(&simulator)
+	simulator: vkField.Simulator
+	simulator = is_ok(check(vkField.create_vulkan_simulator())) or_return
+	defer vkField.destroy_vulkan_simulator(&simulator.(vkField.vkSimulator))
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
@@ -118,7 +111,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	scatters := make_random_scatters(scatterCount)
 	defer delete(scatters)
 
-	vkField.plan_simulation(&settings, transmitElements, receiveElements, scatters)
+	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
 	_, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
 	return
 }

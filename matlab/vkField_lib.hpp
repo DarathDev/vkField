@@ -69,7 +69,7 @@ extern "C" {
 
 	LIB_FN bool create_vulkan_simulator_c(Simulator** simulator, void* logFunc, void* pUserData);
 	LIB_FN void destroy_vulkan_simulator_c(Simulator* simulator, void* logFunc, void* pUserData);
-	LIB_FN bool plan_simulation_c(SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, void* logFunc, void* pUserData);
+	LIB_FN bool plan_simulation_c(Simulator* simulator, SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, void* logFunc, void* pUserData);
 	LIB_FN bool simulate_c(Simulator* simulator, SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, float* pulseEcho, void* logFunc, void* pUserData);
 
 #ifdef __cplusplus

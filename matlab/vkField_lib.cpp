@@ -63,7 +63,7 @@ public:
 
 		create_vulkan_simulator_c(&simulator, (void *)print, this);
 
-		plan_simulation_c(&settings, transmitElements, receiveElements, scatters, (void *)print, this);
+		plan_simulation_c(simulator, &settings, transmitElements, receiveElements, scatters, (void *)print, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime", factory.createScalar<f32>(settings.startTime));
 		matlabPtr->setProperty(mxSimulator, u"SampleCount", factory.createScalar<u32>(settings.sampleCount));
 

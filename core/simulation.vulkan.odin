@@ -1,5 +1,6 @@
 package vkfield
 
+import "base:intrinsics"
 import "base:runtime"
 import "core:log"
 import "core:math"
@@ -50,6 +51,8 @@ vkSimulator :: struct {
 	physicalDevices:            #soa[]vkField_vk.PhysicalDevice,
 	device:                     vkField_vk.Device,
 
+	simulationResources : vkSimulationResources,
+
 	pulseEchoPipelineLayout:                  vk.PipelineLayout,
 	packSpatialImpulseResponsePipelineLayout: vk.PipelineLayout,
 
@@ -57,6 +60,22 @@ vkSimulator :: struct {
 	computeCommandPool:         vkField_vk.CommandPool,
 	computeDescriptorPool:      vkField_vk.DescriptorPool,
 	computeFence:               vk.Fence,
+}
+
+vkSimulationResources :: union {
+	vkPulseEchoSimulationResources,
+}
+
+vkPulseEchoSimulationResources :: struct {
+	transmitElementsBuffer:   vkStagableBuffer,
+	receiveElementsBuffer:    vkStagableBuffer,
+	scattersBuffer:           vkStagableBuffer,
+	responseBuffer:           vkStagableBuffer,
+	packSpatialImpulseBuffers: []vkField_vk.Buffer,
+	packSpatialImpulseMemory: vkField_vk.Memory,
+	packSpatialImpulseResponsePipeline: vkField_vk.ComputePipeline(vkPackSpatialImpulseResponseSpecConstants),
+	pulseEchoPipeline: vkField_vk.ComputePipeline(vkPulseEchoSpecConstants),
+	descriptorSet: vk.DescriptorSet,
 }
 
 vkPackSpatialImpulseResponsePushConstants :: struct {
@@ -156,6 +175,8 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 }
 
 destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
+	destroy_vulkan_simulator_resources(simulator)
+	
 	vkField_vk.destroy_fence(simulator.device, simulator.computeFence)
 	vkField_vk.destroy_command_pool(simulator.device, simulator.computeCommandPool)
 	vkField_vk.destroy_descriptor_pool(simulator.device, simulator.computeDescriptorPool)
@@ -174,19 +195,15 @@ destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 	simulator^ = {}
 }
 
-vkSimulate :: proc(
-	simulator: ^vkSimulator,
-	settings: SimulationSettings,
-	transmitElements: []Element,
-	receiveElements: []Element,
-	scatters: []Scatter,
-	allocator := context.allocator,
-) -> (
-	response: []f32,
-	result: vk.Result,
-) {
+plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSettings) -> (result: vk.Result) {
+	destroy_vulkan_simulator_resources(simulator)
+
 	device := simulator.device
-	computeFence := simulator.computeFence
+
+	transmitElementsBuffer := check(prepare_stream(device, size_of(Element) * auto_cast settings.transmitElementCount)) or_return
+	receiveElementsBuffer  := check(prepare_stream(device, size_of(Element) * auto_cast settings.receiveElementCount)) or_return
+	scattersBuffer         := check(prepare_stream(device, size_of(Scatter) * auto_cast settings.scatterCount)) or_return
+	responseBuffer         := check(prepare_readback(device, size_of(f32) * auto_cast (settings.receiveElementCount * settings.sampleCount))) or_return
 
 	packSpatialImpulseResponseWorkGroupSize :[3]u32: {4, 4, 4}
 
@@ -212,25 +229,28 @@ vkSimulate :: proc(
 	assert(packSpatialImpulseScatterSize <= packSpatialImpulseBufferSize)
 
 	packSpatialImpulseScaleBufferSize := packSpatialImpulseScatterSize / (size_of([4]f32) / size_of(f32))
+	packSpatialImpulseMemory, packSpatialImpulseBuffers := check(device_buffers(device, []vk.DeviceSize { auto_cast packSpatialImpulseScatterSize, auto_cast packSpatialImpulseScaleBufferSize})) or_return
 
 	// NOTE(rnp): specialize shaders
+	packSpatialImpulseResponseSpecConstants := vkPackSpatialImpulseResponseSpecConstants {
+		WorkgroupSizeX    = 4,
+		WorkgroupSizeY    = 4,
+		WorkgroupSizeZ    = 4,
+		ScatterBatchCount = u32(scatterBatchCount),
+		ReceiveBatchCount = u32(receiveBatchCount),
+		TransmitCount     = u32(settings.transmitElementCount),
+		Cumulative        = settings.cumulative ? 1 : 0,
+		StartTime         = settings.startTime,
+		SamplingFrequency = settings.samplingFrequency,
+		SpeedOfSound      = settings.speedOfSound,
+	}
+
 	packSpatialImpulseResponsePipeline := check(
 		vkField_vk.create_compute_pipeline(
 			simulator.device,
 			{kind = .Compute, code = SHADER_PACK_SPATIAL_IMPULSE_RESPONSE_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
 			simulator.packSpatialImpulseResponsePipelineLayout,
-			vkPackSpatialImpulseResponseSpecConstants {
-				WorkgroupSizeX    = 4,
-				WorkgroupSizeY    = 4,
-				WorkgroupSizeZ    = 4,
-				ScatterBatchCount = u32(scatterBatchCount),
-				ReceiveBatchCount = u32(receiveBatchCount),
-				TransmitCount     = u32(settings.transmitElementCount),
-				Cumulative        = settings.cumulative ? 1 : 0,
-				StartTime         = settings.startTime,
-				SamplingFrequency = settings.samplingFrequency,
-				SpeedOfSound      = settings.speedOfSound,
-			},
+			packSpatialImpulseResponseSpecConstants,
 			"Pack Spatial Impulse Response",
 		),
 	) or_return
@@ -252,90 +272,6 @@ vkSimulate :: proc(
 			"Pulse Echo",
 		),
 	) or_return
-	
-	defer {
-		vkField_vk.destroy_compute_pipeline(device, pulseEchoPipeline)
-		vkField_vk.destroy_compute_pipeline(device, packSpatialImpulseResponsePipeline)
-	}
-
-	response = make([]f32, settings.receiveElementCount * settings.sampleCount, allocator)
-
-	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
-	defer vkField_vk.reset_command_buffer(device, &simulator.computeCommandPool, commandBuffer)
-
-	commandBeginInfo: vk.CommandBufferBeginInfo = {
-		sType = .COMMAND_BUFFER_BEGIN_INFO,
-	}
-	check(vk.BeginCommandBuffer(commandBuffer, &commandBeginInfo)) or_return
-
-
-	transmitElementsBuffer := check(stream(device, commandBuffer, transmitElements)) or_return
-	receiveElementsBuffer  := check(stream(device, commandBuffer, receiveElements)) or_return
-	scattersBuffer         := check(stream(device, commandBuffer, scatters)) or_return
-	responseBuffer         := check(prepare_readback(device, commandBuffer, response)) or_return
-
-	packSpatialImpulseBufferMemory, packSpatialImpulseBuffers := check(device_buffers(device, []vk.DeviceSize { auto_cast packSpatialImpulseScatterSize, auto_cast packSpatialImpulseScaleBufferSize})) or_return
-
-	defer {
-		release_staged_buffer(device, transmitElementsBuffer)
-		release_staged_buffer(device, receiveElementsBuffer)
-		release_staged_buffer(device, scattersBuffer)
-		release_staged_buffer(device, responseBuffer)
-		for buffer in packSpatialImpulseBuffers {
-			vkField_vk.destroy_buffer(device, buffer)
-		}
-		vkField_vk.free_memory(device, packSpatialImpulseBufferMemory)
-		delete(packSpatialImpulseBuffers)
-	}
-	release_staged_buffer :: proc(device: vkField_vk.Device, buffer: vkStagableBuffer) {
-		vkField_vk.release_buffer(device, buffer.main)
-		if buffer, bufferOk := buffer.staging.?; bufferOk {
-			vkField_vk.release_buffer(device, buffer)
-		}
-	}
-	// Initialize response to zero for atomic accumulation.
-	vkField_vk.cmd_clear_buffer(commandBuffer, responseBuffer.main)
-
-	vkField_vk.cmd_pipeline_barrier(
-		commandBuffer,
-		{},
-		{
-			{
-				buffer = transmitElementsBuffer.main.buffer,
-				size   = transmitElementsBuffer.main.size,
-				srcStageMask  = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask  = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ},
-			},
-			{
-				buffer = receiveElementsBuffer.main.buffer,
-				size   = receiveElementsBuffer.main.size,
-				srcStageMask  = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask  = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ},
-			},
-			{
-				buffer = scattersBuffer.main.buffer,
-				size   = scattersBuffer.main.size,
-				srcStageMask  = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask  = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ},
-			},
-			{
-				buffer = responseBuffer.main.buffer,
-				size   = responseBuffer.main.size,
-				offset = 0,
-				srcStageMask  = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE, .HOST_WRITE},
-				dstStageMask  = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
-			},
-		},
-		{},
-	)
 
 	descriptorSet := check(vkField_vk.allocate_descriptor_set(device, simulator.computeDescriptorPool, simulator.computeDescriptorSetLayout)) or_return
 
@@ -382,9 +318,129 @@ vkSimulate :: proc(
 			{dstSet = descriptorSet, dstBinding = 5, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = &packSpatialImpulseScaleDescriptor},
 		},
 	)
+	
+	simulator.simulationResources = vkPulseEchoSimulationResources {
+		transmitElementsBuffer = transmitElementsBuffer,
+		receiveElementsBuffer = receiveElementsBuffer,
+		scattersBuffer = scattersBuffer,
+		responseBuffer = responseBuffer,
+		packSpatialImpulseBuffers = packSpatialImpulseBuffers,
+		packSpatialImpulseMemory = packSpatialImpulseMemory,
+		packSpatialImpulseResponsePipeline = packSpatialImpulseResponsePipeline,
+		pulseEchoPipeline = pulseEchoPipeline,
+		descriptorSet = descriptorSet,
+	}
+	return
+}
 
-	for receiveOffset : u32 = 0; receiveOffset < u32(settings.receiveElementCount); receiveOffset += u32(receiveBatchCount) {
-		for scatterOffset : u32 = 0; scatterOffset < u32(settings.scatterCount); scatterOffset += u32(scatterBatchCount) {
+destroy_vulkan_simulator_resources :: proc(simulator : ^vkSimulator) {
+	device := simulator.device
+
+	switch resources in simulator.simulationResources {
+	case vkPulseEchoSimulationResources:
+		vkField_vk.destroy_compute_pipeline(device, resources.pulseEchoPipeline)
+		vkField_vk.destroy_compute_pipeline(device, resources.packSpatialImpulseResponsePipeline)
+
+		release_staged_buffer(device, resources.transmitElementsBuffer)
+		release_staged_buffer(device, resources.receiveElementsBuffer)
+		release_staged_buffer(device, resources.scattersBuffer)
+		release_staged_buffer(device, resources.responseBuffer)
+		for buffer in resources.packSpatialImpulseBuffers {
+			vkField_vk.destroy_buffer(device, buffer)
+		}
+		delete(resources.packSpatialImpulseBuffers)
+		vkField_vk.free_memory(device, resources.packSpatialImpulseMemory)
+
+		simulator.simulationResources = {}
+	}
+
+	release_staged_buffer :: proc(device: vkField_vk.Device, buffer: vkStagableBuffer) {
+		vkField_vk.release_buffer(device, buffer.main)
+		if buffer, bufferOk := buffer.staging.?; bufferOk {
+			vkField_vk.release_buffer(device, buffer)
+		}
+	}
+}
+
+vkSimulate :: proc(
+	simulator: ^vkSimulator,
+	settings: SimulationSettings,
+	transmitElements: []Element,
+	receiveElements: []Element,
+	scatters: []Scatter,
+	allocator := context.allocator,
+) -> (
+	response: []f32,
+	result: vk.Result,
+) {
+	resources, pulseEchoResourcesOk := simulator.simulationResources.(vkPulseEchoSimulationResources)
+	if !check(pulseEchoResourcesOk) do return {}, .ERROR_INITIALIZATION_FAILED
+
+	device := simulator.device
+
+	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
+
+	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
+	defer vkField_vk.reset_command_buffer(device, &simulator.computeCommandPool, commandBuffer)
+
+	commandBeginInfo: vk.CommandBufferBeginInfo = {
+		sType = .COMMAND_BUFFER_BEGIN_INFO,
+	}
+	check(vk.BeginCommandBuffer(commandBuffer, &commandBeginInfo)) or_return
+
+	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(transmitElements), 
+		resources.transmitElementsBuffer.main, resources.transmitElementsBuffer.staging.? or_else {})
+	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(receiveElements), 
+		resources.receiveElementsBuffer.main, resources.receiveElementsBuffer.staging.? or_else {})
+	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(scatters), 
+		resources.scattersBuffer.main, resources.scattersBuffer.staging.? or_else {})
+	vkField_vk.cmd_clear_buffer(commandBuffer, resources.responseBuffer.main)
+
+	vkField_vk.cmd_pipeline_barrier(
+		commandBuffer,
+		{},
+		{
+			{
+				buffer = resources.transmitElementsBuffer.main.buffer,
+				size   = resources.transmitElementsBuffer.main.size,
+				srcStageMask  = {.TRANSFER, .HOST},
+				srcAccessMask = {.TRANSFER_WRITE},
+				dstStageMask  = {.COMPUTE_SHADER},
+				dstAccessMask = {.SHADER_READ},
+			},
+			{
+				buffer = resources.receiveElementsBuffer.main.buffer,
+				size   = resources.receiveElementsBuffer.main.size,
+				srcStageMask  = {.TRANSFER, .HOST},
+				srcAccessMask = {.TRANSFER_WRITE},
+				dstStageMask  = {.COMPUTE_SHADER},
+				dstAccessMask = {.SHADER_READ},
+			},
+			{
+				buffer = resources.scattersBuffer.main.buffer,
+				size   = resources.scattersBuffer.main.size,
+				srcStageMask  = {.TRANSFER, .HOST},
+				srcAccessMask = {.TRANSFER_WRITE},
+				dstStageMask  = {.COMPUTE_SHADER},
+				dstAccessMask = {.SHADER_READ},
+			},
+			{
+				buffer = resources.responseBuffer.main.buffer,
+				size   = resources.responseBuffer.main.size,
+				offset = 0,
+				srcStageMask  = {.TRANSFER, .HOST},
+				srcAccessMask = {.TRANSFER_WRITE, .HOST_WRITE},
+				dstStageMask  = {.COMPUTE_SHADER},
+				dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
+			},
+		},
+		{},
+	)
+
+	sirSpecConstants := resources.packSpatialImpulseResponsePipeline.specializationConstants
+	pulseEchoConstants := resources.pulseEchoPipeline.specializationConstants
+	for receiveOffset : u32 = 0; receiveOffset < u32(settings.receiveElementCount); receiveOffset += u32(sirSpecConstants.ReceiveBatchCount) {
+		for scatterOffset : u32 = 0; scatterOffset < u32(settings.scatterCount); scatterOffset += u32(sirSpecConstants.ScatterBatchCount) {
 			packSpatialImpulseResponsePushConstants := vkPackSpatialImpulseResponsePushConstants {
 				scatterBatchOffset = scatterOffset,
 				receiveBatchOffset = receiveOffset,
@@ -394,8 +450,8 @@ vkSimulate :: proc(
 				{},
 				{
 					{
-						buffer        = packSpatialImpulseBuffers[0].buffer,
-						size          = packSpatialImpulseBuffers[0].size,
+						buffer        = resources.packSpatialImpulseBuffers[0].buffer,
+						size          = resources.packSpatialImpulseBuffers[0].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_READ},
@@ -403,8 +459,8 @@ vkSimulate :: proc(
 						dstAccessMask = {.SHADER_WRITE},
 					},
 					{
-						buffer        = packSpatialImpulseBuffers[1].buffer,
-						size          = packSpatialImpulseBuffers[1].size,
+						buffer        = resources.packSpatialImpulseBuffers[1].buffer,
+						size          = resources.packSpatialImpulseBuffers[1].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_READ},
@@ -415,28 +471,27 @@ vkSimulate :: proc(
 				{},
 			)
 
-			vk.CmdBindPipeline(commandBuffer, .COMPUTE, packSpatialImpulseResponsePipeline.pipeline)
+			vk.CmdBindPipeline(commandBuffer, .COMPUTE, resources.packSpatialImpulseResponsePipeline.pipeline)
 			vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.packSpatialImpulseResponsePipelineLayout,
-								 0, 1, &descriptorSet, 0, nil)
+								 0, 1, &resources.descriptorSet, 0, nil)
+
 			vkField_vk.cmd_push_constants(commandBuffer, simulator.packSpatialImpulseResponsePipelineLayout,
 									  {.COMPUTE}, packSpatialImpulseResponsePushConstants)
-			{
-				specConstants := packSpatialImpulseResponsePipeline.specializationConstants
-				vk.CmdDispatch(
-					commandBuffer,
-					u32(math.ceil(f32(specConstants.ScatterBatchCount) / f32(specConstants.WorkgroupSizeX))),
-					u32(math.ceil(f32(specConstants.ReceiveBatchCount) / f32(specConstants.WorkgroupSizeY))),
-					u32(math.ceil(f32(specConstants.TransmitCount)     / f32(specConstants.WorkgroupSizeZ))),
-				)
-			}
+
+			vk.CmdDispatch(
+				commandBuffer,
+				u32(math.ceil(f32(sirSpecConstants.ScatterBatchCount) / f32(sirSpecConstants.WorkgroupSizeX))),
+				u32(math.ceil(f32(sirSpecConstants.ReceiveBatchCount) / f32(sirSpecConstants.WorkgroupSizeY))),
+				u32(math.ceil(f32(sirSpecConstants.TransmitCount)     / f32(sirSpecConstants.WorkgroupSizeZ))),
+			)
 
 			vkField_vk.cmd_pipeline_barrier(
 				commandBuffer,
 				{},
 				{
 					{
-						buffer        = packSpatialImpulseBuffers[0].buffer,
-						size          = packSpatialImpulseBuffers[0].size,
+						buffer        = resources.packSpatialImpulseBuffers[0].buffer,
+						size          = resources.packSpatialImpulseBuffers[0].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_WRITE},
@@ -444,8 +499,8 @@ vkSimulate :: proc(
 						dstAccessMask = {.SHADER_READ},
 					},
 					{
-						buffer        = packSpatialImpulseBuffers[1].buffer,
-						size          = packSpatialImpulseBuffers[1].size,
+						buffer        = resources.packSpatialImpulseBuffers[1].buffer,
+						size          = resources.packSpatialImpulseBuffers[1].size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_WRITE},
@@ -453,8 +508,8 @@ vkSimulate :: proc(
 						dstAccessMask = {.SHADER_READ},
 					},
 					{
-						buffer        = responseBuffer.main.buffer,
-						size          = responseBuffer.main.size,
+						buffer        = resources.responseBuffer.main.buffer,
+						size          = resources.responseBuffer.main.size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_WRITE},
@@ -470,16 +525,15 @@ vkSimulate :: proc(
 			}
 			vkField_vk.cmd_push_constants(commandBuffer, simulator.pulseEchoPipelineLayout,
 			                              {.COMPUTE}, pulseEchoPushConstants)
-			vk.CmdBindPipeline(commandBuffer, .COMPUTE, pulseEchoPipeline.pipeline)
+			vk.CmdBindPipeline(commandBuffer, .COMPUTE, resources.pulseEchoPipeline.pipeline)
 			vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.pulseEchoPipelineLayout,
-			                         0, 1, &descriptorSet, 0, nil)
+			                         0, 1, &resources.descriptorSet, 0, nil)
 			
 			{
-				specConstants := pulseEchoPipeline.specializationConstants
 				vk.CmdDispatch(
 					commandBuffer,
-					u32(math.ceil(f32(specConstants.SampleCount) / f32(specConstants.WorkgroupSizeX))),
-					specConstants.ReceiveBatchCount,
+					u32(math.ceil(f32(pulseEchoConstants.SampleCount) / f32(pulseEchoConstants.WorkgroupSizeX))),
+					pulseEchoConstants.ReceiveBatchCount,
 					1,
 				)
 			}
@@ -491,8 +545,8 @@ vkSimulate :: proc(
 		{},
 		{
 			{
-				buffer = responseBuffer.main.buffer,
-				size   = responseBuffer.main.size,
+				buffer = resources.responseBuffer.main.buffer,
+				size   = resources.responseBuffer.main.size,
 				offset = 0,
 				srcStageMask = {.COMPUTE_SHADER},
 				srcAccessMask = {.SHADER_WRITE},
@@ -504,11 +558,11 @@ vkSimulate :: proc(
 	)
 
 	downloadBuffer: vkField_vk.Buffer
-	if buffer, bufferOk := responseBuffer.staging.(vkField_vk.Buffer); bufferOk {
-		vkField_vk.cmd_download_from_buffer(commandBuffer, responseBuffer.main, buffer)
+	if buffer, bufferOk := resources.responseBuffer.staging.(vkField_vk.Buffer); bufferOk {
+		vkField_vk.cmd_download_from_buffer(commandBuffer, resources.responseBuffer.main, buffer)
 		downloadBuffer = buffer
 	} else {
-		downloadBuffer = responseBuffer.main
+		downloadBuffer = resources.responseBuffer.main
 	}
 
 	check(vk.EndCommandBuffer(commandBuffer)) or_return
@@ -525,8 +579,8 @@ vkSimulate :: proc(
 		pCommandBufferInfos    = &commandSubmitInfo,
 	}
 
-	check(vk.QueueSubmit2(device.queues[device.computeQueueIndex], 1, &submitInfo, computeFence)) or_return
-	check(vk.WaitForFences(device.device, 1, &computeFence, true, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
+	check(vk.QueueSubmit2(device.queues[device.computeQueueIndex], 1, &submitInfo, simulator.computeFence)) or_return
+	check(vk.WaitForFences(device.device, 1, &simulator.computeFence, true, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
 	vkField_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
 	vk.DeviceWaitIdle(device.device) or_return
 	return
@@ -590,19 +644,18 @@ device_buffers :: proc(
 	return
 }
 
-stream :: proc(
+prepare_stream :: proc(
 	device: vkField_vk.Device,
-	commandBuffer: vk.CommandBuffer,
-	data: []$T,
+	size: vk.DeviceSize,
 ) -> (
 	buffer: vkStagableBuffer,
 	result: vk.Result,
 ) {
-	buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
+	buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
 	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main))
 	if !memoryTypeOk {
 		vkField_vk.destroy_buffer(device, buffer.main)
-		buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
+		buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main));
 		   !memoryTypeOk {
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
@@ -611,7 +664,7 @@ stream :: proc(
 	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
 
 	if !vkField_vk.is_mapped(buffer.main) {
-		stagingBuffer := vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
+		stagingBuffer := vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_staging_memory_type(
 			device.physicalDevice,
 			vkField_vk.get_memory_requirements(device, stagingBuffer),
@@ -620,26 +673,22 @@ stream :: proc(
 		}
 		vkField_vk.bind_buffer_to_dedicated_memory(device, &stagingBuffer, memoryType) or_return
 		buffer.staging = stagingBuffer
-		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer.main, stagingBuffer)
-	} else {
-		vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(data), buffer.main)
 	}
 	return
 }
 
 prepare_readback :: proc(
 	device: vkField_vk.Device,
-	commandBuffer: vk.CommandBuffer,
-	data: []$T,
+	size: vk.DeviceSize,
 ) -> (
 	buffer: vkStagableBuffer,
 	result: vk.Result,
 ) {
-	buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
+	buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
 	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main))
 	if !memoryTypeOk {
 		vkField_vk.destroy_buffer(device, buffer.main)
-		buffer.main = vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER, .TRANSFER_SRC, .TRANSFER_DST}) or_return
+		buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_SRC, .TRANSFER_DST}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main));
 		   !memoryTypeOk {
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
@@ -648,7 +697,7 @@ prepare_readback :: proc(
 	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
 
 	if !vkField_vk.is_mapped(buffer.main) {
-		readbackBuffer := vkField_vk.create_buffer(device, auto_cast slice.size(data), {.STORAGE_BUFFER}) or_return
+		readbackBuffer := vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
 		if memoryType, memoryTypeOk = vkField_vk.find_readback_memory_type(
 			device.physicalDevice,
 			vkField_vk.get_memory_requirements(device, readbackBuffer),

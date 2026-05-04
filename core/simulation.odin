@@ -77,9 +77,9 @@ simulate :: proc(
 	data: []f32,
 	ok := true,
 ) {
-	if (settings.transmitElementCount == 0) do settings.transmitElementCount = i32(len(transmitElements))
-	if (settings.receiveElementCount == 0) do settings.receiveElementCount = i32(len(receiveElements))
-	if (settings.scatterCount == 0) do settings.scatterCount = i32(len(scatters))
+	assert(settings.transmitElementCount != 0)
+	assert(settings.receiveElementCount != 0)
+	assert(settings.scatterCount != 0)
 
 	rdoc_lib, rdoc_api, rdoc_ok := rdoc.load_api()
 	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
@@ -107,13 +107,22 @@ simulate :: proc(
 	return
 }
 
-plan_simulation :: proc(settings: ^SimulationSettings, transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) {
+plan_simulation :: proc(simulator: ^Simulator, settings: ^SimulationSettings, transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) -> (ok := true) {
 	minDistance, maxDistance := findDistanceLimits(transmitElements, receiveElements, scatters)
 	settings.startTime = minDistance / settings.speedOfSound
 	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))
 	sampleCountPadding :: 6
 	settings.sampleCount += sampleCountPadding
 	settings.startTime -= sampleCountPadding / 4 / settings.samplingFrequency
+	if (settings.transmitElementCount == 0) do settings.transmitElementCount = i32(len(transmitElements))
+	if (settings.receiveElementCount == 0) do settings.receiveElementCount = i32(len(receiveElements))
+	if (settings.scatterCount == 0) do settings.scatterCount = i32(len(scatters))
+
+	switch &sim in simulator {
+	case vkSimulator:
+		is_ok(check(plan_vulkan_simulator(&sim, settings^))) or_return
+	}
+	return
 }
 
 findDistanceLimits :: proc(transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) -> (minDistance: f32, maxDistance: f32) {

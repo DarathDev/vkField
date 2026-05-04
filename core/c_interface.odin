@@ -32,6 +32,7 @@ destroy_vulkan_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc
 
 @(export)
 plan_simulation_c :: proc "c" (
+	simulator: ^Simulator,
 	settings: ^SimulationSettings,
 	transmitElements: ^Element,
 	receiveElements: ^Element,
@@ -43,13 +44,13 @@ plan_simulation_c :: proc "c" (
 ) {
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	plan_simulation(
+	return plan_simulation(
+		simulator,
 		settings,
 		slice.from_ptr(transmitElements, int(settings.transmitElementCount)),
 		slice.from_ptr(receiveElements, int(settings.receiveElementCount)),
 		slice.from_ptr(scatters, int(settings.scatterCount)),
 	)
-	return
 }
 
 @(export)
