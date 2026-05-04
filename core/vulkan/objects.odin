@@ -1,5 +1,6 @@
 package vkField_vulkan
 
+import "core:reflect"
 import "base:intrinsics"
 import "base:runtime"
 import "core:fmt"
@@ -1429,18 +1430,42 @@ ComputePipeline :: struct {
 	shaderModule: vk.ShaderModule,
 }
 
-create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: vk.PipelineLayout, specInfo: ^vk.SpecializationInfo, label := "") -> (pipeline: ComputePipeline, ok: vk.Result) {
+create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: vk.PipelineLayout, specializationConstants: $T, label := "") -> 
+	(pipeline: ComputePipeline, ok: vk.Result) where intrinsics.type_is_struct(T) {
 	checkLabel(label)
 
 	assert(len(shaderInfo.entryPoints) == 1)
 	pipeline.shaderModule = create_shader_module(device, shaderInfo.code, label) or_return
+
+	specializationConstants := specializationConstants
+	specializationInfo :vk.SpecializationInfo
+	specializationMap := make([]vk.SpecializationMapEntry, intrinsics.type_struct_field_count(T))
+	defer delete(specializationMap)
+	if size_of(specializationConstants) > 0 {
+		specializationOffsets := reflect.struct_field_offsets(T)
+		specializationTypes := reflect.struct_field_types(T)
+		for &entry, index in specializationMap {
+			entry = {
+				constantID = auto_cast index,
+				offset = auto_cast specializationOffsets[index],
+				size = reflect.size_of_typeid(specializationTypes[index].id),
+			}
+		}
+
+		specializationInfo = {
+			mapEntryCount = u32(len(specializationMap)),
+			pMapEntries   = raw_data(specializationMap),
+			dataSize      = size_of(specializationConstants),
+			pData         = &specializationConstants,
+		}
+	}
 
 	stageCreateInfo: vk.PipelineShaderStageCreateInfo = {
 		sType               = .PIPELINE_SHADER_STAGE_CREATE_INFO,
 		flags               = {},
 		stage               = {.COMPUTE},
 		module              = pipeline.shaderModule,
-		pSpecializationInfo = specInfo,
+		pSpecializationInfo = &specializationInfo,
 		pName               = strings.clone_to_cstring(shaderInfo.entryPoints[0].name, context.temp_allocator),
 	}
 

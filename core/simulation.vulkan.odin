@@ -241,127 +241,25 @@ vkSimulate :: proc(
 
 
 
-	{
-		// TODO(rnp): doesn't odin have a compile time way to generate this?
-		packSpatialImpulseResponseSpecMap := []vk.SpecializationMapEntry {
-			{
-				constantID = 0,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, WorkgroupSizeX)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 1,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, WorkgroupSizeY)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 2,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, WorkgroupSizeZ)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 3,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, ScatterBatchCount)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 4,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, ReceiveBatchCount)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 5,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, TransmitCount)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 6,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, Cumulative)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 7,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, StartTime)),
-				size       = size_of(f32),
-			},
-			{
-				constantID = 8,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, SamplingFrequency)),
-				size       = size_of(f32),
-			},
-			{
-				constantID = 9,
-				offset     = u32(offset_of(vkPackSpatialImpulseResponseSpecConstants, SpeedOfSound)),
-				size       = size_of(f32),
-			},
-		}
-
-		packSpatialImpulseResponseSpecInfo := vk.SpecializationInfo {
-			mapEntryCount = u32(len(packSpatialImpulseResponseSpecMap)),
-			pMapEntries   = &packSpatialImpulseResponseSpecMap[0],
-			dataSize      = size_of(packSpatialImpulseResponseSpecConstants),
-			pData         = &packSpatialImpulseResponseSpecConstants,
-		}
-
-		packSpatialImpulseResponsePipeline = check(
-			vkField_vk.create_compute_pipeline(
-				simulator.device,
-				{kind = .Compute, code = SHADER_PACK_SPATIAL_IMPULSE_RESPONSE_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
-				simulator.packSpatialImpulseResponsePipelineLayout,
-				&packSpatialImpulseResponseSpecInfo,
-				"Pack Spatial Impulse Response",
-			),
-		) or_return
-
-		pulseEchoSpecMap := []vk.SpecializationMapEntry {
-			{
-				constantID = 0,
-				offset     = u32(offset_of(vkPulseEchoSpecConstants, WorkgroupSizeX)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 1,
-				offset     = u32(offset_of(vkPulseEchoSpecConstants, SampleCount)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 2,
-				offset     = u32(offset_of(vkPulseEchoSpecConstants, TransmitCount)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 3,
-				offset     = u32(offset_of(vkPulseEchoSpecConstants, ReceiveBatchCount)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 4,
-				offset     = u32(offset_of(vkPulseEchoSpecConstants, ScatterBatchCount)),
-				size       = size_of(u32),
-			},
-			{
-				constantID = 5,
-				offset     = u32(offset_of(vkPulseEchoSpecConstants, Cumulative)),
-				size       = size_of(u32),
-			},
-		}
-		pulseEchoSpecInfo := vk.SpecializationInfo {
-			mapEntryCount = u32(len(pulseEchoSpecMap)),
-			pMapEntries   = &pulseEchoSpecMap[0],
-			dataSize      = size_of(pulseEchoSpecConstants),
-			pData         = &pulseEchoSpecConstants,
-		}
-
-		pulseEchoPipeline = check(
-			vkField_vk.create_compute_pipeline(
-				device,
-				{kind = .Compute, code = SHADER_PULSE_ECHO_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
-				simulator.pulseEchoPipelineLayout,
-				&pulseEchoSpecInfo,
-				"Pulse Echo",
-			),
-		) or_return
-	}
+	packSpatialImpulseResponsePipeline = check(
+		vkField_vk.create_compute_pipeline(
+			simulator.device,
+			{kind = .Compute, code = SHADER_PACK_SPATIAL_IMPULSE_RESPONSE_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
+			simulator.packSpatialImpulseResponsePipelineLayout,
+			packSpatialImpulseResponseSpecConstants,
+			"Pack Spatial Impulse Response",
+		),
+	) or_return
+	
+	pulseEchoPipeline = check(
+		vkField_vk.create_compute_pipeline(
+			device,
+			{kind = .Compute, code = SHADER_PULSE_ECHO_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
+			simulator.pulseEchoPipelineLayout,
+			pulseEchoSpecConstants,
+			"Pulse Echo",
+		),
+	) or_return
 	defer {
 		vkField_vk.destroy_compute_pipeline(device, pulseEchoPipeline)
 		vkField_vk.destroy_compute_pipeline(device, packSpatialImpulseResponsePipeline)
