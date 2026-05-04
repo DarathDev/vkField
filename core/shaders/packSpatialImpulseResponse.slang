@@ -15,7 +15,7 @@ layout(constant_id =  7) const float StartTime         = 0;
 layout(constant_id =  8) const float SamplingFrequency = 0;
 layout(constant_id =  9) const float SpeedOfSound      = 0;
 
-struct PackSpatialImpulseResponseSettings {
+struct PackSirSettings {
 	vk::BufferPointer<RectangularApertureBuffer> transmitApertures;
 	vk::BufferPointer<RectangularApertureBuffer> receiveApertures;
 	vk::BufferPointer<ScatterBuffer> scatters;
@@ -26,7 +26,7 @@ struct PackSpatialImpulseResponseSettings {
 };
 
 [[vk::push_constant]]
-ConstantBuffer<PackSpatialImpulseResponseSettings> settings;
+ConstantBuffer<PackSirSettings> settings;
 
 float aperture_power_denominator(in float4 rect_samples, in float dt, in float dt2)
 {
