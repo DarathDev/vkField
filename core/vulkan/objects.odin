@@ -37,7 +37,7 @@ AppInfo :: struct {
 Instance :: struct {
 	instance:          vk.Instance,
 	apiVersion:        u32,
-	enabledLayers:     [dynamic]cstring,
+	enabledLayers:     [dynamic]string,
 	enabledExtensions: [dynamic]string,
 }
 
@@ -71,7 +71,7 @@ create_instance :: proc(
 		},
 	}
 
-	instance.enabledLayers = make([dynamic]cstring, allocator)
+	instance.enabledLayers = make([dynamic]string, allocator)
 	instance.enabledExtensions = make([dynamic]string, allocator)
 
 	availableExtensionCount: u32
@@ -111,9 +111,13 @@ create_instance :: proc(
 		validationLayer :: "VK_LAYER_KHRONOS_validation"
 
 		// TODO(rnp): technically this needs to be checked for support
-		append(&instance.enabledLayers, strings.clone_to_cstring(validationLayer, allocator))
-		instanceCreateInfo.ppEnabledLayerNames = raw_data(instance.enabledLayers)
-		instanceCreateInfo.enabledLayerCount = 1
+		append(&instance.enabledLayers, validationLayer)
+		ppEnabledLayers: []cstring = make([]cstring, len(instance.enabledLayers), context.temp_allocator)
+		for layer, i in instance.enabledLayers {
+			ppEnabledLayers[i] = strings.clone_to_cstring(layer, context.temp_allocator)
+		}
+		instanceCreateInfo.enabledLayerCount = u32(len(instance.enabledLayers))
+		instanceCreateInfo.ppEnabledLayerNames = raw_data(ppEnabledLayers)
 
 		// TODO(rnp): array of desired debug extensions
 		debug_utils := false
@@ -162,12 +166,12 @@ create_instance :: proc(
 		}
 	}
 
-	ppExtensionNames: []cstring = make([]cstring, len(instance.enabledExtensions), context.temp_allocator)
+	ppEnabledExtensions: []cstring = make([]cstring, len(instance.enabledExtensions), context.temp_allocator)
 	for extension, i in instance.enabledExtensions {
-		ppExtensionNames[i] = strings.clone_to_cstring(extension, context.temp_allocator)
+		ppEnabledExtensions[i] = strings.clone_to_cstring(extension, context.temp_allocator)
 	}
 	instanceCreateInfo.enabledExtensionCount = u32(len(instance.enabledExtensions))
-	instanceCreateInfo.ppEnabledExtensionNames = raw_data(ppExtensionNames)
+	instanceCreateInfo.ppEnabledExtensionNames = raw_data(ppEnabledExtensions)
 
 	check(vk.CreateInstance(&instanceCreateInfo, nil, &instance.instance)) or_return
 	instance.apiVersion = appInfo.vulkanVersion
@@ -186,13 +190,7 @@ has_string :: proc(strs: []string, str: string) -> (result: bool) {
 }
 
 destroy_instance :: proc(instance: ^Instance) {
-	for layer in instance.enabledLayers {
-		delete(layer, instance.enabledLayers.allocator)
-	}
 	delete(instance.enabledLayers)
-	for extension in instance.enabledExtensions {
-		delete(extension, instance.enabledExtensions.allocator)
-	}
 	delete(instance.enabledExtensions)
 	vk.DestroyInstance(instance.instance, nil)
 }
@@ -474,14 +472,18 @@ create_device :: proc(
 	device.enabledCapabilities = criteria.requiredCapabilities + (criteria.optionalCapabilities & physicalDevice.capabilities)
 	enabledExtensions := make([dynamic]cstring, context.temp_allocator)
 	add_capability_extensions(&enabledExtensions, device.enabledCapabilities)
+	ppEnabledLayers: []cstring = make([]cstring, len(instance.enabledLayers), context.temp_allocator)
+	for layer, i in instance.enabledLayers {
+		ppEnabledLayers[i] = strings.clone_to_cstring(layer, context.temp_allocator)
+	}
 
 	deviceFeatures := make_device_features(device.enabledCapabilities, context.temp_allocator)
 
 	deviceCreateInfo: vk.DeviceCreateInfo = {
 		sType                   = .DEVICE_CREATE_INFO,
 		pNext                   = &deviceFeatures,
-		enabledLayerCount       = u32(len(instance.enabledLayers)),
-		ppEnabledLayerNames     = raw_data(instance.enabledLayers),
+		enabledLayerCount       = u32(len(ppEnabledLayers)),
+		ppEnabledLayerNames     = raw_data(ppEnabledLayers),
 		enabledExtensionCount   = u32(len(enabledExtensions)),
 		ppEnabledExtensionNames = raw_data(enabledExtensions),
 		queueCreateInfoCount    = u32(len(queueCreateInfos)),
