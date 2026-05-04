@@ -214,52 +214,45 @@ vkSimulate :: proc(
 	packSpatialImpulseScaleBufferSize := packSpatialImpulseScatterSize / (size_of([4]f32) / size_of(f32))
 
 	// NOTE(rnp): specialize shaders
-	pulseEchoPipeline        : vkField_vk.ComputePipeline
-	packSpatialImpulseResponsePipeline : vkField_vk.ComputePipeline
-	packSpatialImpulseResponseSpecConstants := vkPackSpatialImpulseResponseSpecConstants {
-		WorkgroupSizeX    = 4,
-		WorkgroupSizeY    = 4,
-		WorkgroupSizeZ    = 4,
-		ScatterBatchCount = u32(scatterBatchCount),
-		ReceiveBatchCount = u32(receiveBatchCount),
-		TransmitCount     = u32(settings.transmitElementCount),
-		Cumulative        = settings.cumulative ? 1 : 0,
-		StartTime         = settings.startTime,
-		SamplingFrequency = settings.samplingFrequency,
-		SpeedOfSound      = settings.speedOfSound,
-	}
-
-	pulseEchoSpecConstants := vkPulseEchoSpecConstants {
-		// TODO(rnp): subgroup size
-		WorkgroupSizeX    = 64,
-		SampleCount       = u32(settings.sampleCount),
-		TransmitCount     = u32(settings.transmitElementCount),
-		ReceiveBatchCount = u32(receiveBatchCount),
-		ScatterBatchCount = u32(scatterBatchCount),
-		Cumulative        = settings.cumulative ? 1 : 0,
-	}
-
-
-
-	packSpatialImpulseResponsePipeline = check(
+	packSpatialImpulseResponsePipeline := check(
 		vkField_vk.create_compute_pipeline(
 			simulator.device,
 			{kind = .Compute, code = SHADER_PACK_SPATIAL_IMPULSE_RESPONSE_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
 			simulator.packSpatialImpulseResponsePipelineLayout,
-			packSpatialImpulseResponseSpecConstants,
+			vkPackSpatialImpulseResponseSpecConstants {
+				WorkgroupSizeX    = 4,
+				WorkgroupSizeY    = 4,
+				WorkgroupSizeZ    = 4,
+				ScatterBatchCount = u32(scatterBatchCount),
+				ReceiveBatchCount = u32(receiveBatchCount),
+				TransmitCount     = u32(settings.transmitElementCount),
+				Cumulative        = settings.cumulative ? 1 : 0,
+				StartTime         = settings.startTime,
+				SamplingFrequency = settings.samplingFrequency,
+				SpeedOfSound      = settings.speedOfSound,
+			},
 			"Pack Spatial Impulse Response",
 		),
 	) or_return
 	
-	pulseEchoPipeline = check(
+	pulseEchoPipeline := check(
 		vkField_vk.create_compute_pipeline(
 			device,
 			{kind = .Compute, code = SHADER_PULSE_ECHO_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
 			simulator.pulseEchoPipelineLayout,
-			pulseEchoSpecConstants,
+			vkPulseEchoSpecConstants {
+				// TODO(rnp): subgroup size
+				WorkgroupSizeX    = 64,
+				SampleCount       = u32(settings.sampleCount),
+				TransmitCount     = u32(settings.transmitElementCount),
+				ReceiveBatchCount = u32(receiveBatchCount),
+				ScatterBatchCount = u32(scatterBatchCount),
+				Cumulative        = settings.cumulative ? 1 : 0,
+			},
 			"Pulse Echo",
 		),
 	) or_return
+	
 	defer {
 		vkField_vk.destroy_compute_pipeline(device, pulseEchoPipeline)
 		vkField_vk.destroy_compute_pipeline(device, packSpatialImpulseResponsePipeline)
@@ -427,13 +420,15 @@ vkSimulate :: proc(
 								 0, 1, &descriptorSet, 0, nil)
 			vkField_vk.cmd_push_constants(commandBuffer, simulator.packSpatialImpulseResponsePipelineLayout,
 									  {.COMPUTE}, packSpatialImpulseResponsePushConstants)
-
-			vk.CmdDispatch(
-				commandBuffer,
-				u32(math.ceil(f32(packSpatialImpulseResponseSpecConstants.ScatterBatchCount) / f32(packSpatialImpulseResponseSpecConstants.WorkgroupSizeX))),
-				u32(math.ceil(f32(packSpatialImpulseResponseSpecConstants.ReceiveBatchCount) / f32(packSpatialImpulseResponseSpecConstants.WorkgroupSizeY))),
-				u32(math.ceil(f32(packSpatialImpulseResponseSpecConstants.TransmitCount)     / f32(packSpatialImpulseResponseSpecConstants.WorkgroupSizeZ))),
-			)
+			{
+				specConstants := packSpatialImpulseResponsePipeline.specializationConstants
+				vk.CmdDispatch(
+					commandBuffer,
+					u32(math.ceil(f32(specConstants.ScatterBatchCount) / f32(specConstants.WorkgroupSizeX))),
+					u32(math.ceil(f32(specConstants.ReceiveBatchCount) / f32(specConstants.WorkgroupSizeY))),
+					u32(math.ceil(f32(specConstants.TransmitCount)     / f32(specConstants.WorkgroupSizeZ))),
+				)
+			}
 
 			vkField_vk.cmd_pipeline_barrier(
 				commandBuffer,
@@ -478,12 +473,16 @@ vkSimulate :: proc(
 			vk.CmdBindPipeline(commandBuffer, .COMPUTE, pulseEchoPipeline.pipeline)
 			vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.pulseEchoPipelineLayout,
 			                         0, 1, &descriptorSet, 0, nil)
-			vk.CmdDispatch(
-				commandBuffer,
-				u32(math.ceil(f32(pulseEchoSpecConstants.SampleCount) / f32(pulseEchoSpecConstants.WorkgroupSizeX))),
-				pulseEchoSpecConstants.ReceiveBatchCount,
-				1,
-			)
+			
+			{
+				specConstants := pulseEchoPipeline.specializationConstants
+				vk.CmdDispatch(
+					commandBuffer,
+					u32(math.ceil(f32(specConstants.SampleCount) / f32(specConstants.WorkgroupSizeX))),
+					specConstants.ReceiveBatchCount,
+					1,
+				)
+			}
 		}
 	}
 

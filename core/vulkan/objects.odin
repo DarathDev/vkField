@@ -1425,19 +1425,20 @@ create_graphics_pipelines :: proc(
 	return
 }
 
-ComputePipeline :: struct {
+ComputePipeline :: struct(T: typeid) {
 	pipeline:     vk.Pipeline,
 	shaderModule: vk.ShaderModule,
+	specializationConstants: T,
 }
 
 create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: vk.PipelineLayout, specializationConstants: $T, label := "") -> 
-	(pipeline: ComputePipeline, ok: vk.Result) where intrinsics.type_is_struct(T) {
+	(pipeline: ComputePipeline(T), ok: vk.Result) where intrinsics.type_is_struct(T) {
 	checkLabel(label)
 
 	assert(len(shaderInfo.entryPoints) == 1)
 	pipeline.shaderModule = create_shader_module(device, shaderInfo.code, label) or_return
 
-	specializationConstants := specializationConstants
+	pipeline.specializationConstants = specializationConstants
 	specializationInfo :vk.SpecializationInfo
 	specializationMap := make([]vk.SpecializationMapEntry, intrinsics.type_struct_field_count(T))
 	defer delete(specializationMap)
@@ -1456,8 +1457,8 @@ create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: 
 			mapEntryCount = u32(len(specializationMap)),
 			pMapEntries   = raw_data(specializationMap),
 			dataSize      = size_of(specializationConstants),
-			pData         = &specializationConstants,
-		}
+			pData         = &pipeline.specializationConstants,
+		}		
 	}
 
 	stageCreateInfo: vk.PipelineShaderStageCreateInfo = {
@@ -1487,7 +1488,7 @@ destroy_pipeline :: proc(device: Device, pipeline: vk.Pipeline) {
 	vk.DestroyPipeline(device.device, pipeline, nil)
 }
 
-destroy_compute_pipeline :: proc(device: Device, pipeline: ComputePipeline) {
+destroy_compute_pipeline :: proc(device: Device, pipeline: ComputePipeline($T)) {
 	destroy_shader_module(device, pipeline.shaderModule)
 	destroy_pipeline(device, pipeline.pipeline)
 }
