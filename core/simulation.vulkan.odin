@@ -71,18 +71,16 @@ vkPulseEchoSimulationResources :: struct {
 	receiveElementsBuffer:    vkStagableBuffer,
 	scattersBuffer:           vkStagableBuffer,
 	responseBuffer:           vkStagableBuffer,
-	packSirBuffers: []vkField_vk.Buffer,
-	packSirMemory: vkField_vk.Memory,
+	sirBuffer: vkField_vk.Buffer,
 	packSirPipeline: vkField_vk.ComputePipeline(vkPackSirSpecConstants),
 	pulseEchoPipeline: vkField_vk.ComputePipeline(vkPulseEchoSpecConstants),
 }
 
 vkPackSirPushConstants :: struct {
-	transmitApertures: vk.DeviceAddress,
-	receiveApertures:  vk.DeviceAddress,
-	scatters:          vk.DeviceAddress,
-	sirRects:          vk.DeviceAddress,
-	sirScales:         vk.DeviceAddress,
+	transmitApertures:       vk.DeviceAddress,
+	receiveApertures:        vk.DeviceAddress,
+	scatters:                vk.DeviceAddress,
+	spatialImpulseResponses: vk.DeviceAddress,
 	scatterBatchOffset : u32,
 	receiveBatchOffset : u32,
 }
@@ -101,9 +99,8 @@ vkPackSirSpecConstants :: struct {
 }
 
 vkPulseEchoPushConstants :: struct {
-	sirRects:          vk.DeviceAddress,
-	sirScales:         vk.DeviceAddress,
-	response:          vk.DeviceAddress,
+	spatialImpulseResponses: vk.DeviceAddress,
+	response:                vk.DeviceAddress,
 	receiveBatchOffset : u32,
 }
 
@@ -214,50 +211,47 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 
 	packSirWorkGroupSize :[3]u32: {4, 4, 4}
 
-	packSirBufferSize  :: 32 * runtime.Megabyte
+	sirBufferSize  :: 32 * runtime.Megabyte
+	sirPerScatterSize :: size_of([4]f32) + size_of(f32) // Size of Spatial Impulse Response Rectangle Control Points + Scaling Factor
 	scatterBatchCount    := u32(settings.scatterCount)
 	receiveBatchCount    := u32(settings.receiveElementCount)
-	packSirScatterSize  := u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+	sirTotalSize  := u32(sirPerScatterSize * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
 
 	// Batch Receives to reduce temp buffer size
-	if packSirScatterSize > packSirBufferSize {
+	if sirTotalSize > sirBufferSize {
 		maxReceiveBatchCount := min(u32(settings.receiveElementCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.y * packSirWorkGroupSize.y)
-		receiveBatchCount     = clamp((packSirBufferSize / (size_of([4]f32) * scatterBatchCount)) - u32(settings.transmitElementCount), 1, maxReceiveBatchCount)
-		packSirScatterSize   = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+		receiveBatchCount     = clamp((sirBufferSize / (sirPerScatterSize * scatterBatchCount)) - u32(settings.transmitElementCount), 1, maxReceiveBatchCount)
+		sirTotalSize   = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
 	}
 
 	// Batch Scatters to reduce temp buffer size
-	if packSirScatterSize > packSirBufferSize {
+	if sirTotalSize > sirBufferSize {
 		maxScatterBatchCount := min(u32(settings.scatterCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.x * packSirWorkGroupSize.x)
-		scatterBatchCount = clamp(packSirBufferSize / (size_of([4]f32) * (receiveBatchCount + u32(settings.transmitElementCount))), 1, maxScatterBatchCount)
-		packSirScatterSize  = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+		scatterBatchCount = clamp(sirBufferSize / (sirPerScatterSize * (receiveBatchCount + u32(settings.transmitElementCount))), 1, maxScatterBatchCount)
+		sirTotalSize  = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
 	}
 
-	assert(packSirScatterSize <= packSirBufferSize)
-
-	packSirScaleBufferSize := packSirScatterSize / (size_of([4]f32) / size_of(f32))
-	packSirMemory, packSirBuffers := check(device_buffers(device, []vk.DeviceSize { auto_cast packSirScatterSize, auto_cast packSirScaleBufferSize})) or_return
+	assert(sirTotalSize <= sirBufferSize)
+	sirBuffer := check(device_buffer(device, auto_cast sirTotalSize)) or_return
 
 	// NOTE(rnp): specialize shaders
-	packSirSpecConstants := vkPackSirSpecConstants {
-		WorkgroupSizeX    = 4,
-		WorkgroupSizeY    = 4,
-		WorkgroupSizeZ    = 4,
-		ScatterBatchCount = u32(scatterBatchCount),
-		ReceiveBatchCount = u32(receiveBatchCount),
-		TransmitCount     = u32(settings.transmitElementCount),
-		Cumulative        = settings.cumulative ? 1 : 0,
-		StartTime         = settings.startTime,
-		SamplingFrequency = settings.samplingFrequency,
-		SpeedOfSound      = settings.speedOfSound,
-	}
-
 	packSirPipeline := check(
 		vkField_vk.create_compute_pipeline(
 			simulator.device,
 			{kind = .Compute, code = SHADER_PACK_SIR_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}},
 			simulator.packSirPipelineLayout,
-			packSirSpecConstants,
+			vkPackSirSpecConstants {
+				WorkgroupSizeX    = 4,
+				WorkgroupSizeY    = 4,
+				WorkgroupSizeZ    = 4,
+				ScatterBatchCount = u32(scatterBatchCount),
+				ReceiveBatchCount = u32(receiveBatchCount),
+				TransmitCount     = u32(settings.transmitElementCount),
+				Cumulative        = settings.cumulative ? 1 : 0,
+				StartTime         = settings.startTime,
+				SamplingFrequency = settings.samplingFrequency,
+				SpeedOfSound      = settings.speedOfSound,
+			},
 			"Pack Spatial Impulse Response",
 		),
 	) or_return
@@ -285,8 +279,7 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 		receiveElementsBuffer = receiveElementsBuffer,
 		scattersBuffer = scattersBuffer,
 		responseBuffer = responseBuffer,
-		packSirBuffers = packSirBuffers,
-		packSirMemory = packSirMemory,
+		sirBuffer = sirBuffer,
 		packSirPipeline = packSirPipeline,
 		pulseEchoPipeline = pulseEchoPipeline,
 	}
@@ -305,12 +298,7 @@ destroy_vulkan_simulator_resources :: proc(simulator : ^vkSimulator) {
 		release_staged_buffer(device, resources.receiveElementsBuffer)
 		release_staged_buffer(device, resources.scattersBuffer)
 		release_staged_buffer(device, resources.responseBuffer)
-		for buffer in resources.packSirBuffers {
-			vkField_vk.destroy_buffer(device, buffer)
-		}
-		delete(resources.packSirBuffers)
-		vkField_vk.free_memory(device, resources.packSirMemory)
-
+		vkField_vk.release_buffer(device, resources.sirBuffer)
 		simulator.simulationResources = {}
 	}
 
@@ -406,17 +394,8 @@ vkSimulate :: proc(
 				{},
 				{
 					{
-						buffer        = resources.packSirBuffers[0].buffer,
-						size          = resources.packSirBuffers[0].size,
-						offset        = 0,
-						srcStageMask  = {.COMPUTE_SHADER},
-						srcAccessMask = {.SHADER_READ},
-						dstStageMask  = {.COMPUTE_SHADER},
-						dstAccessMask = {.SHADER_WRITE},
-					},
-					{
-						buffer        = resources.packSirBuffers[1].buffer,
-						size          = resources.packSirBuffers[1].size,
+						buffer        = resources.sirBuffer.buffer,
+						size          = resources.sirBuffer.size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_READ},
@@ -434,8 +413,7 @@ vkSimulate :: proc(
 					transmitApertures = vkField_vk.get_buffer_address(device, resources.transmitElementsBuffer.main),
 					receiveApertures = vkField_vk.get_buffer_address(device, resources.receiveElementsBuffer.main),
 					scatters = vkField_vk.get_buffer_address(device, resources.scattersBuffer.main),
-					sirRects = vkField_vk.get_buffer_address(device, resources.packSirBuffers[0]),
-					sirScales = vkField_vk.get_buffer_address(device, resources.packSirBuffers[1]),
+					spatialImpulseResponses = vkField_vk.get_buffer_address(device, resources.sirBuffer),
 					scatterBatchOffset = scatterOffset,
 					receiveBatchOffset = receiveOffset,
 			})
@@ -452,17 +430,8 @@ vkSimulate :: proc(
 				{},
 				{
 					{
-						buffer        = resources.packSirBuffers[0].buffer,
-						size          = resources.packSirBuffers[0].size,
-						offset        = 0,
-						srcStageMask  = {.COMPUTE_SHADER},
-						srcAccessMask = {.SHADER_WRITE},
-						dstStageMask  = {.COMPUTE_SHADER},
-						dstAccessMask = {.SHADER_READ},
-					},
-					{
-						buffer        = resources.packSirBuffers[1].buffer,
-						size          = resources.packSirBuffers[1].size,
+						buffer        = resources.sirBuffer.buffer,
+						size          = resources.sirBuffer.size,
 						offset        = 0,
 						srcStageMask  = {.COMPUTE_SHADER},
 						srcAccessMask = {.SHADER_WRITE},
@@ -485,8 +454,7 @@ vkSimulate :: proc(
 			vk.CmdBindPipeline(commandBuffer, .COMPUTE, resources.pulseEchoPipeline.pipeline)
 			vkField_vk.cmd_push_constants(commandBuffer, simulator.pulseEchoPipelineLayout, {.COMPUTE}, 
 				vkPulseEchoPushConstants {
-					sirRects = vkField_vk.get_buffer_address(device, resources.packSirBuffers[0]),
-					sirScales = vkField_vk.get_buffer_address(device, resources.packSirBuffers[1]),
+					spatialImpulseResponses = vkField_vk.get_buffer_address(device, resources.sirBuffer),
 					response = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
 					receiveBatchOffset = receiveOffset,
 			})

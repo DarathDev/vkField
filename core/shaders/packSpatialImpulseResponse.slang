@@ -19,8 +19,7 @@ struct PackSirSettings {
 	vk::BufferPointer<RectangularApertureBuffer> transmitApertures;
 	vk::BufferPointer<RectangularApertureBuffer> receiveApertures;
 	vk::BufferPointer<ScatterBuffer> scatters;
-	vk::BufferPointer<float4[]> sirRects;
-	vk::BufferPointer<float[]> sirScales;
+	float4* spatialImpulseResponses;
 	uint scatterBatchOffset;
 	uint receiveBatchOffset;
 };
@@ -86,8 +85,12 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 
 	uint t_out_index = scatter_index * TransmitCount + transmit_index;
 	uint r_out_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
-	settings.sirRects.Get()[t_out_index]  = t_rect_samples;
-	settings.sirRects.Get()[r_out_index]  = r_rect_samples;
-	settings.sirScales.Get()[t_out_index] = t_scale;
-	settings.sirScales.Get()[r_out_index] = r_scale;
+
+	float4 *sirRects = settings.spatialImpulseResponses;
+	float *sirScales = Ptr<float>(sirRects + (ScatterBatchCount * (TransmitCount + ReceiveBatchCount)));
+
+	sirRects[t_out_index]  = t_rect_samples;
+	sirRects[r_out_index]  = r_rect_samples;
+	sirScales[t_out_index] = t_scale;
+	sirScales[r_out_index] = r_scale;
 }
