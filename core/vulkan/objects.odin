@@ -1593,6 +1593,7 @@ create_buffer :: proc(
 		queueFamilyIndexCount = auto_cast len(queueFamilyIndices),
 		pQueueFamilyIndices   = raw_data(queueFamilyIndices),
 	}
+	if .BufferDeviceAddress in device.enabledCapabilities do bufferInfo.usage |= {.SHADER_DEVICE_ADDRESS}
 	vk.CreateBuffer(device.device, &bufferInfo, nil, &buffer.buffer) or_return
 	buffer.size, buffer.usage, buffer.sharingMode = size, usage, sharingMode
 	if len(label) > 0 {

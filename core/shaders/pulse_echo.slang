@@ -11,6 +11,9 @@ layout(constant_id =  4) const uint  ScatterBatchCount = 0;
 layout(constant_id =  5) const bool  Cumulative        = false;
 
 struct PulseEchoSettings {
+  	vk::BufferPointer<float4[]> sirRects;
+	vk::BufferPointer<float[]> sirScales;
+  	vk::BufferPointer<float[]> response;
 	uint receiveBatchOffset;
 };
 
@@ -116,10 +119,10 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 		uint t_index = scatter_index * TransmitCount + transmit_index;
 		uint r_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
 
-		float4 r_rect_samples = packed_spatial_impulse_response_rects[r_index];
-		float  r_scale        = packed_spatial_impulse_response_scales[r_index];
-		float4 t_rect_samples = packed_spatial_impulse_response_rects[t_index];
-		float  t_scale        = packed_spatial_impulse_response_scales[t_index];
+		float4 r_rect_samples = settings.sirRects.Get()[r_index];
+		float  r_scale        = settings.sirScales.Get()[r_index];
+		float4 t_rect_samples = settings.sirRects.Get()[t_index];
+		float  t_scale        = settings.sirScales.Get()[t_index];
 
 		for (int sample_index = 0; sample_index < WorkgroupSizeX; sample_index++) {
 			GroupMemoryBarrierWithGroupSync();
@@ -144,5 +147,5 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 	uint sample_index      = base_sample + ThreadID;
 	uint receive_out_index = settings.receiveBatchOffset + receive_index;
 	if (sample_index < SampleCount)
-		response[receive_out_index * SampleCount + sample_index] += output_samples[ThreadID];
+		settings.response.Get()[receive_out_index * SampleCount + sample_index] += output_samples[ThreadID];
 }

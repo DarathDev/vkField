@@ -16,6 +16,11 @@ layout(constant_id =  8) const float SamplingFrequency = 0;
 layout(constant_id =  9) const float SpeedOfSound      = 0;
 
 struct PackSpatialImpulseResponseSettings {
+	vk::BufferPointer<RectangularApertureBuffer> transmitApertures;
+	vk::BufferPointer<RectangularApertureBuffer> receiveApertures;
+	vk::BufferPointer<ScatterBuffer> scatters;
+	vk::BufferPointer<float4[]> sirRects;
+	vk::BufferPointer<float[]> sirScales;
 	uint scatterBatchOffset;
 	uint receiveBatchOffset;
 };
@@ -40,9 +45,9 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	if (any(GlobalInvocationID >= dispatch_test))
 		return;
 
-	RectangularAperture r_aperture = receiveApertures[settings.receiveBatchOffset + receive_index];
-	RectangularAperture t_aperture = transmitApertures[transmit_index];
-	Scatter             scatter    = scatters[settings.scatterBatchOffset + scatter_index];
+	RectangularAperture r_aperture = settings.receiveApertures.Get().apertures[settings.receiveBatchOffset + receive_index];
+	RectangularAperture t_aperture = settings.transmitApertures.Get().apertures[transmit_index];
+	Scatter             scatter    = settings.scatters.Get().scatters[settings.scatterBatchOffset + scatter_index];
 
 	float fs = SamplingFrequency;
 	float dt = 1.f / fs;
@@ -81,8 +86,8 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 
 	uint t_out_index = scatter_index * TransmitCount + transmit_index;
 	uint r_out_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
-	packed_spatial_impulse_response_rects[t_out_index]  = t_rect_samples;
-	packed_spatial_impulse_response_rects[r_out_index]  = r_rect_samples;
-	packed_spatial_impulse_response_scales[t_out_index] = t_scale;
-	packed_spatial_impulse_response_scales[r_out_index] = r_scale;
+	settings.sirRects.Get()[t_out_index]  = t_rect_samples;
+	settings.sirRects.Get()[r_out_index]  = r_rect_samples;
+	settings.sirScales.Get()[t_out_index] = t_scale;
+	settings.sirScales.Get()[r_out_index] = r_scale;
 }

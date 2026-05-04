@@ -18,20 +18,10 @@ public struct Scatter {
   public float amplitude;
 };
 
-[[vk::binding(0, 0)]]
-public StructuredBuffer<RectangularAperture> transmitApertures;
+public struct RectangularApertureBuffer {
+  public RectangularAperture apertures[];
+}
 
-[[vk::binding(1, 0)]]
-public StructuredBuffer<RectangularAperture> receiveApertures;
-
-[[vk::binding(2, 0)]]
-public StructuredBuffer<Scatter> scatters;
-
-[[vk::binding(3, 0)]]
-public RWStructuredBuffer<float> response;
-
-[[vk::binding(4, 0)]]
-public RWStructuredBuffer<float4> packed_spatial_impulse_response_rects;
-
-[[vk::binding(5, 0)]]
-public RWStructuredBuffer<float> packed_spatial_impulse_response_scales;
+public struct ScatterBuffer {
+  public Scatter scatters[];
+}

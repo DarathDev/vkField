@@ -75,10 +75,14 @@ vkPulseEchoSimulationResources :: struct {
 	packSpatialImpulseMemory: vkField_vk.Memory,
 	packSpatialImpulseResponsePipeline: vkField_vk.ComputePipeline(vkPackSpatialImpulseResponseSpecConstants),
 	pulseEchoPipeline: vkField_vk.ComputePipeline(vkPulseEchoSpecConstants),
-	descriptorSet: vk.DescriptorSet,
 }
 
 vkPackSpatialImpulseResponsePushConstants :: struct {
+	transmitApertures: vk.DeviceAddress,
+	receiveApertures:  vk.DeviceAddress,
+	scatters:          vk.DeviceAddress,
+	sirRects:          vk.DeviceAddress,
+	sirScales:         vk.DeviceAddress,
 	scatterBatchOffset : u32,
 	receiveBatchOffset : u32,
 }
@@ -97,6 +101,9 @@ vkPackSpatialImpulseResponseSpecConstants :: struct {
 }
 
 vkPulseEchoPushConstants :: struct {
+	sirRects:          vk.DeviceAddress,
+	sirScales:         vk.DeviceAddress,
+	response:          vk.DeviceAddress,
 	receiveBatchOffset : u32,
 }
 
@@ -126,7 +133,7 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 	}
 
 	simulator.physicalDevices = vkField_vk.get_physical_devices(simulator.instance.instance) or_return
-	requiredCapabilities: vkField_vk.DeviceCapabilities = {.Synchronization2, .Maintenance4}
+	requiredCapabilities: vkField_vk.DeviceCapabilities = {.Synchronization2, .Maintenance4, .BufferDeviceAddress}
 	physicalDevice, physicalDeviceAvailable := vkField_vk.pick_physical_device(
 		simulator.instance.instance,
 		simulator.physicalDevices,
@@ -272,52 +279,6 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 			"Pulse Echo",
 		),
 	) or_return
-
-	descriptorSet := check(vkField_vk.allocate_descriptor_set(device, simulator.computeDescriptorPool, simulator.computeDescriptorSetLayout)) or_return
-
-	// TODO(rnp): if this is vulkan 1.3 then BDA should just be used for most of these
-	transmitElementsDescriptor: vk.DescriptorBufferInfo = {
-		buffer = transmitElementsBuffer.main.buffer,
-		range  = transmitElementsBuffer.main.size,
-		offset = 0,
-	}
-	receiveElementsDescriptor: vk.DescriptorBufferInfo = {
-		buffer = receiveElementsBuffer.main.buffer,
-		range  = receiveElementsBuffer.main.size,
-		offset = 0,
-	}
-	scattersDescriptor: vk.DescriptorBufferInfo = {
-		buffer = scattersBuffer.main.buffer,
-		range  = scattersBuffer.main.size,
-		offset = 0,
-	}
-	responseDescriptor: vk.DescriptorBufferInfo = {
-		buffer = responseBuffer.main.buffer,
-		range  = responseBuffer.main.size,
-		offset = 0,
-	}
-	packSpatialImpulseDescriptor: vk.DescriptorBufferInfo = {
-		buffer = packSpatialImpulseBuffers[0].buffer,
-		range  = packSpatialImpulseBuffers[0].size,
-		offset = 0,
-	}
-	packSpatialImpulseScaleDescriptor: vk.DescriptorBufferInfo = {
-		buffer = packSpatialImpulseBuffers[1].buffer,
-		range  = packSpatialImpulseBuffers[1].size,
-		offset = 0,
-	}
-
-	vkField_vk.update_descriptor_sets(
-		device,
-		{
-			{dstSet = descriptorSet, dstBinding = 0, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = &transmitElementsDescriptor},
-			{dstSet = descriptorSet, dstBinding = 1, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = &receiveElementsDescriptor},
-			{dstSet = descriptorSet, dstBinding = 2, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = &scattersDescriptor},
-			{dstSet = descriptorSet, dstBinding = 3, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = &responseDescriptor},
-			{dstSet = descriptorSet, dstBinding = 4, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = &packSpatialImpulseDescriptor},
-			{dstSet = descriptorSet, dstBinding = 5, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, pBufferInfo = &packSpatialImpulseScaleDescriptor},
-		},
-	)
 	
 	simulator.simulationResources = vkPulseEchoSimulationResources {
 		transmitElementsBuffer = transmitElementsBuffer,
@@ -328,7 +289,6 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 		packSpatialImpulseMemory = packSpatialImpulseMemory,
 		packSpatialImpulseResponsePipeline = packSpatialImpulseResponsePipeline,
 		pulseEchoPipeline = pulseEchoPipeline,
-		descriptorSet = descriptorSet,
 	}
 	return
 }
@@ -441,10 +401,6 @@ vkSimulate :: proc(
 	pulseEchoConstants := resources.pulseEchoPipeline.specializationConstants
 	for receiveOffset : u32 = 0; receiveOffset < u32(settings.receiveElementCount); receiveOffset += u32(sirSpecConstants.ReceiveBatchCount) {
 		for scatterOffset : u32 = 0; scatterOffset < u32(settings.scatterCount); scatterOffset += u32(sirSpecConstants.ScatterBatchCount) {
-			packSpatialImpulseResponsePushConstants := vkPackSpatialImpulseResponsePushConstants {
-				scatterBatchOffset = scatterOffset,
-				receiveBatchOffset = receiveOffset,
-			}
 			vkField_vk.cmd_pipeline_barrier(
 				commandBuffer,
 				{},
@@ -472,11 +428,17 @@ vkSimulate :: proc(
 			)
 
 			vk.CmdBindPipeline(commandBuffer, .COMPUTE, resources.packSpatialImpulseResponsePipeline.pipeline)
-			vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.packSpatialImpulseResponsePipelineLayout,
-								 0, 1, &resources.descriptorSet, 0, nil)
 
-			vkField_vk.cmd_push_constants(commandBuffer, simulator.packSpatialImpulseResponsePipelineLayout,
-									  {.COMPUTE}, packSpatialImpulseResponsePushConstants)
+			vkField_vk.cmd_push_constants(commandBuffer, simulator.packSpatialImpulseResponsePipelineLayout, {.COMPUTE}, 
+				vkPackSpatialImpulseResponsePushConstants {
+					transmitApertures = vkField_vk.get_buffer_address(device, resources.transmitElementsBuffer.main),
+					receiveApertures = vkField_vk.get_buffer_address(device, resources.receiveElementsBuffer.main),
+					scatters = vkField_vk.get_buffer_address(device, resources.scattersBuffer.main),
+					sirRects = vkField_vk.get_buffer_address(device, resources.packSpatialImpulseBuffers[0]),
+					sirScales = vkField_vk.get_buffer_address(device, resources.packSpatialImpulseBuffers[1]),
+					scatterBatchOffset = scatterOffset,
+					receiveBatchOffset = receiveOffset,
+			})
 
 			vk.CmdDispatch(
 				commandBuffer,
@@ -520,23 +482,21 @@ vkSimulate :: proc(
 				{},
 			)
 
-			pulseEchoPushConstants := vkPulseEchoPushConstants {
-				receiveBatchOffset = receiveOffset,
-			}
-			vkField_vk.cmd_push_constants(commandBuffer, simulator.pulseEchoPipelineLayout,
-			                              {.COMPUTE}, pulseEchoPushConstants)
 			vk.CmdBindPipeline(commandBuffer, .COMPUTE, resources.pulseEchoPipeline.pipeline)
-			vk.CmdBindDescriptorSets(commandBuffer, .COMPUTE, simulator.pulseEchoPipelineLayout,
-			                         0, 1, &resources.descriptorSet, 0, nil)
+			vkField_vk.cmd_push_constants(commandBuffer, simulator.pulseEchoPipelineLayout, {.COMPUTE}, 
+				vkPulseEchoPushConstants {
+					sirRects = vkField_vk.get_buffer_address(device, resources.packSpatialImpulseBuffers[0]),
+					sirScales = vkField_vk.get_buffer_address(device, resources.packSpatialImpulseBuffers[1]),
+					response = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
+					receiveBatchOffset = receiveOffset,
+			})
 			
-			{
-				vk.CmdDispatch(
-					commandBuffer,
-					u32(math.ceil(f32(pulseEchoConstants.SampleCount) / f32(pulseEchoConstants.WorkgroupSizeX))),
-					pulseEchoConstants.ReceiveBatchCount,
-					1,
-				)
-			}
+			vk.CmdDispatch(
+				commandBuffer,
+				u32(math.ceil(f32(pulseEchoConstants.SampleCount) / f32(pulseEchoConstants.WorkgroupSizeX))),
+				pulseEchoConstants.ReceiveBatchCount,
+				1,
+			)
 		}
 	}
 
