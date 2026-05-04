@@ -1,4 +1,4 @@
-module pulse_echo_common;
+module pulseEchoCommon;
 
 public struct RectangularAperture {
   public float3 position;

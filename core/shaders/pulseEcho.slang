@@ -1,6 +1,6 @@
-module pulse_echo;
+module pulseEcho;
 
-import pulse_echo_common;
+import pulseEchoCommon;
 import util;
 
 layout(constant_id =  0) const uint  WorkgroupSizeX    = 64;

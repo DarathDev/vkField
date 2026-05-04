@@ -1,6 +1,6 @@
-module pack_spatial_impulse_response;
+module packSpatialImpulseResponse;
 
-import pulse_echo_common;
+import pulseEchoCommon;
 import util;
 
 layout(constant_id =  0) const uint  WorkgroupSizeX    = 4;

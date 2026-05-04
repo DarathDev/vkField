@@ -10,14 +10,14 @@ SHADER_FOLDER :: "core/shaders/"
 
 VKFIELD_PULSE_ECHO_SHADERS: []SlangShaderFile = {
 	{
-		path       = SHADER_FOLDER + "pack_spatial_impulse_response.slang",
-		outputName = "pack_spatial_impulse_response",
-		type       = .Compute
+		path       = SHADER_FOLDER + "packSpatialImpulseResponse.slang",
+		outputName = "packSpatialImpulseResponse",
+		type       = .Compute,
 	},
 	{
-		path       = SHADER_FOLDER + "pulse_echo.slang",
-		outputName = "pulse_echo",
-		type       = .Compute
+		path       = SHADER_FOLDER + "pulseEcho.slang",
+		outputName = "pulseEcho",
+		type       = .Compute,
 	},
 }
 VKFIELD_DEBUG_PRECOMPILED_SHADERS: []SlangShaderFile = {}

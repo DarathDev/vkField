@@ -28,8 +28,8 @@ MAX_FRAMES_IN_FLIGHT :: 2
 
 DISPATCH_TIMEOUT :: 1000 * time.Second
 
-SHADER_PULSE_ECHO_COMP                  :: #load("shaders/pulse_echo.spv")
-SHADER_PACK_SPATIAL_IMPULSE_RESPONSE_COMP :: #load("shaders/pack_spatial_impulse_response.spv")
+SHADER_PULSE_ECHO_COMP                    :: #load("shaders/pulseEcho.spv")
+SHADER_PACK_SPATIAL_IMPULSE_RESPONSE_COMP :: #load("shaders/packSpatialImpulseResponse.spv")
 
 @(private = "file")
 debugLogger: log.Logger
