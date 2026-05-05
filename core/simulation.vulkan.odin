@@ -67,20 +67,18 @@ vkSimulationResources :: union {
 }
 
 vkPulseEchoSimulationResources :: struct {
-	transmitElementsBuffer:   vkStagableBuffer,
-	receiveElementsBuffer:    vkStagableBuffer,
-	scattersBuffer:           vkStagableBuffer,
-	responseBuffer:           vkStagableBuffer,
+	elementsBuffer: vkStagableBuffer,
+	scattersBuffer: vkStagableBuffer,
+	responseBuffer: vkStagableBuffer,
 	sirBuffer: vkField_vk.Buffer,
 	packSirPipeline: vkField_vk.ComputePipeline(vkPackSirSpecConstants),
 	pulseEchoPipeline: vkField_vk.ComputePipeline(vkPulseEchoSpecConstants),
 }
 
 vkPackSirPushConstants :: struct {
-	transmitApertures:       vk.DeviceAddress,
-	receiveApertures:        vk.DeviceAddress,
-	scatters:                vk.DeviceAddress,
-	spatialImpulseResponses: vk.DeviceAddress,
+	elements                : vk.DeviceAddress,
+	scatters                : vk.DeviceAddress,
+	spatialImpulseResponses : vk.DeviceAddress,
 	scatterBatchOffset : u32,
 	receiveBatchOffset : u32,
 }
@@ -89,9 +87,11 @@ vkPackSirSpecConstants :: struct {
 	WorkgroupSizeX    : u32,
 	WorkgroupSizeY    : u32,
 	WorkgroupSizeZ    : u32,
-	ScatterBatchCount : u32,
-	ReceiveBatchCount : u32,
 	TransmitCount     : u32,
+	ReceiveCount      : u32,
+	ScatterCount      : u32,
+	ReceiveBatchCount : u32,
+	ScatterBatchCount : u32,
 	Cumulative        : u32,
 	StartTime         : f32,
 	SamplingFrequency : f32,
@@ -117,6 +117,7 @@ vkStagableBuffer :: struct {
 	main: vkField_vk.Buffer,
 	staging : Maybe(vkField_vk.Buffer),
 }
+
 
 create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
@@ -204,10 +205,11 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 
 	device := simulator.device
 
-	transmitElementsBuffer := check(prepare_stream(device, size_of(Element) * auto_cast settings.transmitElementCount)) or_return
-	receiveElementsBuffer  := check(prepare_stream(device, size_of(Element) * auto_cast settings.receiveElementCount)) or_return
-	scattersBuffer         := check(prepare_stream(device, size_of(Scatter) * auto_cast settings.scatterCount)) or_return
-	responseBuffer         := check(prepare_readback(device, size_of(f32) * auto_cast (settings.receiveElementCount * settings.sampleCount))) or_return
+	elementTotalSize := vkElementBufferSize(settings)
+
+	elementsBuffer := check(prepare_stream(device, elementTotalSize)) or_return
+	scattersBuffer := check(prepare_stream(device, size_of(Scatter) * auto_cast settings.scatterCount)) or_return
+	responseBuffer := check(prepare_readback(device, size_of(f32) * auto_cast (settings.receiveElementCount * settings.sampleCount))) or_return
 
 	packSirWorkGroupSize :[3]u32: {4, 4, 4}
 
@@ -244,9 +246,11 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 				WorkgroupSizeX    = 4,
 				WorkgroupSizeY    = 4,
 				WorkgroupSizeZ    = 4,
-				ScatterBatchCount = u32(scatterBatchCount),
-				ReceiveBatchCount = u32(receiveBatchCount),
 				TransmitCount     = u32(settings.transmitElementCount),
+				ReceiveCount      = u32(settings.receiveElementCount),
+				ScatterCount      = u32(settings.scatterCount),
+				ReceiveBatchCount = u32(receiveBatchCount),
+				ScatterBatchCount = u32(scatterBatchCount),
 				Cumulative        = settings.cumulative ? 1 : 0,
 				StartTime         = settings.startTime,
 				SamplingFrequency = settings.samplingFrequency,
@@ -275,8 +279,7 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 	) or_return
 	
 	simulator.simulationResources = vkPulseEchoSimulationResources {
-		transmitElementsBuffer = transmitElementsBuffer,
-		receiveElementsBuffer = receiveElementsBuffer,
+		elementsBuffer = elementsBuffer,
 		scattersBuffer = scattersBuffer,
 		responseBuffer = responseBuffer,
 		sirBuffer = sirBuffer,
@@ -294,8 +297,7 @@ destroy_vulkan_simulator_resources :: proc(simulator : ^vkSimulator) {
 		vkField_vk.destroy_compute_pipeline(device, resources.pulseEchoPipeline)
 		vkField_vk.destroy_compute_pipeline(device, resources.packSirPipeline)
 
-		release_staged_buffer(device, resources.transmitElementsBuffer)
-		release_staged_buffer(device, resources.receiveElementsBuffer)
+		release_staged_buffer(device, resources.elementsBuffer)
 		release_staged_buffer(device, resources.scattersBuffer)
 		release_staged_buffer(device, resources.responseBuffer)
 		vkField_vk.release_buffer(device, resources.sirBuffer)
@@ -326,6 +328,7 @@ vkSimulate :: proc(
 
 	device := simulator.device
 
+	elements := vkPackElementBuffer(settings, transmitElements, receiveElements)
 	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
 
 	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
@@ -336,10 +339,8 @@ vkSimulate :: proc(
 	}
 	check(vk.BeginCommandBuffer(commandBuffer, &commandBeginInfo)) or_return
 
-	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(transmitElements), 
-		resources.transmitElementsBuffer.main, resources.transmitElementsBuffer.staging.? or_else {})
-	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(receiveElements), 
-		resources.receiveElementsBuffer.main, resources.receiveElementsBuffer.staging.? or_else {})
+	vkField_vk.cmd_upload(commandBuffer, elements, 
+		resources.elementsBuffer.main, resources.elementsBuffer.staging.? or_else {})
 	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(scatters), 
 		resources.scattersBuffer.main, resources.scattersBuffer.staging.? or_else {})
 	vkField_vk.cmd_clear_buffer(commandBuffer, resources.responseBuffer.main)
@@ -349,16 +350,8 @@ vkSimulate :: proc(
 		{},
 		{
 			{
-				buffer = resources.transmitElementsBuffer.main.buffer,
-				size   = resources.transmitElementsBuffer.main.size,
-				srcStageMask  = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask  = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ},
-			},
-			{
-				buffer = resources.receiveElementsBuffer.main.buffer,
-				size   = resources.receiveElementsBuffer.main.size,
+				buffer = resources.elementsBuffer.main.buffer,
+				size   = resources.elementsBuffer.main.size,
 				srcStageMask  = {.TRANSFER, .HOST},
 				srcAccessMask = {.TRANSFER_WRITE},
 				dstStageMask  = {.COMPUTE_SHADER},
@@ -410,8 +403,7 @@ vkSimulate :: proc(
 
 			vkField_vk.cmd_push_constants(commandBuffer, simulator.packSirPipelineLayout, {.COMPUTE}, 
 				vkPackSirPushConstants {
-					transmitApertures = vkField_vk.get_buffer_address(device, resources.transmitElementsBuffer.main),
-					receiveApertures = vkField_vk.get_buffer_address(device, resources.receiveElementsBuffer.main),
+					elements = vkField_vk.get_buffer_address(device, resources.elementsBuffer.main),
 					scatters = vkField_vk.get_buffer_address(device, resources.scattersBuffer.main),
 					spatialImpulseResponses = vkField_vk.get_buffer_address(device, resources.sirBuffer),
 					scatterBatchOffset = scatterOffset,
@@ -636,4 +628,55 @@ prepare_readback :: proc(
 		buffer.staging = readbackBuffer
 	}
 	return
+}
+
+vkPackElementBuffer :: proc(settings: SimulationSettings, transmitElements: []Element, receiveElements: []Element) -> []byte {
+	assert(len(transmitElements) == auto_cast settings.transmitElementCount)
+	assert(len(receiveElements) == auto_cast settings.receiveElementCount)
+	elementTotalSize := vkElementBufferSize(settings)
+	elementCount : int = auto_cast (settings.transmitElementCount + settings.receiveElementCount)
+	rectangularElements := make([]byte, elementTotalSize)
+	elementBuffer := rectangularElements
+	positions: [][3]f32; normals: [][3]f32; sizes: [][2]f32; apodizations: []f32; delays: []f32
+	elementBuffer, positions = seperateSoaBuffer(elementBuffer, elementCount, [3]f32)
+	elementBuffer, normals = seperateSoaBuffer(elementBuffer, elementCount, [3]f32)
+	elementBuffer, sizes = seperateSoaBuffer(elementBuffer, elementCount, [2]f32)
+	elementBuffer, apodizations = seperateSoaBuffer(elementBuffer, elementCount, f32)
+	elementBuffer, delays = seperateSoaBuffer(elementBuffer, elementCount, f32)
+	assert(len(elementBuffer) == 0)
+
+	seperateSoaBuffer :: proc(buffer: []byte, elementCount: int, $T: typeid) -> (mainBuffer: []byte, splitBuffer: []T) {
+		tempSplitBuffer: []byte
+		tempSplitBuffer, mainBuffer = slice.split_at(buffer, size_of(T) * elementCount)
+		splitBuffer = slice.reinterpret([]T, tempSplitBuffer)
+		return
+	}
+	
+	for element, index in transmitElements {
+		positions[index] = element.aperture.rectangle.position
+		normals[index] = element.aperture.rectangle.normal
+		sizes[index] = element.aperture.rectangle.size
+		apodizations[index] = element.apodization
+		delays[index] = element.delay
+	}
+	for element, index in receiveElements {
+		receiveIndex := index + auto_cast settings.transmitElementCount
+		positions[receiveIndex] = element.aperture.rectangle.position
+		normals[receiveIndex] = element.aperture.rectangle.normal
+		sizes[receiveIndex] = element.aperture.rectangle.size
+		apodizations[receiveIndex] = element.apodization
+		delays[receiveIndex] = element.delay
+	}
+	return rectangularElements
+}
+
+vkElementBufferSize :: proc(settings: SimulationSettings) -> vk.DeviceSize {
+	elementTotalSize: vk.DeviceSize
+	elementTotalSize += size_of([3]f32) // Position
+	elementTotalSize += size_of([3]f32) // Normals
+	elementTotalSize += size_of([2]f32) // Sizes
+	elementTotalSize += size_of(f32) // Apodizations
+	elementTotalSize += size_of(f32) // Delays
+	elementTotalSize *= auto_cast (settings.transmitElementCount + settings.receiveElementCount)
+	return elementTotalSize
 }
