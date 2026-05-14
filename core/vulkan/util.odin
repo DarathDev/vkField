@@ -10,8 +10,6 @@ import "core:time"
 import vk "vendor:vulkan"
 import vkField_util "vkField:utility"
 
-ENABLE_VALIDATION_LAYERS :: #config(ENABLE_VALIDATION_LAYERS, ODIN_DEBUG)
-
 API_VERSION_13 :: vk.API_VERSION_1_3
 
 VKFIELD_VULKAN_INITIALIZED := false
@@ -291,7 +289,7 @@ format_object_label :: proc(objectType: vk.ObjectType, label: string) -> string 
 
 @(private)
 name_object :: proc(device: Device, objectHandle: u64, objectType: vk.ObjectType, name: string) -> vk.Result {
-	when ENABLE_VALIDATION_LAYERS {
+	if .DebugUtils in device.instanceCapabilities {
 		formattedName := format_object_label(objectType, name)
 		pName := strings.clone_to_cstring(formattedName, context.temp_allocator)
 		nameInfo: vk.DebugUtilsObjectNameInfoEXT = {

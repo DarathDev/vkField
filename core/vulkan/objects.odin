@@ -31,31 +31,67 @@ AppInfo :: struct {
 	engineName:    string,
 	engineVersion: vkField_util.SemanticVersion,
 	vulkanVersion: u32,
-	presentable:   bool,
+	requiredCapabilities: InstanceCapabilities,
+	optionalCapabilities: InstanceCapabilities,
 }
 
+InstanceCapability :: enum {
+	Validation,
+	Present,
+	PresentWin32,
+	PresentMetal,
+	PresentXcb,
+	PresentXLib,
+	PresentWayland,
+	DeviceAddressBindingReport,
+	DebugUtils,
+	Portability,
+}
+
+InstanceCapabilities :: bit_set[InstanceCapability]
+
 Instance :: struct {
-	instance:          vk.Instance,
-	apiVersion:        u32,
-	enabledLayers:     [dynamic]string,
-	enabledExtensions: [dynamic]string,
+	instance:            vk.Instance,
+	apiVersion:          u32,
+	enabledCapabilities: InstanceCapabilities,
 }
 
 @(require_results)
 create_instance :: proc(
 	appInfo: AppInfo,
-	requiredExtensions: []string = {},
-	optionalExtensions: []string = {},
 	debugUserData: ^DebugUserData = nil,
 	allocator := context.allocator,
 ) -> (
 	instance: Instance,
 	result: vk.Result,
 ) {
+	availableLayerCount: u32
+	for result = check(vk.EnumerateInstanceLayerProperties(&availableLayerCount, nil)); result == .INCOMPLETE; {  }
+	availableLayers := make([]vk.LayerProperties, availableLayerCount, context.temp_allocator)
+	for result = check(vk.EnumerateInstanceLayerProperties(&availableLayerCount, raw_data(availableLayers))); result == .INCOMPLETE; {  }
+
+	availableExtensionCount: u32
+	for result = check(vk.EnumerateInstanceExtensionProperties(nil, &availableExtensionCount, nil)); result == .INCOMPLETE; {  }
+	availableExtensions := make([]vk.ExtensionProperties, availableExtensionCount, context.temp_allocator)
+	for result = check(vk.EnumerateInstanceExtensionProperties(nil, &availableExtensionCount, raw_data(availableExtensions))); result == .INCOMPLETE; {  }
+
+	capabilities := deduce_instance_capabilities(availableLayers, availableExtensions)
+	if !check(capabilities > appInfo.requiredCapabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT}
+	instance.enabledCapabilities = appInfo.requiredCapabilities + (appInfo.optionalCapabilities & capabilities)
+
+
+	when ODIN_OS == .Darwin {
+		if !check(.Portability in capabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT}
+		instance.enabledCapabilities += {.Portability}
+	}
+
+	enabledLayers := make_instance_layer_names(instance.enabledCapabilities, context.temp_allocator)
+	enabledExtensions := make_instance_extension_names(instance.enabledCapabilities, context.temp_allocator)
 
 	instanceCreateInfo := vk.InstanceCreateInfo {
 		sType            = .INSTANCE_CREATE_INFO,
 		pNext            = nil,
+		flags            = make_instance_flags(instance.enabledCapabilities),
 		pApplicationInfo = &vk.ApplicationInfo {
 			sType = .APPLICATION_INFO,
 			pNext = nil,
@@ -68,110 +104,39 @@ create_instance :: proc(
 				auto_cast appInfo.engineVersion.patch,
 			),
 			apiVersion = appInfo.vulkanVersion,
+
 		},
+		enabledLayerCount       = auto_cast len(enabledLayers),
+		ppEnabledLayerNames     = raw_data(enabledLayers),
+		enabledExtensionCount   = auto_cast len(enabledExtensions),
+		ppEnabledExtensionNames = raw_data(enabledExtensions),
 	}
 
-	instance.enabledLayers = make([dynamic]string, allocator)
-	instance.enabledExtensions = make([dynamic]string, allocator)
+	dbgInfo : ^vk.DebugUtilsMessengerCreateInfoEXT
+	if .DebugUtils in instance.enabledCapabilities {
+		severity: vk.DebugUtilsMessageSeverityFlagsEXT
+		if context.logger.lowest_level <= .Error   { severity |= {.ERROR} }
+		if context.logger.lowest_level <= .Warning { severity |= {.WARNING} }
+		if context.logger.lowest_level <= .Info    { severity |= {.INFO} }
+		if context.logger.lowest_level <= .Debug   { severity |= {.VERBOSE} }
 
-	availableExtensionCount: u32
-	for result = check(vk.EnumerateInstanceExtensionProperties(nil, &availableExtensionCount, nil)); result == .INCOMPLETE; {  }
-	availableExtensions := make([]vk.ExtensionProperties, availableExtensionCount, context.temp_allocator)
-	for result = check(vk.EnumerateInstanceExtensionProperties(nil, &availableExtensionCount, raw_data(availableExtensions))); result == .INCOMPLETE; {  }
+		messageType: vk.DebugUtilsMessageTypeFlagsEXT = {.GENERAL, .PERFORMANCE}
+		if .Validation in instance.enabledCapabilities {messageType |= {.VALIDATION}}
+		if .DeviceAddressBindingReport in instance.enabledCapabilities {messageType |= {.DEVICE_ADDRESS_BINDING}}
 
-	availableExtensionStrings := make([]string, availableExtensionCount, context.temp_allocator)
-	for i : u32 = 0; i < availableExtensionCount; i += 1 {
-		availableExtensionStrings[i] = strings.string_from_null_terminated_ptr(auto_cast &availableExtensions[i].extensionName, vk.MAX_EXTENSION_NAME_SIZE)
-	}
-
-	if appInfo.presentable {
-		presentExtensions := get_required_instance_presentation_extensions()
-		for extension in presentExtensions {
-			if has_string(availableExtensionStrings, extension) {
-				append(&instance.enabledExtensions, extension)
-			} else {
-				check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
-				return
-			}
-		}
-	}
-
-	when ODIN_OS == .Darwin {
-		instanceCreateInfo.flags |= {.ENUMERATE_PORTABILITY_KHR}
-		extension :: vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
-		if has_string(availableExtensionStrings, extension) {
-			append(&instance.enabledExtensions, extension)
-		} else {
-			check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
-			return
-		}
-	}
-
-	when ENABLE_VALIDATION_LAYERS {
-		validationLayer :: "VK_LAYER_KHRONOS_validation"
-
-		// TODO(rnp): technically this needs to be checked for support
-		append(&instance.enabledLayers, validationLayer)
-		ppEnabledLayers: []cstring = make([]cstring, len(instance.enabledLayers), context.temp_allocator)
-		for layer, i in instance.enabledLayers {
-			ppEnabledLayers[i] = strings.clone_to_cstring(layer, context.temp_allocator)
-		}
-		instanceCreateInfo.enabledLayerCount = u32(len(instance.enabledLayers))
-		instanceCreateInfo.ppEnabledLayerNames = raw_data(ppEnabledLayers)
-
-		// TODO(rnp): array of desired debug extensions
-		debug_utils := false
-		if has_string(availableExtensionStrings, vk.EXT_DEBUG_UTILS_EXTENSION_NAME) {
-			append(&instance.enabledExtensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME)
-			debug_utils = true
+		
+		dbgInfo = new(vk.DebugUtilsMessengerCreateInfoEXT, context.temp_allocator)
+		dbgInfo^ = {
+			sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+			pNext           = nil,
+			messageSeverity = severity,
+			messageType     = messageType,
+			pfnUserCallback = vk_messenger_callback,
+			pUserData       = debugUserData,
 		}
 
-		if debug_utils {
-			severity: vk.DebugUtilsMessageSeverityFlagsEXT
-			if context.logger.lowest_level <= .Error   { severity |= {.ERROR} }
-			if context.logger.lowest_level <= .Warning { severity |= {.WARNING} }
-			if context.logger.lowest_level <= .Info    { severity |= {.INFO} }
-			if context.logger.lowest_level <= .Debug   { severity |= {.VERBOSE} }
-
-			dbgInfo := vk.DebugUtilsMessengerCreateInfoEXT {
-				sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-				pNext           = nil,
-				messageSeverity = severity,
-				messageType     = {.GENERAL, .VALIDATION, .PERFORMANCE},
-				pfnUserCallback = vk_messenger_callback,
-				pUserData       = debugUserData,
-			}
-
-			if has_string(availableExtensionStrings, vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME) {
-				append(&instance.enabledExtensions, vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME)
-				dbgInfo.messageType |= {.DEVICE_ADDRESS_BINDING}
-			}
-
-			instanceCreateInfo.pNext = &dbgInfo
-		}
+		instanceCreateInfo.pNext = dbgInfo
 	}
-
-	for extension in requiredExtensions {
-		if has_string(availableExtensionStrings, extension) {
-			append(&instance.enabledExtensions, extension)
-		} else {
-			check(vk.Result.ERROR_EXTENSION_NOT_PRESENT, fmt.tprintf("Extension %v is not available", extension)) or_return
-			return
-		}
-	}
-
-	for extension in optionalExtensions {
-		if has_string(availableExtensionStrings, extension) {
-			append(&instance.enabledExtensions, extension)
-		}
-	}
-
-	ppEnabledExtensions: []cstring = make([]cstring, len(instance.enabledExtensions), context.temp_allocator)
-	for extension, i in instance.enabledExtensions {
-		ppEnabledExtensions[i] = strings.clone_to_cstring(extension, context.temp_allocator)
-	}
-	instanceCreateInfo.enabledExtensionCount = u32(len(instance.enabledExtensions))
-	instanceCreateInfo.ppEnabledExtensionNames = raw_data(ppEnabledExtensions)
 
 	check(vk.CreateInstance(&instanceCreateInfo, nil, &instance.instance)) or_return
 	instance.apiVersion = appInfo.vulkanVersion
@@ -190,8 +155,6 @@ has_string :: proc(strs: []string, str: string) -> (result: bool) {
 }
 
 destroy_instance :: proc(instance: ^Instance) {
-	delete(instance.enabledLayers)
-	delete(instance.enabledExtensions)
 	vk.DestroyInstance(instance.instance, nil)
 }
 
@@ -210,6 +173,7 @@ DebugUserData :: struct {
 
 @(require_results)
 create_debug_messenger :: proc(instance: Instance, userData: ^DebugUserData, allocator := context.allocator) -> (dbgMsg: DebugMessenger, result: vk.Result) {
+	if !check(.DebugUtils in instance.enabledCapabilities) do return {}, .ERROR_EXTENSION_NOT_PRESENT
 	// Severity based on logger level.
 	severity: vk.DebugUtilsMessageSeverityFlagsEXT
 	if context.logger.lowest_level <= .Error { severity |= {.ERROR} }
@@ -225,11 +189,8 @@ create_debug_messenger :: proc(instance: Instance, userData: ^DebugUserData, all
 		pfnUserCallback = vk_messenger_callback,
 		pUserData       = userData,
 	}
-	for &availableExtension in instance.enabledExtensions {
-		rhs := strings.string_from_null_terminated_ptr(auto_cast &availableExtension, 128)
-		if strings.compare(vk.EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME, rhs) == 0 {
-			createInfo.messageType |= {.DEVICE_ADDRESS_BINDING}
-		}
+	if .DeviceAddressBindingReport in instance.enabledCapabilities {
+		createInfo.messageType |= {.DEVICE_ADDRESS_BINDING}
 	}
 	check(vk.CreateDebugUtilsMessengerEXT(instance.instance, &createInfo, nil, &dbgMsg.debugMessenger)) or_return
 	return
@@ -393,6 +354,7 @@ Device :: struct {
 	presentQueueIndex:   u32,
 	queues:              map[u32]vk.Queue,
 	enabledCapabilities: DeviceCapabilities,
+	instanceCapabilities: InstanceCapabilities,
 }
 
 @(require_results)
@@ -419,7 +381,7 @@ create_device :: proc(
 	device.computeQueueIndex = computeQueueIndex
 
 	transferQueueIndex: u32
-	transferQueueIndex = get_transfer_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies)
+	transferQueueIndex = get_transfer_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies, .Present in instance.enabledCapabilities)
 	queueIndices[transferQueueIndex] = 1
 	device.transferQueueIndex = transferQueueIndex
 
@@ -432,7 +394,8 @@ create_device :: proc(
 
 	presentQueueIndex: Maybe(u32)
 	if criteria.present {
-		presentQueueIndex = assert(get_present_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies))
+		assert(.Present in instance.enabledCapabilities)
+		presentQueueIndex = get_present_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies)
 		queueIndices[presentQueueIndex.(u32)] = 1
 		device.presentQueueIndex = presentQueueIndex.(u32)
 	}
@@ -472,9 +435,9 @@ create_device :: proc(
 	device.enabledCapabilities = criteria.requiredCapabilities + (criteria.optionalCapabilities & physicalDevice.capabilities)
 	enabledExtensions := make([dynamic]cstring, context.temp_allocator)
 	add_capability_extensions(&enabledExtensions, device.enabledCapabilities)
-	ppEnabledLayers: []cstring = make([]cstring, len(instance.enabledLayers), context.temp_allocator)
-	for layer, i in instance.enabledLayers {
-		ppEnabledLayers[i] = strings.clone_to_cstring(layer, context.temp_allocator)
+	ppEnabledLayers := make([dynamic]cstring, context.temp_allocator)
+	if .Validation in instance.enabledCapabilities {
+		append(&ppEnabledLayers, VK_VALIDATION_LAYER_NAME)
 	}
 
 	deviceFeatures := make_device_features(device.enabledCapabilities, context.temp_allocator)
@@ -500,6 +463,7 @@ create_device :: proc(
 		vk.GetDeviceQueue(device.device, queueIndex, 0, &queue)
 		device.queues[queueIndex] = queue
 	}
+	device.instanceCapabilities = instance.enabledCapabilities
 	return
 }
 

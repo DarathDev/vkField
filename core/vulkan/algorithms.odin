@@ -16,6 +16,8 @@ assert :: vkField_util.assert
 @(private = "file")
 check :: vkField_util.check
 
+VK_VALIDATION_LAYER_NAME :: "VK_LAYER_KHRONOS_validation"
+
 DEVICE_FEATURE_EXTENSIONS: [DeviceCapability][]cstring : #partial{
 	.AtomicAddFloat32Buffer = {vk.EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME},
 	.Swapchain = {vk.KHR_SWAPCHAIN_EXTENSION_NAME},
@@ -25,25 +27,63 @@ DEVICE_FEATURE_EXTENSIONS: [DeviceCapability][]cstring : #partial{
 	.ShaderObject = {vk.EXT_SHADER_OBJECT_EXTENSION_NAME},
 	.ExternalMemoryHost = {vk.EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME},
 }
-@(rodata)
-WINDOW_PRESENT_EXTENSIONS := []string{vk.KHR_SURFACE_EXTENSION_NAME, vk.KHR_WIN32_SURFACE_EXTENSION_NAME}
-@(rodata)
-DARWIN_PRESENT_EXTENSIONS := []string{vk.KHR_SURFACE_EXTENSION_NAME, vk.EXT_METAL_SURFACE_EXTENSION_NAME}
-@(rodata)
-LINUX_PRESENT_EXTENSIONS := []string {
-	vk.KHR_SURFACE_EXTENSION_NAME,
-	vk.KHR_XCB_SURFACE_EXTENSION_NAME,
-	vk.KHR_XLIB_SURFACE_EXTENSION_NAME,
-	vk.KHR_WAYLAND_SURFACE_EXTENSION_NAME,
-}
-get_required_instance_presentation_extensions :: proc() -> []string {
-	when ODIN_OS == .Windows {
-		return WINDOW_PRESENT_EXTENSIONS
-	} else when ODIN_OS == .Darwin {
-		return DARWIN_PRESENT_EXTENSIONS
-	} else when ODIN_OS == .Linux {
-		return LINUX_PRESENT_EXTENSIONS
+
+deduce_instance_capabilities :: proc(layers: []vk.LayerProperties, extensions: []vk.ExtensionProperties) -> (capabilities: InstanceCapabilities) {
+	for &layer in layers {
+		switch (byte_arr_str(&layer.layerName)) {
+		case VK_VALIDATION_LAYER_NAME:
+			capabilities |= {.Validation}
+		}
 	}
+	for &extension in extensions {
+		switch (byte_arr_str(&extension.extensionName)) {
+		case vk.KHR_SURFACE_EXTENSION_NAME:
+			capabilities |= {.Present}
+		case vk.KHR_WIN32_SURFACE_EXTENSION_NAME:
+			capabilities |= {.PresentWin32}
+		case vk.EXT_METAL_SURFACE_EXTENSION_NAME:
+			capabilities |= {.PresentMetal}
+		case vk.KHR_XCB_SURFACE_EXTENSION_NAME:
+			capabilities |= {.PresentXcb}
+		case vk.KHR_XLIB_SURFACE_EXTENSION_NAME:
+			capabilities |= {.PresentXLib}
+		case vk.KHR_WAYLAND_SURFACE_EXTENSION_NAME:
+			capabilities |= {.PresentWayland}
+		case vk.EXT_DEBUG_UTILS_EXTENSION_NAME:
+			capabilities |= {.DebugUtils}
+		case vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME:
+				capabilities |= {.Portability}
+		}
+	}
+
+	if capabilities & {.PresentWin32, .PresentMetal, .PresentXcb, .PresentXLib, .PresentWayland} == {} { capabilities -= {.Present} }
+	return
+}
+
+make_instance_flags :: proc(capabilities : InstanceCapabilities) -> (flags: vk.InstanceCreateFlags){
+	if .Portability in capabilities {flags += {.ENUMERATE_PORTABILITY_KHR}}
+	return
+}
+
+make_instance_layer_names :: proc(capabilities : InstanceCapabilities, allocator:= context.allocator) -> (layers: []cstring) {
+	dLayers := make([dynamic]cstring, allocator)
+	if .Validation in capabilities { append(&dLayers, VK_VALIDATION_LAYER_NAME)}
+	shrink(&dLayers); layers = dLayers[:]
+	return
+}
+
+make_instance_extension_names :: proc(capabilities : InstanceCapabilities, allocator:= context.allocator) -> (extensions: []cstring) {
+	dExtensions := make([dynamic]cstring, allocator)
+	if .Present in capabilities { append(&dExtensions, vk.KHR_SURFACE_EXTENSION_NAME) }
+	if .PresentWin32 in capabilities { append(&dExtensions, vk.KHR_WIN32_SURFACE_EXTENSION_NAME) }
+	if .PresentMetal in capabilities { append(&dExtensions, vk.EXT_METAL_SURFACE_EXTENSION_NAME) }
+	if .PresentXcb in capabilities { append(&dExtensions, vk.KHR_XCB_SURFACE_EXTENSION_NAME) }
+	if .PresentXLib in capabilities { append(&dExtensions, vk.KHR_XLIB_SURFACE_EXTENSION_NAME) }
+	if .PresentWayland in capabilities { append(&dExtensions, vk.KHR_WAYLAND_SURFACE_EXTENSION_NAME) }
+	if .DebugUtils in capabilities { append(&dExtensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME) }
+	if .Portability in capabilities { append(&dExtensions, vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) }
+	shrink(&dExtensions); extensions = dExtensions[:]
+	return
 }
 
 deduce_device_capabilities :: proc(features2: vk.PhysicalDeviceFeatures2, extensions: []vk.ExtensionProperties) -> (capabilities: DeviceCapabilities) {
@@ -362,7 +402,7 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 
 CheckPresentSupport :: #force_inline proc(physicalDevice: vk.PhysicalDevice, familyIndex: int) -> b32 {
 	when ODIN_OS == .Windows {
-		return vk.GetPhysicalDeviceWin32PresentationSupportKHR != nil && vk.GetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, u32(familyIndex))
+		return vk.GetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, u32(familyIndex))
 	} else {
 		vkField_util.throw_not_implemented()
 		return false
@@ -413,11 +453,11 @@ get_compute_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyP
 	return computeQueue
 }
 
-get_transfer_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties) -> u32 {
+get_transfer_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties, checkPresent: bool) -> u32 {
 	transferQueue: u32
 	for family, index in families {
 		if .TRANSFER in family.queueFlags {
-			if .GRAPHICS not_in family.queueFlags && .COMPUTE not_in family.queueFlags && !CheckPresentSupport(device, index) {
+			if .GRAPHICS not_in family.queueFlags && .COMPUTE not_in family.queueFlags && (!checkPresent || !CheckPresentSupport(device, index)) {
 				return u32(index)
 			}
 			transferQueue = u32(index)
@@ -439,7 +479,7 @@ get_headless_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamily
 	return headlessQueue
 }
 
-get_present_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties) -> (queueIndex: Maybe(u32), result: vk.Result) {
+get_present_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties) -> (queueIndex: Maybe(u32)) {
 	for family, index in families {
 		if CheckPresentSupport(device, index) {
 			queueIndex = u32(index)

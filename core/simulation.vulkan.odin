@@ -22,8 +22,6 @@ assert :: vkField_util.assert
 @(private = "file")
 assume :: vkField_util.assume
 
-ENABLE_VALIDATION_LAYERS :: #config(ENABLE_VALIDATION_LAYERS, ODIN_DEBUG)
-
 MAX_FRAMES_IN_FLIGHT :: 2
 
 DISPATCH_TIMEOUT :: 1000 * time.Second
@@ -123,10 +121,10 @@ create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SU
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
 	simulator.instance = confirm(
-		vkField_vk.create_instance({appName = "vkField", vulkanVersion = vk.API_VERSION_1_3}, debugUserData = simulator.debugUserData),
+		vkField_vk.create_instance({appName = "vkField", vulkanVersion = vk.API_VERSION_1_3, optionalCapabilities = {.Validation, .DebugUtils}}, debugUserData = simulator.debugUserData),
 	) or_return
 
-	when ENABLE_VALIDATION_LAYERS {
+	if .DebugUtils in simulator.instance.enabledCapabilities {
 		simulator.debugMessenger = confirm(vkField_vk.create_debug_messenger(simulator.instance, simulator.debugUserData)) or_return
 	}
 
@@ -192,7 +190,7 @@ destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 	vkField_vk.destroy_descriptor_set_layout(simulator.device, simulator.computeDescriptorSetLayout)
 	vkField_vk.destroy_device(&simulator.device)
 	vkField_vk.free_physical_devices(&simulator.physicalDevices)
-	when ENABLE_VALIDATION_LAYERS {
+	if .Validation in simulator.instance.enabledCapabilities {
 		vkField_vk.destroy_debug_messenger(simulator.instance.instance, &simulator.debugMessenger)
 	}
 	vkField_vk.destroy_instance(&simulator.instance)
@@ -329,6 +327,7 @@ vkSimulate :: proc(
 	device := simulator.device
 
 	elements := vkPackElementBuffer(settings, transmitElements, receiveElements)
+	defer delete(elements)
 	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
 
 	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
