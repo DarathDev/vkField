@@ -72,6 +72,8 @@ create_instance :: proc(appInfo: AppInfo, debugUserData: ^DebugUserData = nil, a
 	if !check(capabilities > appInfo.requiredCapabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT }
 	instance.enabledCapabilities = appInfo.requiredCapabilities + (appInfo.optionalCapabilities & capabilities)
 
+	if .Present in instance.enabledCapabilities { instance.enabledCapabilities += capabilities & PRESENT_SUBCAPABILITIES }
+
 	when ODIN_OS == .Darwin {
 		if !check(.Portability in capabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT }
 		instance.enabledCapabilities += {.Portability}

@@ -18,6 +18,8 @@ check :: vkField_util.check
 
 VK_VALIDATION_LAYER_NAME :: "VK_LAYER_KHRONOS_validation"
 
+PRESENT_SUBCAPABILITIES: InstanceCapabilities : {.PresentWin32, .PresentMetal, .PresentXcb, .PresentXLib, .PresentWayland}
+
 DEVICE_FEATURE_EXTENSIONS: [DeviceCapability][]cstring : #partial{
 	.AtomicAddFloat32Buffer = {vk.EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME},
 	.Swapchain = {vk.KHR_SWAPCHAIN_EXTENSION_NAME},
@@ -56,7 +58,7 @@ deduce_instance_capabilities :: proc(layers: []vk.LayerProperties, extensions: [
 		}
 	}
 
-	if capabilities & {.PresentWin32, .PresentMetal, .PresentXcb, .PresentXLib, .PresentWayland} == {} { capabilities -= {.Present} }
+	if capabilities & PRESENT_SUBCAPABILITIES == {} { capabilities -= {.Present} }
 	return
 }
 
