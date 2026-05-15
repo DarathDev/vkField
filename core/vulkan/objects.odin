@@ -1,11 +1,11 @@
 package vkField_vulkan
 
-import "core:reflect"
 import "base:intrinsics"
 import "base:runtime"
 import "core:fmt"
 import "core:math/bits"
 import "core:mem"
+import "core:reflect"
 import "core:slice"
 import "core:strings"
 import win32 "core:sys/windows"
@@ -26,11 +26,11 @@ EXCUSE_RESOURCE_LABELS: bool
 /* -------------------- */
 
 AppInfo :: struct {
-	appName:       string,
-	appVersion:    vkField_util.SemanticVersion,
-	engineName:    string,
-	engineVersion: vkField_util.SemanticVersion,
-	vulkanVersion: u32,
+	appName:              string,
+	appVersion:           vkField_util.SemanticVersion,
+	engineName:           string,
+	engineVersion:        vkField_util.SemanticVersion,
+	vulkanVersion:        u32,
 	requiredCapabilities: InstanceCapabilities,
 	optionalCapabilities: InstanceCapabilities,
 }
@@ -57,14 +57,7 @@ Instance :: struct {
 }
 
 @(require_results)
-create_instance :: proc(
-	appInfo: AppInfo,
-	debugUserData: ^DebugUserData = nil,
-	allocator := context.allocator,
-) -> (
-	instance: Instance,
-	result: vk.Result,
-) {
+create_instance :: proc(appInfo: AppInfo, debugUserData: ^DebugUserData = nil, allocator := context.allocator) -> (instance: Instance, result: vk.Result) {
 	availableLayerCount: u32
 	for result = check(vk.EnumerateInstanceLayerProperties(&availableLayerCount, nil)); result == .INCOMPLETE; {  }
 	availableLayers := make([]vk.LayerProperties, availableLayerCount, context.temp_allocator)
@@ -76,12 +69,11 @@ create_instance :: proc(
 	for result = check(vk.EnumerateInstanceExtensionProperties(nil, &availableExtensionCount, raw_data(availableExtensions))); result == .INCOMPLETE; {  }
 
 	capabilities := deduce_instance_capabilities(availableLayers, availableExtensions)
-	if !check(capabilities > appInfo.requiredCapabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT}
+	if !check(capabilities > appInfo.requiredCapabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT }
 	instance.enabledCapabilities = appInfo.requiredCapabilities + (appInfo.optionalCapabilities & capabilities)
 
-
 	when ODIN_OS == .Darwin {
-		if !check(.Portability in capabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT}
+		if !check(.Portability in capabilities) { return {}, .ERROR_EXTENSION_NOT_PRESENT }
 		instance.enabledCapabilities += {.Portability}
 	}
 
@@ -89,10 +81,10 @@ create_instance :: proc(
 	enabledExtensions := make_instance_extension_names(instance.enabledCapabilities, context.temp_allocator)
 
 	instanceCreateInfo := vk.InstanceCreateInfo {
-		sType            = .INSTANCE_CREATE_INFO,
-		pNext            = nil,
-		flags            = make_instance_flags(instance.enabledCapabilities),
-		pApplicationInfo = &vk.ApplicationInfo {
+		sType                   = .INSTANCE_CREATE_INFO,
+		pNext                   = nil,
+		flags                   = make_instance_flags(instance.enabledCapabilities),
+		pApplicationInfo        = &vk.ApplicationInfo {
 			sType = .APPLICATION_INFO,
 			pNext = nil,
 			pApplicationName = strings.clone_to_cstring(appInfo.appName, context.temp_allocator),
@@ -104,7 +96,6 @@ create_instance :: proc(
 				auto_cast appInfo.engineVersion.patch,
 			),
 			apiVersion = appInfo.vulkanVersion,
-
 		},
 		enabledLayerCount       = auto_cast len(enabledLayers),
 		ppEnabledLayerNames     = raw_data(enabledLayers),
@@ -112,19 +103,18 @@ create_instance :: proc(
 		ppEnabledExtensionNames = raw_data(enabledExtensions),
 	}
 
-	dbgInfo : ^vk.DebugUtilsMessengerCreateInfoEXT
+	dbgInfo: ^vk.DebugUtilsMessengerCreateInfoEXT
 	if .DebugUtils in instance.enabledCapabilities {
 		severity: vk.DebugUtilsMessageSeverityFlagsEXT
-		if context.logger.lowest_level <= .Error   { severity |= {.ERROR} }
+		if context.logger.lowest_level <= .Error { severity |= {.ERROR} }
 		if context.logger.lowest_level <= .Warning { severity |= {.WARNING} }
-		if context.logger.lowest_level <= .Info    { severity |= {.INFO} }
-		if context.logger.lowest_level <= .Debug   { severity |= {.VERBOSE} }
+		if context.logger.lowest_level <= .Info { severity |= {.INFO} }
+		if context.logger.lowest_level <= .Debug { severity |= {.VERBOSE} }
 
 		messageType: vk.DebugUtilsMessageTypeFlagsEXT = {.GENERAL, .PERFORMANCE}
-		if .Validation in instance.enabledCapabilities {messageType |= {.VALIDATION}}
-		if .DeviceAddressBindingReport in instance.enabledCapabilities {messageType |= {.DEVICE_ADDRESS_BINDING}}
+		if .Validation in instance.enabledCapabilities { messageType |= {.VALIDATION} }
+		if .DeviceAddressBindingReport in instance.enabledCapabilities { messageType |= {.DEVICE_ADDRESS_BINDING} }
 
-		
 		dbgInfo = new(vk.DebugUtilsMessengerCreateInfoEXT, context.temp_allocator)
 		dbgInfo^ = {
 			sType           = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -203,22 +193,23 @@ destroy_debug_messenger :: proc(instance: vk.Instance, dbgMsg: ^DebugMessenger) 
 /* ------------------- */
 /* ----- Surface ----- */
 /* ------------------- */
-when ODIN_OS == .Windows {
-	create_surface :: proc {
-		create_win32_surface,
-	}
 
-	create_win32_surface :: proc(instance: vk.Instance, window: win32.HWND, hInstance: win32.HINSTANCE) -> (surface: vk.SurfaceKHR, ok: vk.Result) {
-		createInfo: vk.Win32SurfaceCreateInfoKHR = {
-			sType     = .WIN32_SURFACE_CREATE_INFO_KHR,
-			flags     = {},
-			hwnd      = window,
-			hinstance = hInstance,
-		}
-		check(vk.CreateWin32SurfaceKHR(instance, &createInfo, nil, &surface)) or_return
-		return
-	}
+create_surface :: proc {
+	create_win32_surface,
 }
+
+create_win32_surface :: proc(instance: Instance, window: win32.HWND, hInstance: win32.HINSTANCE) -> (surface: vk.SurfaceKHR, ok: vk.Result) {
+	assert(.PresentWin32 in instance.enabledCapabilities)
+	createInfo: vk.Win32SurfaceCreateInfoKHR = {
+		sType     = .WIN32_SURFACE_CREATE_INFO_KHR,
+		flags     = {},
+		hwnd      = window,
+		hinstance = hInstance,
+	}
+	check(vk.CreateWin32SurfaceKHR(instance.instance, &createInfo, nil, &surface)) or_return
+	return
+}
+
 destroy_surface :: proc(instance: vk.Instance, surface: vk.SurfaceKHR) {
 	vk.DestroySurfaceKHR(instance, surface, nil)
 }
@@ -345,15 +336,15 @@ free_physical_devices :: proc(devices: ^#soa[]PhysicalDevice, allocator := conte
 /* ------------------ */
 
 Device :: struct {
-	physicalDevice:      PhysicalDevice,
-	device:              vk.Device,
-	multiQueueIndex:     u32,
-	computeQueueIndex:   u32,
-	transferQueueIndex:  u32,
-	headlessQueueIndex:  u32,
-	presentQueueIndex:   u32,
-	queues:              map[u32]vk.Queue,
-	enabledCapabilities: DeviceCapabilities,
+	physicalDevice:       PhysicalDevice,
+	device:               vk.Device,
+	multiQueueIndex:      u32,
+	computeQueueIndex:    u32,
+	transferQueueIndex:   u32,
+	headlessQueueIndex:   u32,
+	presentQueueIndex:    u32,
+	queues:               map[u32]vk.Queue,
+	enabledCapabilities:  DeviceCapabilities,
 	instanceCapabilities: InstanceCapabilities,
 }
 
@@ -1392,20 +1383,28 @@ create_graphics_pipelines :: proc(
 }
 
 ComputePipeline :: struct(T: typeid) {
-	pipeline:     vk.Pipeline,
-	shaderModule: vk.ShaderModule,
+	pipeline:                vk.Pipeline,
+	shaderModule:            vk.ShaderModule,
 	specializationConstants: T,
 }
 
-create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: vk.PipelineLayout, specializationConstants: $T, label := "") -> 
-	(pipeline: ComputePipeline(T), ok: vk.Result) where intrinsics.type_is_struct(T) {
+create_compute_pipeline :: proc(
+	device: Device,
+	shaderInfo: ShaderInfo,
+	layout: vk.PipelineLayout,
+	specializationConstants: $T,
+	label := "",
+) -> (
+	pipeline: ComputePipeline(T),
+	ok: vk.Result,
+) where intrinsics.type_is_struct(T) {
 	checkLabel(label)
 
 	assert(len(shaderInfo.entryPoints) == 1)
 	pipeline.shaderModule = create_shader_module(device, shaderInfo.code, label) or_return
 
 	pipeline.specializationConstants = specializationConstants
-	specializationInfo :vk.SpecializationInfo
+	specializationInfo: vk.SpecializationInfo
 	specializationMap := make([]vk.SpecializationMapEntry, intrinsics.type_struct_field_count(T))
 	defer delete(specializationMap)
 	if size_of(specializationConstants) > 0 {
@@ -1414,8 +1413,8 @@ create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: 
 		for &entry, index in specializationMap {
 			entry = {
 				constantID = auto_cast index,
-				offset = auto_cast specializationOffsets[index],
-				size = reflect.size_of_typeid(specializationTypes[index].id),
+				offset     = auto_cast specializationOffsets[index],
+				size       = reflect.size_of_typeid(specializationTypes[index].id),
 			}
 		}
 
@@ -1424,7 +1423,7 @@ create_compute_pipeline :: proc(device: Device, shaderInfo: ShaderInfo, layout: 
 			pMapEntries   = raw_data(specializationMap),
 			dataSize      = size_of(specializationConstants),
 			pData         = &pipeline.specializationConstants,
-		}		
+		}
 	}
 
 	stageCreateInfo: vk.PipelineShaderStageCreateInfo = {
@@ -1464,11 +1463,11 @@ destroy_compute_pipeline :: proc(device: Device, pipeline: ComputePipeline($T)) 
 /* ------------------ */
 
 Memory :: struct {
-	memory:      vk.DeviceMemory,
-	type:        u32,
-	properties:  vk.MemoryPropertyFlags,
-	size:        vk.DeviceSize,
-	mappedData:  rawptr,
+	memory:     vk.DeviceMemory,
+	type:       u32,
+	properties: vk.MemoryPropertyFlags,
+	size:       vk.DeviceSize,
+	mappedData: rawptr,
 }
 
 allocate_memory :: proc(device: Device, memoryType: u32, size: vk.DeviceSize, label := "") -> (memory: Memory, result: vk.Result) {
@@ -1508,10 +1507,10 @@ free_memory :: proc(device: Device, memory: Memory) {
 /* --------------------- */
 
 GpuResource :: struct {
-	memory:       Memory,
-	offset:       vk.DeviceSize,
-	size:         vk.DeviceSize,
-	sharingMode:  vk.SharingMode,
+	memory:      Memory,
+	offset:      vk.DeviceSize,
+	size:        vk.DeviceSize,
+	sharingMode: vk.SharingMode,
 }
 
 @(require_results)

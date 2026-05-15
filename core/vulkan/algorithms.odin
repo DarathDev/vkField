@@ -52,7 +52,7 @@ deduce_instance_capabilities :: proc(layers: []vk.LayerProperties, extensions: [
 		case vk.EXT_DEBUG_UTILS_EXTENSION_NAME:
 			capabilities |= {.DebugUtils}
 		case vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME:
-				capabilities |= {.Portability}
+			capabilities |= {.Portability}
 		}
 	}
 
@@ -60,19 +60,19 @@ deduce_instance_capabilities :: proc(layers: []vk.LayerProperties, extensions: [
 	return
 }
 
-make_instance_flags :: proc(capabilities : InstanceCapabilities) -> (flags: vk.InstanceCreateFlags){
-	if .Portability in capabilities {flags += {.ENUMERATE_PORTABILITY_KHR}}
+make_instance_flags :: proc(capabilities: InstanceCapabilities) -> (flags: vk.InstanceCreateFlags) {
+	if .Portability in capabilities { flags += {.ENUMERATE_PORTABILITY_KHR} }
 	return
 }
 
-make_instance_layer_names :: proc(capabilities : InstanceCapabilities, allocator:= context.allocator) -> (layers: []cstring) {
+make_instance_layer_names :: proc(capabilities: InstanceCapabilities, allocator := context.allocator) -> (layers: []cstring) {
 	dLayers := make([dynamic]cstring, allocator)
-	if .Validation in capabilities { append(&dLayers, VK_VALIDATION_LAYER_NAME)}
+	if .Validation in capabilities { append(&dLayers, VK_VALIDATION_LAYER_NAME) }
 	shrink(&dLayers); layers = dLayers[:]
 	return
 }
 
-make_instance_extension_names :: proc(capabilities : InstanceCapabilities, allocator:= context.allocator) -> (extensions: []cstring) {
+make_instance_extension_names :: proc(capabilities: InstanceCapabilities, allocator := context.allocator) -> (extensions: []cstring) {
 	dExtensions := make([dynamic]cstring, allocator)
 	if .Present in capabilities { append(&dExtensions, vk.KHR_SURFACE_EXTENSION_NAME) }
 	if .PresentWin32 in capabilities { append(&dExtensions, vk.KHR_WIN32_SURFACE_EXTENSION_NAME) }
@@ -670,7 +670,7 @@ DynamicGpuArena :: struct {
 	device:           Device,
 	memoryTypes:      [dynamic; vk.MAX_MEMORY_TYPES]u32,
 	blocks:           [dynamic; DYNAMIC_GPU_ARENA_BLOCK_COUNT]Memory,
-	offsets:           [dynamic; DYNAMIC_GPU_ARENA_BLOCK_COUNT]vk.DeviceSize,
+	offsets:          [dynamic; DYNAMIC_GPU_ARENA_BLOCK_COUNT]vk.DeviceSize,
 	currentBlockSize: vk.DeviceSize,
 }
 
@@ -705,10 +705,10 @@ dynamic_gpu_arena_allocate :: proc(
 ) -> (
 	memory: Memory,
 	offset: vk.DeviceSize,
-	result : vk.Result,
+	result: vk.Result,
 ) {
 	assert(size <= DYNAMIC_GPU_ARENA_MAX_ALLOCATION_SIZE)
-	for index in 0..<len(arena.blocks) {
+	for index in 0 ..< len(arena.blocks) {
 		memory = arena.blocks[index]
 		if bits.bitfield_extract(validMemoryTypes, auto_cast memory.type, 1) != 1 do continue
 		offset = auto_cast runtime.align_forward(cast(uint)arena.offsets[index], cast(uint)alignment)
@@ -984,10 +984,10 @@ cmd_populate_mip :: proc(commandBuffer: vk.CommandBuffer, image: Image) {
 	unimplemented()
 }
 
-cmd_clear_buffer :: proc (commandBuffer: vk.CommandBuffer, buffer: Buffer) {
+cmd_clear_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer: Buffer) {
 	cmd_fill_buffer(commandBuffer, buffer, 0)
 }
 
-cmd_fill_buffer :: proc (commandBuffer: vk.CommandBuffer, buffer: Buffer, value: u32) {
+cmd_fill_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer: Buffer, value: u32) {
 	vk.CmdFillBuffer(commandBuffer, buffer.buffer, buffer.offset, buffer.size, value)
 }
