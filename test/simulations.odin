@@ -47,7 +47,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 
 	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
 
-	data : []f32
+	data: []f32
 	data, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
 	defer delete(data)
 	fmt.println(data)

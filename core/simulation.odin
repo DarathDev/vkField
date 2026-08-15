@@ -107,7 +107,15 @@ simulate :: proc(
 	return
 }
 
-plan_simulation :: proc(simulator: ^Simulator, settings: ^SimulationSettings, transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) -> (ok := true) {
+plan_simulation :: proc(
+	simulator: ^Simulator,
+	settings: ^SimulationSettings,
+	transmitElements: []Element,
+	receiveElements: []Element,
+	scatters: []Scatter,
+) -> (
+	ok := true,
+) {
 	minDistance, maxDistance := findDistanceLimits(transmitElements, receiveElements, scatters)
 	settings.startTime = minDistance / settings.speedOfSound
 	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))

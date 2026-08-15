@@ -12,13 +12,7 @@ import "core:sys/windows"
 LOAD_RENDERDOC :: #config(LOAD_RENDERDOC, true)
 
 // utility to load renderdoc, pass in the path to renderdoc if not installed at the default path
-load_api :: proc(
-	version: Version = .API_Version_1_6_0,
-) -> (
-	lib: dynlib.Library,
-	rdoc_api: rawptr,
-	ok: bool,
-) {
+load_api :: proc(version: Version = .API_Version_1_6_0) -> (lib: dynlib.Library, rdoc_api: rawptr, ok: bool) {
 	when LOAD_RENDERDOC {
 		when ODIN_OS == .Linux {
 			RTLD_NOLOAD :: cast(posix.RTLD_Flag_Bits)2

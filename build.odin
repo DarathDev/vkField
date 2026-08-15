@@ -33,15 +33,9 @@ VKFIELD_ODIN_BUILD_OPTIONS: []OdinBuildOption = {}
 VKFIELD_ODIN_RELEASE_OPTIONS: []OdinBuildOption = {}
 VKFIELD_ODIN_DEBUG_OPTIONS: []OdinBuildOption = {{flag = "debug"}}
 VKFIELD_ODIN_TEST_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"test"}}}
-VKFIELD_ODIN_LIB_OPTIONS: []OdinBuildOption = {
-	{flag = "build-mode", value = {"lib"}},
-	{flag = "reloc-mode", value = {"pic"}},
-}
+VKFIELD_ODIN_LIB_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"lib"}}, {flag = "reloc-mode", value = {"pic"}}}
 
-VKFIELD_ODIN_TEST_DEFINES: []OdinDefine = {
-	{name = "ODIN_TEST_THREADS",     value = "1"},
-	{name = "ODIN_TEST_RANDOM_SEED", value = "0xcafebabe"},
-}
+VKFIELD_ODIN_TEST_DEFINES: []OdinDefine = {{name = "ODIN_TEST_THREADS", value = "1"}, {name = "ODIN_TEST_RANDOM_SEED", value = "0xcafebabe"}}
 
 VKFIELD_ODIN_DEBUG_DEFINES: []OdinDefine = {{name = "REQUIRE_RESOURCE_LABELS", value = "false"}}
 

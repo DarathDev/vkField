@@ -20,57 +20,66 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 typedef ptrdiff_t iz;
-typedef size_t    uz;
+typedef size_t uz;
 
-struct Simulator { };
+struct Simulator {};
 
 struct SimulationSettings {
-	f32 samplingFrequency;
-	f32 speedOfSound;
-	i32 transmitElementCount;
-	i32 receiveElementCount;
-	i32 scatterCount;
-	f32 startTime;
-	i32 sampleCount;
-	bool cumulative;
-	f32 simulationTime;
-	i32 dispatchWorkLimit;
+  f32 samplingFrequency;
+  f32 speedOfSound;
+  i32 transmitElementCount;
+  i32 receiveElementCount;
+  i32 scatterCount;
+  f32 startTime;
+  i32 sampleCount;
+  bool cumulative;
+  f32 simulationTime;
+  i32 dispatchWorkLimit;
 };
 
 typedef enum {
-	Rectangular = 0,
+  Rectangular = 0,
 } ApertureType;
 
 typedef struct {
-	f32 apertureInfo[12];
-	f32 apertureType;
-	f32 apodization;
-	f32 delay;
-	f32 padding;
+  f32 apertureInfo[12];
+  f32 apertureType;
+  f32 apodization;
+  f32 delay;
+  f32 padding;
 } Element;
 
 typedef struct {
-	f32 position[3];
-	f32 padding0;
-	f32 normal[3];
-	f32 padding1;
-	f32 size[2];
-	f32 padding2[2];
+  f32 position[3];
+  f32 padding0;
+  f32 normal[3];
+  f32 padding1;
+  f32 size[2];
+  f32 padding2[2];
 } RectangularAperture;
 
 typedef struct {
-	f32 position[3];
-	f32 amplitude;
+  f32 position[3];
+  f32 amplitude;
 } Scatter;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-	LIB_FN bool create_vulkan_simulator_c(Simulator** simulator, void* logFunc, void* pUserData);
-	LIB_FN void destroy_vulkan_simulator_c(Simulator* simulator, void* logFunc, void* pUserData);
-	LIB_FN bool plan_simulation_c(Simulator* simulator, SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, void* logFunc, void* pUserData);
-	LIB_FN bool simulate_c(Simulator* simulator, SimulationSettings* settings, Element* transmitElements, Element* receiveElements, Scatter* scatters, float* pulseEcho, void* logFunc, void* pUserData);
+LIB_FN bool create_vulkan_simulator_c(Simulator **simulator, void *logFunc,
+                                      void *pUserData);
+LIB_FN void destroy_vulkan_simulator_c(Simulator *simulator, void *logFunc,
+                                       void *pUserData);
+LIB_FN bool plan_simulation_c(Simulator *simulator,
+                              SimulationSettings *settings,
+                              Element *transmitElements,
+                              Element *receiveElements, Scatter *scatters,
+                              void *logFunc, void *pUserData);
+LIB_FN bool simulate_c(Simulator *simulator, SimulationSettings *settings,
+                       Element *transmitElements, Element *receiveElements,
+                       Scatter *scatters, float *pulseEcho, void *logFunc,
+                       void *pUserData);
 
 #ifdef __cplusplus
 }
