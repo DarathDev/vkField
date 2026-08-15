@@ -67,7 +67,7 @@ Scatter :: struct {
 #assert(size_of(Scatter) == 16)
 
 simulate :: proc(
-	simulator: Simulator,
+	simulator: ^Simulator,
 	settings: ^SimulationSettings,
 	transmitElements: []Element,
 	receiveElements: []Element,

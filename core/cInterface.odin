@@ -67,7 +67,7 @@ simulate_c :: proc "c" (
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
 	data, ok := simulate(
-		simulator^,
+		simulator,
 		settings,
 		transmitElements[:settings.transmitElementCount],
 		receiveElements[:settings.receiveElementCount],

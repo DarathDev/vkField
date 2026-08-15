@@ -48,7 +48,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
 
 	data: []f32
-	data, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
+	data, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
 	defer delete(data)
 	fmt.println(data)
 	return
@@ -81,7 +81,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 	defer delete(scatters)
 
 	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
-	_, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
+	_, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
 	return
 }
 
@@ -112,7 +112,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	defer delete(scatters)
 
 	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
-	_, ok = vkField.simulate(simulator, &settings, transmitElements, receiveElements, scatters)
+	_, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
 	return
 }
 
