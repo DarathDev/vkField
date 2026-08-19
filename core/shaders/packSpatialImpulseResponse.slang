@@ -27,26 +27,47 @@ struct PackSirSettings {
 	float4* spatialImpulseResponses;
 	uint scatterBatchOffset;
 	uint receiveBatchOffset;
+};
 
+struct ApertureResponse {
+	float4 rectSamples;
+	float scale;
 };
 
 [[vk::push_constant]]
 ConstantBuffer<PackSirSettings> settings;
 
-float aperture_power_denominator(in float4 rect_samples, in float dt, in float dt2)
-{
-  return rect_samples.w - rect_samples.x <= 1 ? dt : dt2;
+ApertureResponse compute_aperture_response(
+	in float3 position, in float3 normal, in float2 size, in float apodization,
+	in Scatter scatter,
+	in float fs, in float dt, in float start_time) {
+
+	float4x4 apertureTransform = mul(rotate(normal, float3(0, 0, 1)), translate(position, 0));
+	float3 scatterRelativePosition = mul(apertureTransform, float4(scatter.position, 1)).xyz;
+	float2 dieProjection = abs(size * scatterRelativePosition.xy);
+	float distance = sqrt(dot(scatterRelativePosition, scatterRelativePosition));
+	float t0 = distance / SpeedOfSound;
+	float dt1 = min(dieProjection.x, dieProjection.y) / distance / SpeedOfSound;
+	float dt2 = max(dieProjection.x, dieProjection.y) / distance / SpeedOfSound;
+
+	ApertureResponse response;
+
+	float4 rectTimes = t0 + 0.5f * (dt1 * float4(-1, +1, -1, +1) + dt2 * float4(-1, -1, +1, +1));
+	response.rectSamples = (rectTimes - start_time) * fs;
+
+	float denom = response.rectSamples.w - response.rectSamples.x <= 1 ? dt : dt2;
+	response.scale = sqrt(scatter.amplitude) * apodization * size.x * size.y
+	               / (2 * PI * distance * denom);
+	return response;
 }
 
 [shader("compute")]
 [numthreads(WorkgroupSizeX, WorkgroupSizeY, WorkgroupSizeZ)]
-void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
-{
-	uint scatter_index  = GlobalInvocationID.x;
-	uint receive_base_index  = GlobalInvocationID.y;
+void main(uint3 GlobalInvocationID: SV_DispatchThreadID) {
+	uint scatter_index = GlobalInvocationID.x;
+	uint receive_base_index = GlobalInvocationID.y;
 	uint transmit_index = GlobalInvocationID.z;
 	uint receive_index = receive_base_index + settings.receiveBatchOffset;
-
 
 	uint3 dispatch_test = uint3(ScatterBatchCount, ReceiveBatchCount, TransmitCount);
 	if (any(GlobalInvocationID >= dispatch_test))
@@ -70,51 +91,26 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID)
 	float rDelay = ((float *)elements)[TransmitCount + receive_index];
 	elements = (void *)&((float *)elements)[elementCount];
 
-	Scatter             scatter    = settings.scatters[settings.scatterBatchOffset + scatter_index];
+	Scatter scatter = settings.scatters[settings.scatterBatchOffset + scatter_index];
 
 	float fs = SamplingFrequency;
 	float dt = 1.f / fs;
 
-	float4x4 t_aperture_transform = mul(rotate(tNormal, float3(0, 0, 1)),
-	                                    translate(tPosition, 0));
-	float3   t_scatter_position    = mul(t_aperture_transform, float4(scatter.position, 1)).xyz;
-	float2   t_die_projection      = abs(tSize * t_scatter_position.xy);
-	float    t_scatter_dist_square = dot(t_scatter_position, t_scatter_position);
-	float    t_t0                  = sqrt(t_scatter_dist_square) / SpeedOfSound;
-	float    t_dt1                 = t_t0 * min(t_die_projection.x, t_die_projection.y) / t_scatter_dist_square;
-	float    t_dt2                 = t_t0 * max(t_die_projection.x, t_die_projection.y) / t_scatter_dist_square;
+	ApertureResponse transmitResponse = compute_aperture_response(
+		tPosition, tNormal, tSize, tApodization,
+		scatter, fs, dt, 0);
+	ApertureResponse receiveResponse = compute_aperture_response(
+		rPosition, rNormal, rSize, rApodization,
+		scatter, fs, dt, StartTime);
 
-	float4   t_rect_times   = t_t0 + 0.5f * (t_dt1 * float4(-1, +1, -1, +1) + t_dt2 * float4(-1, -1, +1, +1));
-	float4   t_rect_samples = t_rect_times * fs;
-
-	float t_denom = aperture_power_denominator(t_rect_samples, dt, t_dt2);
-	float t_scale = sqrt(scatter.amplitude) * tApodization * tSize.x * tSize.y
-	                / (2 * PI * sqrt(t_scatter_dist_square) * t_denom);
-
-	float4x4 r_aperture_transform = mul(rotate(rNormal, float3(0, 0, 1)),
-	                                    translate(rPosition, 0));
-	float3   r_scatter_position    = mul(r_aperture_transform, float4(scatter.position, 1)).xyz;
-	float2   r_die_projection      = abs(rSize * r_scatter_position.xy);
-	float    r_scatter_dist_square = dot(r_scatter_position, r_scatter_position);
-	float    r_t0                  = sqrt(r_scatter_dist_square) / SpeedOfSound;
-	float    r_dt1                 = r_t0 * min(r_die_projection.x, r_die_projection.y) / r_scatter_dist_square;
-	float    r_dt2                 = r_t0 * max(r_die_projection.x, r_die_projection.y) / r_scatter_dist_square;
-
-	float4   r_rect_times   = r_t0 + 0.5f * (r_dt1 * float4(-1, +1, -1, +1) + r_dt2 * float4(-1, -1, +1, +1));
-	float4   r_rect_samples = (r_rect_times - StartTime) * fs;
-
-	float r_denom = aperture_power_denominator(r_rect_samples, dt, r_dt2);
-	float r_scale = sqrt(scatter.amplitude) * rApodization * rSize.x * rSize.y
-	                / (2 * PI * sqrt(r_scatter_dist_square) * r_denom);
-
-	uint t_out_index = scatter_index * TransmitCount + transmit_index;
-	uint r_out_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_base_index;
+	uint transmitOutIndex = scatter_index * TransmitCount + transmit_index;
+	uint receiveOutIndex = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_base_index;
 
 	float4 *sirRects = settings.spatialImpulseResponses;
 	float *sirScales = Ptr<float>(sirRects + (ScatterBatchCount * (TransmitCount + ReceiveBatchCount)));
 
-	sirRects[t_out_index]  = t_rect_samples;
-	sirRects[r_out_index]  = r_rect_samples;
-	sirScales[t_out_index] = t_scale;
-	sirScales[r_out_index] = r_scale;
+	sirRects[transmitOutIndex] = transmitResponse.rectSamples;
+	sirRects[receiveOutIndex] = receiveResponse.rectSamples;
+	sirScales[transmitOutIndex] = transmitResponse.scale;
+	sirScales[receiveOutIndex] = receiveResponse.scale;
 }

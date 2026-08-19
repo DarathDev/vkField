@@ -91,31 +91,31 @@ float sample_receive_aperture(in int n, in int i, in float4 nRectR) {
 	}
 }
 
-groupshared float output_samples[WorkgroupSizeX];
+groupshared float outputSamples[WorkgroupSizeX];
 
 [shader("compute")]
 [numthreads(WorkgroupSizeX, 1, 1)]
 void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 {
-	const uint thread_count = WorkgroupSizeX;
+	const uint threadCount = WorkgroupSizeX;
 
-	uint base_sample   = WorkgroupSizeX * GroupID.x;
-	uint receive_index = GroupID.y;
+	uint baseSample = WorkgroupSizeX * GroupID.x;
+	uint receiveIndex = GroupID.y;
 
-	output_samples[ThreadID] = 0;
+	outputSamples[ThreadID] = 0;
 
-	uint n_total       = ScatterBatchCount * TransmitCount;
-	uint n_per_thread  = n_total / thread_count;
-	uint n_leftover    = n_total % thread_count;
-	uint n_this_thread = n_per_thread + uint(ThreadID < n_leftover);
+	uint nTotal       = ScatterBatchCount * TransmitCount;
+	uint nPerThread  = nTotal / threadCount;
+	uint nLeftover    = nTotal % threadCount;
+	uint nThisThread = nPerThread + uint(ThreadID < nLeftover);
 
-	for (uint n = 0; n < n_this_thread; n++) {
-		uint packed_index   = thread_count * n + ThreadID;
-		uint scatter_index  = packed_index / TransmitCount;
-		uint transmit_index = packed_index % TransmitCount;
+	for (uint n = 0; n < nThisThread; n++) {
+		uint packedIndex   = threadCount * n + ThreadID;
+		uint scatterIndex  = packedIndex / TransmitCount;
+		uint transmitIndex = packedIndex % TransmitCount;
 
-		uint t_index = scatter_index * TransmitCount + transmit_index;
-		uint r_index = ScatterBatchCount * TransmitCount + scatter_index * ReceiveBatchCount + receive_index;
+		uint t_index = scatterIndex * TransmitCount + transmitIndex;
+		uint r_index = ScatterBatchCount * TransmitCount + scatterIndex * ReceiveBatchCount + receiveIndex;
 
 		float4 *sirRects = settings.spatialImpulseResponses;
 		float *sirScales = Ptr<float>(sirRects + (ScatterBatchCount * (TransmitCount + ReceiveBatchCount)));
@@ -125,10 +125,10 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 		float4 t_rect_samples = sirRects[t_index];
 		float  t_scale        = sirScales[t_index];
 
-		for (int sample_index = 0; sample_index < WorkgroupSizeX; sample_index++) {
+		for (int sampleIndex = 0; sampleIndex < WorkgroupSizeX; sampleIndex++) {
 			GroupMemoryBarrierWithGroupSync();
-			int sample_n      = (sample_index + ThreadID) % WorkgroupSizeX;
-			int full_sample_n = base_sample + sample_n;
+			int sample_n      = (sampleIndex + ThreadID) % WorkgroupSizeX;
+			int full_sample_n = baseSample + sample_n;
 			if (full_sample_n < SampleCount) {
 				int minK = int(max(floor(t_rect_samples.x - 0.5f), full_sample_n - ceil(r_rect_samples.w + 0.5f)));
 				int maxK = int(min(ceil(t_rect_samples.w + 0.5f),  full_sample_n - floor(r_rect_samples.x - 0.5f)));
@@ -139,14 +139,14 @@ void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
 					float vR = sample_receive_aperture(full_sample_n, i, r_rect_samples);
 					sum += vT * vR;
 				}
-				output_samples[sample_n] += t_scale * r_scale * sum;
+				outputSamples[sample_n] += t_scale * r_scale * sum;
 			}
 		}
 	}
 
 	GroupMemoryBarrierWithGroupSync();
-	uint sample_index      = base_sample + ThreadID;
-	uint receive_out_index = settings.receiveBatchOffset + receive_index;
-	if (sample_index < SampleCount)
-		settings.response[receive_out_index * SampleCount + sample_index] += output_samples[ThreadID];
+	uint sampleIndex      = baseSample + ThreadID;
+	uint receiveOutIndex = settings.receiveBatchOffset + receiveIndex;
+	if (sampleIndex < SampleCount)
+		settings.response[receiveOutIndex * SampleCount + sampleIndex] += outputSamples[ThreadID];
 }
