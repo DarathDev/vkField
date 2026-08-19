@@ -37,27 +37,13 @@ SimulationSettings :: struct {
 	dispatchWorkLimit:    i32,
 }
 
-Element :: struct #align (16) {
-	aperture:     Aperture,
-	apertureType: f32,
-	apodization:  f32,
-	delay:        f32,
-	padding:      [4]byte,
-}
-#assert(size_of(Element) == 64)
-
-Aperture :: struct #raw_union {
-	rectangle: RectangularAperture,
-}
-#assert(size_of(Aperture) == 48)
-
-RectangularAperture :: struct {
-	position: [3]f32,
-	padding0: [4]byte,
-	normal:   [3]f32,
-	padding1: [4]byte,
-	size:     [2]f32,
-	padding2: [8]byte,
+#assert(size_of(RectangularElement) == 40)
+RectangularElement :: struct {
+	position:    [3]f32,
+	normal:      [3]f32,
+	size:        [2]f32,
+	apodization: f32,
+	delay:       f32,
 }
 
 Scatter :: struct {
@@ -69,8 +55,8 @@ Scatter :: struct {
 simulate :: proc(
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: []Element,
-	receiveElements: []Element,
+	transmitElements: #soa[]RectangularElement,
+	receiveElements: #soa[]RectangularElement,
 	scatters: []Scatter,
 	allocator := context.allocator,
 ) -> (
@@ -110,8 +96,8 @@ simulate :: proc(
 plan_simulation :: proc(
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: []Element,
-	receiveElements: []Element,
+	transmitElements: #soa[]RectangularElement,
+	receiveElements: #soa[]RectangularElement,
 	scatters: []Scatter,
 ) -> (
 	ok := true,
@@ -125,6 +111,9 @@ plan_simulation :: proc(
 	if (settings.transmitElementCount == 0) do settings.transmitElementCount = i32(len(transmitElements))
 	if (settings.receiveElementCount == 0) do settings.receiveElementCount = i32(len(receiveElements))
 	if (settings.scatterCount == 0) do settings.scatterCount = i32(len(scatters))
+	assert(settings.transmitElementCount <= auto_cast len(transmitElements))
+	assert(settings.receiveElementCount <= auto_cast len(receiveElements))
+	assert(settings.scatterCount <= auto_cast len(scatters))
 
 	switch &sim in simulator {
 	case vkSimulator:
@@ -133,7 +122,14 @@ plan_simulation :: proc(
 	return
 }
 
-findDistanceLimits :: proc(transmitElements: []Element, receiveElements: []Element, scatters: []Scatter) -> (minDistance: f32, maxDistance: f32) {
+findDistanceLimits :: proc(
+	transmitElements: #soa[]RectangularElement,
+	receiveElements: #soa[]RectangularElement,
+	scatters: []Scatter,
+) -> (
+	minDistance: f32,
+	maxDistance: f32,
+) {
 	defer assert(maxDistance - minDistance >= 0)
 	// Any distance range greater than 10m is likely an error, and furthermore would require an unreasonable amount of memory
 	defer assert(maxDistance - minDistance < 10)
@@ -142,15 +138,15 @@ findDistanceLimits :: proc(transmitElements: []Element, receiveElements: []Eleme
 	minReceiveDistance, maxReceiveDistance: f32 = math.INF_F32, 0
 	for scatter in scatters {
 		for transmit in transmitElements {
-			delta := linalg.length(scatter.position - transmit.aperture.rectangle.position)
-			elementDelta := linalg.length(transmit.aperture.rectangle.size) / 2
+			delta := linalg.length(scatter.position - transmit.position)
+			elementDelta := linalg.length(transmit.size) / 2
 			minTransmitDistance = min(minTransmitDistance, delta - elementDelta)
 			maxTransmitDistance = max(maxTransmitDistance, delta + elementDelta)
 		}
 
 		for receive in receiveElements {
-			delta := linalg.length(scatter.position - receive.aperture.rectangle.position)
-			elementDelta := linalg.length(receive.aperture.rectangle.size) / 2
+			delta := linalg.length(scatter.position - receive.position)
+			elementDelta := linalg.length(receive.size) / 2
 			minReceiveDistance = min(minReceiveDistance, delta - elementDelta)
 			maxReceiveDistance = max(maxReceiveDistance, delta + elementDelta)
 		}

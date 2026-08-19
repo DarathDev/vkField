@@ -26,13 +26,17 @@ oneRectSimulation :: proc() -> (ok := true) {
 	simulator = is_ok(check(vkField.create_vulkan_simulator())) or_return
 	defer vkField.destroy_vulkan_simulator(&simulator.(vkField.vkSimulator))
 
-	transmitElement: vkField.Element = {
-		aperture = {rectangle = {position = {0, 0, 0}, normal = {0, 0, 1}, size = {2.2e-4, 2.2e-4}}},
+	transmitElement: vkField.RectangularElement = {
+		position    = {0, 0, 0},
+		normal      = {0, 0, 1},
+		size        = {2.2e-4, 2.2e-4},
 		apodization = 1,
 	}
 
-	receiveElement: vkField.Element = {
-		aperture = {rectangle = {position = {0, 0, 0}, normal = {0, 0, 1}, size = {2.2e-4, 2.2e-4}}},
+	receiveElement: vkField.RectangularElement = {
+		position    = {0, 0, 0},
+		normal      = {0, 0, 1},
+		size        = {2.2e-4, 2.2e-4},
 		apodization = 1,
 	}
 
@@ -41,8 +45,10 @@ oneRectSimulation :: proc() -> (ok := true) {
 		amplitude = 1,
 	}
 
-	transmitElements := slice.from_ptr(&transmitElement, 1)
-	receiveElements := slice.from_ptr(&receiveElement, 1)
+	transmitElements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
+	receiveElements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
+	transmitElements[0] = transmitElement
+	receiveElements[0] = receiveElement
 	scatters := slice.from_ptr(&scatter, 1)
 
 	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
@@ -50,6 +56,8 @@ oneRectSimulation :: proc() -> (ok := true) {
 	data: []f32
 	data, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
 	defer delete(data)
+	defer delete(transmitElements)
+	defer delete(receiveElements)
 	fmt.println(data)
 	return
 }
@@ -160,15 +168,17 @@ make_random_scatters :: proc(count: int) -> []vkField.Scatter {
 	return scatters
 }
 
-make_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f32) -> []vkField.Element {
-	elements := make([]vkField.Element, columnCount * rowCount, context.allocator)
+make_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f32) -> #soa[]vkField.RectangularElement {
+	elements := make(#soa[]vkField.RectangularElement, columnCount * rowCount, context.allocator)
 	index := 0
 	for row in 0 ..< rowCount {
 		for column in 0 ..< columnCount {
 			x := (f32(column) - f32(columnCount - 1) * 0.5) * pitch[0]
 			y := (f32(row) - f32(rowCount - 1) * 0.5) * pitch[1]
 			elements[index] = {
-				aperture = {rectangle = {position = {x, y, z}, normal = {0, 0, 1}, size = size}},
+				position    = {x, y, z},
+				normal      = {0, 0, 1},
+				size        = size,
 				apodization = 1,
 			}
 			index += 1

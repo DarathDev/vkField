@@ -63,28 +63,40 @@ simulator = vkField.Simulation;
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 
-transmitElements = vkField.RectangularElement;
-transmitElements.Size = dieWidthT;
-transmitElements.Position = diePositionT;
-receiveElements = vkField.RectangularElement;
-receiveElements.Size = dieWidthR;
-receiveElements.Position = diePositionR;
-scatters = vkField.Scatter;
-scatters.Position = scatterPosition;
-scatters.Amplitude = 1;
-simulator.TransmitElements = transmitElements;
-simulator.ReceiveElements = receiveElements;
-simulator.Scatters = scatters;
+transmitSet = vkField.RectangularElementSet();
+transmitSet.Count = 1;
+transmitSet.Positions = single(reshape(diePositionT(:), 3, 1));
+transmitSet.Normals = single(reshape([0, 0, 1], 3, 1));
+transmitSet.Sizes = single(reshape(dieWidthT(:), 2, 1));
+transmitSet.Apodizations = single(1);
+transmitSet.Delays = single(0);
 
-pT = scatters.Position - transmitElements.Position;
-pR = scatters.Position - receiveElements.Position;
+receiveSet = vkField.RectangularElementSet();
+receiveSet.Count = 1;
+receiveSet.Positions = single(reshape(diePositionR(:), 3, 1));
+receiveSet.Normals = single(reshape([0, 0, 1], 3, 1));
+receiveSet.Sizes = single(reshape(dieWidthR(:), 2, 1));
+receiveSet.Apodizations = single(1);
+receiveSet.Delays = single(0);
+
+scatterSet = vkField.ScatterSet();
+scatterSet.Count = 1;
+scatterSet.Positions = single(reshape(scatterPosition(:), 3, 1));
+scatterSet.Amplitudes = single(1);
+
+simulator.TransmitElements = transmitSet;
+simulator.ReceiveElements = receiveSet;
+simulator.Scatters = scatterSet;
+
+pT = scatterSet.Positions(:, 1) - transmitSet.Positions(:, 1);
+pR = scatterSet.Positions(:, 1) - receiveSet.Positions(:, 1);
 lT = norm(pT, 2);
 lR = norm(pR, 2);
 t0T = lT/simulator.SpeedOfSound;
 t0R = lR/simulator.SpeedOfSound;
 
-eT = transmitElements.Size.*pT(1:2);
-eR = receiveElements.Size.*pR(1:2);
+eT = transmitSet.Sizes(:, 1).*pT(1:2);
+eR = receiveSet.Sizes(:, 1).*pR(1:2);
 t1T = min(abs(eT))*t0T/lT^2;
 t2T = max(abs(eT))*t0T/lT^2;
 t1R = min(abs(eR))*t0R/lR^2;
@@ -95,8 +107,8 @@ rectR = t0R + 0.5*(t1R*[-1, +1, -1, +1] + t2R*[-1, -1, +1, +1]);
 nRectT = rectT*fs;
 nRectR = rectR*fs;
 
-powerT = (prod(transmitElements.Size))/(2*pi*lT);
-powerR = (prod(receiveElements.Size))/(2*pi*lR);
+powerT = (prod(transmitSet.Sizes(:, 1)))/(2*pi*lT);
+powerR = (prod(receiveSet.Sizes(:, 1)))/(2*pi*lR);
 rectAreaT = (rectT(4) - rectT(1) <= dt)*dt + (rectT(4) - rectT(1) > dt)*(t2T);
 rectAreaR = (rectR(4) - rectR(1) <= dt)*dt + (rectR(4) - rectR(1) > dt)*(t2R);
 powerT = powerT/rectAreaT;
@@ -108,17 +120,17 @@ maxTransmitDistance = 0;
 minReceiveDistance = inf;
 maxReceiveDistance = 0;
 
-for i = 1:numel(scatters)
-    for j= 1:numel(transmitElements)
-        delta = norm(scatters(i).Position - transmitElements(j).Position, 2);
-        elementDelta = norm(transmitElements(j).Size/2, 2);
+for i = 1:scatterSet.Count
+    for j = 1:transmitSet.Count
+        delta = norm(scatterSet.Positions(:, i) - transmitSet.Positions(:, j), 2);
+        elementDelta = norm(transmitSet.Sizes(:, j)/2, 2);
         minTransmitDistance = min(minTransmitDistance, delta - elementDelta);
         maxTransmitDistance = max(maxTransmitDistance, delta + elementDelta);
     end
 
-    for j= 1:numel(receiveElements)
-        delta = norm(scatters(i).Position - receiveElements(j).Position, 2);
-        elementDelta = norm(receiveElements(j).Size/2, 2);
+    for j = 1:receiveSet.Count
+        delta = norm(scatterSet.Positions(:, i) - receiveSet.Positions(:, j), 2);
+        elementDelta = norm(receiveSet.Sizes(:, j)/2, 2);
         minReceiveDistance = min(minReceiveDistance, delta - elementDelta);
         maxReceiveDistance = max(maxReceiveDistance, delta + elementDelta);
     end
@@ -157,7 +169,7 @@ for i = 1:numel(receiveTimes)
     receiveValues(i) = sample_rect_aperture(receiveSamples(i), nRectR);
 end
 
-fraun = conv(transmitValues, receiveValues)*dt*(powerT * powerR * scatters(1).Amplitude);
+fraun = conv(transmitValues, receiveValues)*dt*(powerT * powerR * scatterSet.Amplitudes(1));
 fraun = conv(fraun, impulseResponse)*dt;
 fraun = conv(fraun, impulseResponse)*dt;
 fraun = conv(fraun, excitation)*dt;
@@ -197,7 +209,7 @@ for n = minN:maxN
         vR = sample_rect_aperture(tR, nRectROff);
         summ = summ  + single(vT*vR);
     end
-    summ = summ * single(powerT * powerR * scatters(1).Amplitude*dt);
+    summ = summ * single(powerT * powerR * scatterSet.Amplitudes(1)*dt);
     if (n >= 0 && n < manVkSampleCount)
         manualConvRf(n + 1) = summ;
     end
@@ -261,7 +273,7 @@ for n = minN:maxN
         vR = sample_rect_aperture_cum(tR + 1, nRectROff) - sample_rect_aperture_cum(tR, nRectROff);
         summ = summ  + single(vT*vR);
     end
-    summ = summ * single(powerT * powerR * scatters(1).Amplitude*dt);
+    summ = summ * single(powerT * powerR * scatterSet.Amplitudes(1)*dt);
     if (n >= 0 && n < manVkSampleCount)
         manualCumConvRf(n + 1) = summ;
     end
@@ -296,7 +308,7 @@ manualCumConvRf = conv(manualCumConvRf, single(excitation))*single(dt);
 
 %% vkField
 
-% mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
+mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
 pulseEcho = vkField_mex(simulator);
 vkStartTime = simulator.StartTime;
 

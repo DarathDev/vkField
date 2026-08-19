@@ -4,6 +4,7 @@ import "base:intrinsics"
 import "base:runtime"
 import "core:log"
 import "core:math"
+import "core:mem"
 import "core:slice"
 import "core:time"
 
@@ -315,8 +316,8 @@ destroy_vulkan_simulator_resources :: proc(simulator: ^vkSimulator) {
 vkSimulate :: proc(
 	simulator: ^vkSimulator,
 	settings: SimulationSettings,
-	transmitElements: []Element,
-	receiveElements: []Element,
+	transmitElements: #soa[]RectangularElement,
+	receiveElements: #soa[]RectangularElement,
 	scatters: []Scatter,
 	allocator := context.allocator,
 ) -> (
@@ -615,7 +616,7 @@ prepare_readback :: proc(device: vkField_vk.Device, size: vk.DeviceSize) -> (buf
 	return
 }
 
-vkPackElementBuffer :: proc(settings: SimulationSettings, transmitElements: []Element, receiveElements: []Element) -> []byte {
+vkPackElementBuffer :: proc(settings: SimulationSettings, transmitElements: #soa[]RectangularElement, receiveElements: #soa[]RectangularElement) -> []byte {
 	assert(len(transmitElements) == auto_cast settings.transmitElementCount)
 	assert(len(receiveElements) == auto_cast settings.receiveElementCount)
 	elementTotalSize := vkElementBufferSize(settings)
@@ -637,21 +638,17 @@ vkPackElementBuffer :: proc(settings: SimulationSettings, transmitElements: []El
 		return
 	}
 
-	for element, index in transmitElements {
-		positions[index] = element.aperture.rectangle.position
-		normals[index] = element.aperture.rectangle.normal
-		sizes[index] = element.aperture.rectangle.size
-		apodizations[index] = element.apodization
-		delays[index] = element.delay
-	}
-	for element, index in receiveElements {
-		receiveIndex := index + auto_cast settings.transmitElementCount
-		positions[receiveIndex] = element.aperture.rectangle.position
-		normals[receiveIndex] = element.aperture.rectangle.normal
-		sizes[receiveIndex] = element.aperture.rectangle.size
-		apodizations[receiveIndex] = element.apodization
-		delays[receiveIndex] = element.delay
-	}
+	mem.copy_non_overlapping(raw_data(positions), transmitElements.position, slice.size(positions))
+	mem.copy_non_overlapping(raw_data(positions[len(transmitElements):]), receiveElements.position, slice.size(positions[len(transmitElements):]))
+	mem.copy_non_overlapping(raw_data(normals), transmitElements.normal, slice.size(normals))
+	mem.copy_non_overlapping(raw_data(normals[len(transmitElements):]), receiveElements.normal, slice.size(normals[len(transmitElements):]))
+	mem.copy_non_overlapping(raw_data(sizes), transmitElements.size, slice.size(sizes))
+	mem.copy_non_overlapping(raw_data(sizes[len(transmitElements):]), receiveElements.size, slice.size(sizes[len(transmitElements):]))
+	mem.copy_non_overlapping(raw_data(apodizations), transmitElements.apodization, slice.size(apodizations))
+	mem.copy_non_overlapping(raw_data(apodizations[len(transmitElements):]), receiveElements.apodization, slice.size(apodizations[len(transmitElements):]))
+	mem.copy_non_overlapping(raw_data(delays), transmitElements.delay, slice.size(delays))
+	mem.copy_non_overlapping(raw_data(delays[len(transmitElements):]), receiveElements.delay, slice.size(delays[len(transmitElements):]))
+
 	return rectangularElements
 }
 

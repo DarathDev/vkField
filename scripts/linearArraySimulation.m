@@ -83,15 +83,15 @@ simulator.TransmitElements.Count = size(tData, 2);
 simulator.TransmitElements.Positions = tData(8:10, :);
 simulator.TransmitElements.Normals = tangentsToNormals(tData(8:10, :));
 simulator.TransmitElements.Sizes = tData(3:4, :);
-simulator.TransmitElements.PhysicalApodizations = tData(5, :);
-simulator.TransmitElements.PhysicalDelays = tData(23, :);
+simulator.TransmitElements.Apodizations = tData(5, :);
+simulator.TransmitElements.Delays = tData(23, :);
 
 simulator.ReceiveElements.Count = size(rData, 2);
 simulator.ReceiveElements.Positions = rData(8:10, :);
 simulator.ReceiveElements.Normals = tangentsToNormals(rData(8:10, :));
 simulator.ReceiveElements.Sizes = rData(3:4, :);
-simulator.ReceiveElements.PhysicalApodizations = rData(5, :);
-simulator.ReceiveElements.PhysicalDelays = rData(23, :);
+simulator.ReceiveElements.Apodizations = rData(5, :);
+simulator.ReceiveElements.Delays = rData(23, :);
 
 
 mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");

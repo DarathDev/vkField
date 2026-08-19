@@ -7,9 +7,28 @@
 using namespace matlab::data;
 using matlab::mex::ArgumentList;
 
-int print(matlab::mex::Function& function, const char* string) {
-	std::cout << string << std::endl;
-	return 0;
+static void printLogger(void* pUserData, const char* text) {
+	auto* function = static_cast<matlab::mex::Function*>( pUserData );
+	if (function != nullptr) {
+		std::cout << text << std::endl;
+	}
+}
+
+static void freeRectangularElementSoaSlice(RectangularElementSoaSlice* slice) {
+	if (slice == nullptr) {
+		return;
+	}
+	delete[ ] slice->position;
+	delete[ ] slice->normal;
+	delete[ ] slice->size;
+	delete[ ] slice->apodization;
+	delete[ ] slice->delay;
+	slice->position = nullptr;
+	slice->normal = nullptr;
+	slice->size = nullptr;
+	slice->apodization = nullptr;
+	slice->delay = nullptr;
+	slice->len = 0;
 }
 
 template <typename T> const T* getDataPtr(matlab::data::Array arr) {
@@ -32,65 +51,30 @@ public:
 		checkArguments(outputs, inputs);
 		ObjectArray mxSimulator(inputs[0]);
 
-		const TypedArray<f32> mxSamplingFrequency =
-			matlabPtr->getProperty(mxSimulator, u"SamplingFrequency");
-		const TypedArray<f32> mxSpeedOfSound =
-			matlabPtr->getProperty(mxSimulator, u"SpeedOfSound");
-		const TypedArray<f32> mxStartTime =
-			matlabPtr->getProperty(mxSimulator, u"StartTime");
-		const TypedArray<u32> mxSampleCount =
-			matlabPtr->getProperty(mxSimulator, u"SampleCount");
-		const Array mxCumulative =
-			matlabPtr->getProperty(mxSimulator, u"Cumulative");
-		const ObjectArray mxTransmitElementSet =
-			matlabPtr->getProperty(mxSimulator, u"TransmitElements");
-		const ObjectArray mxReceiveElementSet =
-			matlabPtr->getProperty(mxSimulator, u"ReceiveElements");
-		const ObjectArray mxScatterSet =
-			matlabPtr->getProperty(mxSimulator, u"Scatters");
-
 		SimulationSettings settings;
-		settings.samplingFrequency = mxSamplingFrequency[0];
-		settings.speedOfSound = mxSpeedOfSound[0];
-		settings.startTime = mxStartTime[0];
-		settings.sampleCount = mxSampleCount[0];
-		settings.cumulative = mxCumulative[0];
-		settings.transmitElementCount =
-			(i32)matlabPtr->getProperty(mxTransmitElementSet, "Count")[0];
-		settings.receiveElementCount =
-			(i32)matlabPtr->getProperty(mxReceiveElementSet, "Count")[0];
-		settings.scatterCount =
-			(i32)matlabPtr->getProperty(mxScatterSet, "Count")[0];
+		RectangularElementSoaSlice transmitElements;
+		RectangularElementSoaSlice receiveElements;
+		ScatterSlice scatters;
 
-		Element* transmitElements =
-			(Element*)malloc(sizeof(Element) * settings.transmitElementCount);
-		Element* receiveElements =
-			(Element*)malloc(sizeof(Element) * settings.receiveElementCount);
-		Scatter* scatters =
-			(Scatter*)malloc(sizeof(Scatter) * settings.scatterCount);
-
-		copyElements(mxTransmitElementSet, transmitElements,
-					 settings.transmitElementCount);
-		copyElements(mxReceiveElementSet, receiveElements,
-					 settings.receiveElementCount);
-		copyScatters(mxScatterSet, scatters, settings.scatterCount);
+		readSimulationInputs(mxSimulator, settings,
+			transmitElements, receiveElements, scatters);
 
 		Simulator* simulator;
 
-		create_vulkan_simulator_c(&simulator, (void*)print, this);
+		create_vulkan_simulator_c(&simulator, printLogger, this);
 
 		plan_simulation_c(simulator, &settings, transmitElements, receiveElements,
-						  scatters, (void*)print, this);
+					  scatters, printLogger, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime",
-							   factory.createScalar<f32>(settings.startTime));
+						   factory.createScalar<f32>(settings.startTime));
 		matlabPtr->setProperty(mxSimulator, u"SampleCount",
-							   factory.createScalar<u32>(settings.sampleCount));
+						   factory.createScalar<u32>(settings.sampleCount));
 
 		auto pulseEchoBuffer = factory.createBuffer<float>(
 			settings.sampleCount * settings.receiveElementCount);
 
 		simulate_c(simulator, &settings, transmitElements, receiveElements,
-				   scatters, pulseEchoBuffer.get(), (void*)print, this);
+				   scatters, pulseEchoBuffer.get(), printLogger, this);
 		matlabPtr->setProperty(mxSimulator, u"SimulationTime",
 							   factory.createScalar<f32>(settings.simulationTime));
 
@@ -100,7 +84,10 @@ public:
 		outputs[0] = factory.createArrayFromBuffer(pulseEchoDims,
 												   std::move(pulseEchoBuffer));
 
-		destroy_vulkan_simulator_c(simulator, (void*)print, this);
+		destroy_vulkan_simulator_c(simulator, printLogger, this);
+		freeRectangularElementSoaSlice(&transmitElements);
+		freeRectangularElementSoaSlice(&receiveElements);
+		free(scatters.data);
 
 		void mexUnlock();
 
@@ -117,21 +104,71 @@ public:
 		// }
 	}
 
-	void copyElements(const Array& matlabArray, Element* array, uz length) {
+
+	void readSimulationInputs(
+		const ObjectArray& mxSimulator,
+		SimulationSettings& settings,
+		RectangularElementSoaSlice& transmitElements,
+		RectangularElementSoaSlice& receiveElements,
+		ScatterSlice& scatters) {
+		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
+		const TypedArray<f32> mxSamplingFrequency =
+			matlabPtr->getProperty(mxSimulator, u"SamplingFrequency");
+		const TypedArray<f32> mxSpeedOfSound =
+			matlabPtr->getProperty(mxSimulator, u"SpeedOfSound");
+		const TypedArray<f32> mxStartTime =
+			matlabPtr->getProperty(mxSimulator, u"StartTime");
+		const TypedArray<u32> mxSampleCount =
+			matlabPtr->getProperty(mxSimulator, u"SampleCount");
+		const Array mxCumulative = matlabPtr->getProperty(mxSimulator, u"Cumulative");
+		const ObjectArray mxTransmitElementSet =
+			matlabPtr->getProperty(mxSimulator, u"TransmitElements");
+		const ObjectArray mxReceiveElementSet =
+			matlabPtr->getProperty(mxSimulator, u"ReceiveElements");
+		const ObjectArray mxScatterSet =
+			matlabPtr->getProperty(mxSimulator, u"Scatters");
+
+		const std::string simulatorTypeName = static_cast<std::string>( mxSimulatorType[0] );
+		if (simulatorTypeName == "CPU") {
+			simulatorType = SimulatorTypeKind::CPU;
+		}
+		else if (simulatorTypeName == "Vulkan") {
+			simulatorType = SimulatorTypeKind::Vulkan;
+		}
+		else {
+			assert(false, "Unsupported simulator type");
+		}
+		settings.samplingFrequency = mxSamplingFrequency[0];
+		settings.speedOfSound = mxSpeedOfSound[0];
+		settings.startTime = mxStartTime[0];
+		settings.sampleCount = mxSampleCount[0];
+		settings.cumulative = mxCumulative[0];
+		settings.transmitElementCount =
+			(i32)matlabPtr->getProperty(mxTransmitElementSet, "Count")[0];
+		settings.receiveElementCount =
+			(i32)matlabPtr->getProperty(mxReceiveElementSet, "Count")[0];
+		settings.scatterCount = (i32)matlabPtr->getProperty(mxScatterSet, "Count")[0];
+
+		transmitElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
+		receiveElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
+		scatters.data = (Scatter*)malloc(sizeof(Scatter) * settings.scatterCount);
+		scatters.len = settings.scatterCount;
+
+		copyElements(mxTransmitElementSet, &transmitElements);
+		copyElements(mxReceiveElementSet, &receiveElements);
+		copyScatters(mxScatterSet, scatters.data, scatters.len);
+	}
+
+	void copyElements(const Array& matlabArray, RectangularElementSoaSlice* slice) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
 
-		constexpr uz countPositions = 3;
-		constexpr uz countNormals = 3;
-		constexpr uz countSizes = 2;
-		constexpr uz countApodizations = 1;
-		constexpr uz countDelays = 1;
+		Array propertyCount = matlabPtr->getProperty(matlabArray, "Count");
 		Array propertyPositions = matlabPtr->getProperty(matlabArray, "Positions");
 		Array propertyNormals = matlabPtr->getProperty(matlabArray, "Normals");
 		Array propertySizes = matlabPtr->getProperty(matlabArray, "Sizes");
-		Array propertyApodizations =
-			matlabPtr->getProperty(matlabArray, "PhysicalApodizations");
-		Array propertyDelays =
-			matlabPtr->getProperty(matlabArray, "PhysicalDelays");
+		Array propertyApodizations = matlabPtr->getProperty(matlabArray, "Apodizations");
+		Array propertyDelays = matlabPtr->getProperty(matlabArray, "Delays");
+
 		uz numelPositions = propertyPositions.getNumberOfElements();
 		uz numelNormals = propertyNormals.getNumberOfElements();
 		uz numelSizes = propertySizes.getNumberOfElements();
@@ -142,28 +179,19 @@ public:
 		const f32* pSizes = getDataPtr<f32>(propertySizes);
 		const f32* pApodizations = getDataPtr<f32>(propertyApodizations);
 		const f32* pDelays = getDataPtr<f32>(propertyDelays);
-		uz offsetPositions = 0;
-		uz offsetNormals = 0;
-		uz offsetSizes = 0;
-		uz offsetApodizations = 0;
-		uz offsetDelays = 0;
-		for (uz i = 0; i < length; i++) {
-			memcpy(&( (RectangularAperture*)array[i].apertureInfo )->position,
-				   pPositions + offsetPositions, countPositions * sizeof(f32));
-			memcpy(&( (RectangularAperture*)array[i].apertureInfo )->normal,
-				   pNormals + offsetNormals, countNormals * sizeof(f32));
-			memcpy(&( (RectangularAperture*)array[i].apertureInfo )->size,
-				   pSizes + offsetSizes, countSizes * sizeof(f32));
-			array[i].apodization = *( pApodizations + offsetApodizations );
-			array[i].delay = *( pDelays + offsetDelays );
-			offsetPositions =
-				std::min(offsetPositions + countPositions, numelPositions);
-			offsetNormals = std::min(offsetNormals + countNormals, numelNormals);
-			offsetSizes = std::min(offsetSizes + countSizes, numelSizes);
-			offsetApodizations =
-				std::min(offsetApodizations + countApodizations, numelApodizations);
-			offsetDelays = std::min(offsetDelays + countDelays, numelDelays);
-		}
+
+		slice->position = new f32[numelPositions];
+		slice->normal = new f32[numelNormals];
+		slice->size = new f32[numelSizes];
+		slice->apodization = new f32[numelApodizations];
+		slice->delay = new f32[numelDelays];
+		slice->len = static_cast<int>( propertyCount[0] );
+
+		std::memcpy(slice->position, pPositions, numelPositions * sizeof(f32));
+		std::memcpy(slice->normal, pNormals, numelNormals * sizeof(f32));
+		std::memcpy(slice->size, pSizes, numelSizes * sizeof(f32));
+		std::memcpy(slice->apodization, pApodizations, numelApodizations * sizeof(f32));
+		std::memcpy(slice->delay, pDelays, numelDelays * sizeof(f32));
 	}
 
 	void copyScatters(const Array& matlabArray, Scatter* array, uz length) {

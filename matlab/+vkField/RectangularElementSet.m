@@ -4,7 +4,7 @@ classdef RectangularElementSet
         Positions(3, :) single
         Normals(3, :) single
         Sizes(2, :) single
-        PhysicalApodizations(1, :) single
-        PhysicalDelays(1, :) single
+        Apodizations(1, :) single
+        Delays(1, :) single
     end
 end

@@ -2,7 +2,6 @@ package vkfield
 
 import "base:runtime"
 import "core:log"
-import "core:slice"
 import "core:strings"
 import "vkField:utility"
 import vkField_vk "vkField:vulkan"
@@ -34,9 +33,9 @@ destroy_vulkan_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc
 plan_simulation_c :: proc "c" (
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: ^Element,
-	receiveElements: ^Element,
-	scatters: ^Scatter,
+	transmitElements: #soa[]RectangularElement,
+	receiveElements: #soa[]RectangularElement,
+	scatters: []Scatter,
 	cLogger: cLogProc = nil,
 	loggerUserData: rawptr = nil,
 ) -> (
@@ -44,22 +43,16 @@ plan_simulation_c :: proc "c" (
 ) {
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	return plan_simulation(
-		simulator,
-		settings,
-		slice.from_ptr(transmitElements, int(settings.transmitElementCount)),
-		slice.from_ptr(receiveElements, int(settings.receiveElementCount)),
-		slice.from_ptr(scatters, int(settings.scatterCount)),
-	)
+	return plan_simulation(simulator, settings, transmitElements, receiveElements, scatters)
 }
 
 @(export)
 simulate_c :: proc "c" (
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: [^]Element,
-	receiveElements: [^]Element,
-	scatters: [^]Scatter,
+	transmitElements: #soa[]RectangularElement,
+	receiveElements: #soa[]RectangularElement,
+	scatters: []Scatter,
 	pulseEcho: [^]f32,
 	cLogger: cLogProc = nil,
 	loggerUserData: rawptr = nil,
