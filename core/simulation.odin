@@ -71,7 +71,8 @@ simulate :: proc(
 	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
 	defer if rdoc_ok do rdoc.unload_api(rdoc_lib)
 
-	startTimeStamp := time.now()
+	stopwatch: time.Stopwatch
+	time.stopwatch_start(&stopwatch)
 	switch &sim in simulator {
 	case vkSimulator:
 		if rdoc_ok {
@@ -87,8 +88,8 @@ simulate :: proc(
 
 		data = is_ok(check(vkSimulate(&sim, settings^, transmitElements, receiveElements, scatters))) or_return
 	}
-	endTimeStamp := time.now()
-	settings.simulationTime = auto_cast time.duration_seconds(time.diff(startTimeStamp, endTimeStamp))
+	time.stopwatch_stop(&stopwatch)
+	settings.simulationTime = auto_cast time.duration_seconds(time.stopwatch_duration(stopwatch))
 
 	return
 }
