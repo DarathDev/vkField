@@ -137,6 +137,8 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	// Odin Compilation
 	when ODIN_OS == .Windows {
 		libraryName := assume(os.join_filename(VKFIELD_OUTPUT_LIB_NAME, "lib", context.allocator))
+		_, cppCompilerKind, _ := detect_cpp_compiler()
+		if cppCompilerKind == .MSVC do append(options, OdinBuildOption{flag = "extra-linker-flags", value = {"/IGNORE:4006"}})
 	} else when ODIN_OS == .Linux {
 		libraryName := assume(os.join_filename(VKFIELD_OUTPUT_LIB_NAME, "a", context.allocator))
 	}
