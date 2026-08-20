@@ -30,7 +30,7 @@ VKFIELD_TEST_DIR := "test"
 
 VKFIELD_COLLECTIONS: []OdinCollection = {{name = "vkField", path = "core"}}
 VKFIELD_ODIN_BUILD_OPTIONS: []OdinBuildOption = {}
-VKFIELD_ODIN_RELEASE_OPTIONS: []OdinBuildOption = {}
+VKFIELD_ODIN_RELEASE_OPTIONS: []OdinBuildOption = {{flag = "o", value = {"speed"}}}
 VKFIELD_ODIN_DEBUG_OPTIONS: []OdinBuildOption = {{flag = "debug"}}
 VKFIELD_ODIN_TEST_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"test"}}}
 VKFIELD_ODIN_LIB_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"lib"}}, {flag = "reloc-mode", value = {"pic"}}}
@@ -73,6 +73,10 @@ main :: proc() {
 			fallthrough
 		case "-debug":
 			VKFIELD_BUILD_MODE = "debug"
+		case "-r":
+			fallthrough
+		case "-release":
+			VKFIELD_BUILD_MODE = "release"
 		case "-l":
 			fallthrough
 		case "-lib":
@@ -105,6 +109,8 @@ main :: proc() {
 		}
 	}
 	switch VKFIELD_BUILD_MODE {
+	case "release":
+		append(&options, ..VKFIELD_ODIN_RELEASE_OPTIONS)
 	case "debug":
 		append(&options, ..VKFIELD_ODIN_DEBUG_OPTIONS)
 		append(&options, ..odin_defines_to_options(VKFIELD_ODIN_DEBUG_DEFINES))
