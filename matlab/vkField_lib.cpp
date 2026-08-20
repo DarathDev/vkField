@@ -52,16 +52,23 @@ public:
 		ObjectArray mxSimulator(inputs[0]);
 
 		SimulationSettings settings;
+		SimulatorTypeKind simulatorType;
 		RectangularElementSoaSlice transmitElements;
 		RectangularElementSoaSlice receiveElements;
 		ScatterSlice scatters;
 
-		readSimulationInputs(mxSimulator, settings,
+		readSimulationInputs(mxSimulator, settings, simulatorType,
 			transmitElements, receiveElements, scatters);
 
 		Simulator* simulator;
-
-		create_vulkan_simulator_c(&simulator, printLogger, this);
+		switch (simulatorType) {
+		case SimulatorTypeKind::CPU:
+			create_cpu_simulator_c(&simulator, printLogger, this);
+			break;
+		case SimulatorTypeKind::GPU:
+			create_vulkan_simulator_c(&simulator, printLogger, this);
+			break;
+		}
 
 		plan_simulation_c(simulator, &settings, transmitElements, receiveElements,
 					  scatters, printLogger, this);
@@ -84,7 +91,15 @@ public:
 		outputs[0] = factory.createArrayFromBuffer(pulseEchoDims,
 												   std::move(pulseEchoBuffer));
 
-		destroy_vulkan_simulator_c(simulator, printLogger, this);
+		switch (simulatorType) {
+		case SimulatorTypeKind::CPU:
+			destroy_cpu_simulator_c(simulator, printLogger, this);
+			break;
+		case SimulatorTypeKind::GPU:
+			destroy_vulkan_simulator_c(simulator, printLogger, this);
+			break;
+		}
+
 		freeRectangularElementSoaSlice(&transmitElements);
 		freeRectangularElementSoaSlice(&receiveElements);
 		free(scatters.data);
@@ -108,10 +123,14 @@ public:
 	void readSimulationInputs(
 		const ObjectArray& mxSimulator,
 		SimulationSettings& settings,
+		SimulatorTypeKind& simulatorType,
 		RectangularElementSoaSlice& transmitElements,
 		RectangularElementSoaSlice& receiveElements,
 		ScatterSlice& scatters) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
+
+		const EnumArray mxSimulatorType =
+			matlabPtr->getProperty(mxSimulator, u"SimulatorType");
 		const TypedArray<f32> mxSamplingFrequency =
 			matlabPtr->getProperty(mxSimulator, u"SamplingFrequency");
 		const TypedArray<f32> mxSpeedOfSound =
@@ -132,8 +151,8 @@ public:
 		if (simulatorTypeName == "CPU") {
 			simulatorType = SimulatorTypeKind::CPU;
 		}
-		else if (simulatorTypeName == "Vulkan") {
-			simulatorType = SimulatorTypeKind::Vulkan;
+		else if (simulatorTypeName == "GPU") {
+			simulatorType = SimulatorTypeKind::GPU;
 		}
 		else {
 			assert(false, "Unsupported simulator type");

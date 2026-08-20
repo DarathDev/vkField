@@ -24,6 +24,11 @@ typedef size_t uz;
 
 struct Simulator { };
 
+enum class SimulatorTypeKind : u32 {
+	CPU = 0,
+	GPU = 1,
+};
+
 struct SimulationSettings {
 	f32 samplingFrequency;
 	f32 speedOfSound;
@@ -84,6 +89,10 @@ typedef void ( *CLogProc )( void* pUserData, const char* text );
 extern "C" {
 #endif
 
+	LIB_FN bool create_cpu_simulator_c(Simulator** simulator, CLogProc logFunc,
+													void* pUserData);
+	LIB_FN void destroy_cpu_simulator_c(Simulator* simulator, CLogProc logFunc,
+													 void* pUserData);
 	LIB_FN bool create_vulkan_simulator_c(Simulator** simulator, CLogProc logFunc,
 																				void* pUserData);
 	LIB_FN void destroy_vulkan_simulator_c(Simulator* simulator, CLogProc logFunc,

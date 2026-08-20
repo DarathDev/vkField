@@ -21,6 +21,7 @@ assert :: vkField_util.assert
 assume :: vkField_util.assume
 
 Simulator :: union {
+	cpuSimulator,
 	vkSimulator,
 }
 
@@ -87,6 +88,8 @@ simulate :: proc(
 		}
 
 		data = is_ok(check(vkSimulate(&sim, settings^, transmitElements, receiveElements, scatters))) or_return
+	case cpuSimulator:
+		data = check(simulate_cpu(&sim, settings^, transmitElements, receiveElements, scatters)) or_return
 	}
 	time.stopwatch_stop(&stopwatch)
 	settings.simulationTime = auto_cast time.duration_seconds(time.stopwatch_duration(stopwatch))
@@ -119,6 +122,7 @@ plan_simulation :: proc(
 	switch &sim in simulator {
 	case vkSimulator:
 		is_ok(check(plan_vulkan_simulator(&sim, settings^))) or_return
+	case cpuSimulator:
 	}
 	return
 }

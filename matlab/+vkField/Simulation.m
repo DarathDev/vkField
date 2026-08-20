@@ -1,11 +1,15 @@
 classdef Simulation < handle
 
     properties
+        SimulatorType(1,1) vkField.SimulatorType = vkField.SimulatorType.CPU;
+        Cumulative(1,1) logical = true;
+    end
+
+    properties
         SamplingFrequency(1,1) single = 100e6;
         SpeedOfSound(1,1) single = 1540;
         StartTime(1,1) single = NaN;
         SampleCount(1,1) uint32 = 0;
-        Cumulative(1,1) logical = true;
         SimulationTime(1,1) single = NaN;
     end
 

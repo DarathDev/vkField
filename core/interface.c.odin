@@ -7,6 +7,26 @@ import "vkField:utility"
 import vkField_vk "vkField:vulkan"
 
 @(export)
+create_cpu_simulator_c :: proc "c" (simulator: ^^Simulator, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
+	context = runtime.default_context()
+	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	simulator^ = new(Simulator)
+	simulator^^, ok = create_cpu_simulator()
+	return
+}
+
+@(export)
+destroy_cpu_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
+	context = runtime.default_context()
+	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	utility.check(simulator != nil) or_return
+	if cpuSimulator, cpuSimOk := simulator.(cpuSimulator); cpuSimOk {
+		destroy_cpu_simulator(&cpuSimulator)
+	}
+	return
+}
+
+@(export)
 create_vulkan_simulator_c :: proc "c" (simulator: ^^Simulator, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
 	if !vkField_vk.VKFIELD_VULKAN_INITIALIZED {
 		vkField_vk.initialize()
