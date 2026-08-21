@@ -7,18 +7,18 @@ import "core:math/linalg"
 import "core:os"
 import "core:path/filepath"
 import "core:time"
-import vkField_util "vkField:utility"
+import utility "vkField:utility"
 
 @(private = "file")
-is_ok :: vkField_util.is_ok
+is_ok :: utility.is_ok
 @(private = "file")
-confirm :: vkField_util.confirm
+confirm :: utility.confirm
 @(private = "file")
-check :: vkField_util.check
+check :: utility.check
 @(private = "file")
-assert :: vkField_util.assert
+assert :: utility.assert
 @(private = "file")
-assume :: vkField_util.assume
+assume :: utility.assume
 
 Simulator :: union {
 	cpuSimulator,
@@ -64,7 +64,7 @@ simulate :: proc(
 	data: []f32,
 	ok := true,
 ) {
-	vkField_util.prof_scoped(#procedure)
+	utility.prof_scoped(#procedure)
 	assert(settings.transmitElementCount != 0)
 	assert(settings.receiveElementCount != 0)
 	assert(settings.scatterCount != 0)
@@ -107,7 +107,7 @@ plan_simulation :: proc(
 ) -> (
 	ok := true,
 ) {
-	vkField_util.prof_scoped(#procedure)
+	utility.prof_scoped(#procedure)
 	minDistance, maxDistance := findDistanceLimits(transmitElements, receiveElements, scatters)
 	settings.startTime = minDistance / settings.speedOfSound
 	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))
@@ -137,7 +137,7 @@ findDistanceLimits :: proc(
 	minDistance: f32,
 	maxDistance: f32,
 ) {
-	vkField_util.prof_scoped(#procedure)
+	utility.prof_scoped(#procedure)
 	defer assert(maxDistance - minDistance >= 0)
 	// Any distance range greater than 10m is likely an error, and furthermore would require an unreasonable amount of memory
 	defer assert(maxDistance - minDistance < 10)
