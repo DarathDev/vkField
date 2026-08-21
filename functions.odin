@@ -2,7 +2,6 @@ package vkField_build
 
 import util "core/utility"
 import "core:fmt"
-import "core:log"
 import "core:os"
 import "core:slice"
 import "core:strings"
@@ -18,7 +17,7 @@ assert :: util.assert
 @(private = "file")
 assume :: util.assume
 
-run_cmd :: proc(cmd: []string, working_dir: string = "") -> (exit_code: int, ok := true) {
+run_cmd :: proc(cmd: []string, working_dir: string = "", broadcast := true) -> (exit_code: int, ok := true) {
 	processDesc: os.Process_Desc = {
 		command     = cmd,
 		working_dir = working_dir,
@@ -26,7 +25,8 @@ run_cmd :: proc(cmd: []string, working_dir: string = "") -> (exit_code: int, ok 
 		stdout      = os.stdout,
 		stderr      = os.stderr,
 	}
-	log.debugf("Executing: %s", strings.join(cmd, " "))
+
+	if broadcast do build_log(os.stdout, .Command, strings.join(cmd, " "))
 	process := is_ok(check(os.process_start(processDesc))) or_return
 	state := is_ok(check(os.process_wait(process))) or_return
 	exit_code = state.exit_code
@@ -44,7 +44,7 @@ when ODIN_OS == .Windows {
 check_cmd :: proc(cmd: string) -> (ok: bool) {
 	checkCmd := slice.clone(CheckCommand)
 	checkCmd[CheckCommandPlaceholderIndex] = cmd
-	exit_code := confirm(run_cmd(checkCmd)) or_return
+	exit_code := confirm(run_cmd(checkCmd, broadcast = false)) or_return
 	return exit_code == 0
 }
 
@@ -92,12 +92,12 @@ rebuild_needed :: proc(artifact_path: string, source_files: []string) -> (ok: bo
 	for src in source_files {
 		src_info := is_ok(os.stat(src, context.allocator)) or_return
 		if src_info.modification_time._nsec > artifact_info.modification_time._nsec {
-			log.debugf("Source %s is newer than artifact, rebuild required", src)
+			build_log(os.stdout, .Info, fmt.tprintf("Source %s is newer than artifact %s, rebuild required", src, artifact_path))
 			return true
 		}
 	}
 
-	log.debugf("Artifact is up to date")
+	build_log(os.stdout, .Info, fmt.tprintf("Artifact %s is up to date", artifact_path))
 	return false
 }
 
@@ -268,7 +268,7 @@ detect_cpp_compiler :: proc() -> (compiler_path: string, kind: CompilerKind, ok 
 	}
 
 	if len(compile) == 0 {
-		log.errorf("No C++ compiler found. Set CXX or CC to a valid compiler executable.")
+		build_log(os.stderr, .Error, "No C++ compiler found. Set CXX or CC to a valid compiler executable.")
 		ok = false
 		return
 	}

@@ -61,6 +61,8 @@ main :: proc() {
 	logger: runtime.Logger
 	if LOG_DEBUG do logger = log.create_console_logger(.Debug)
 	else do logger = log.create_console_logger(.Info)
+	logger.options -= {.Level, .Date, .Time, .Line, .Procedure, .Short_File_Path}
+	log.create_console_logger()
 	context.logger = logger
 
 	options := make([dynamic]OdinBuildOption)
