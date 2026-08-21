@@ -11,6 +11,31 @@ import utility "vkField:utility"
 check :: utility.check
 is_ok :: utility.is_ok
 
+SIMULATOR_TYPE :: #config(TEST_SIMULATOR_TYPE, "CPU")
+CUMULATIVE :: bool(#config(TEST_CUMULATIVE, true))
+
+create_simulator :: proc() -> (simulator: vkField.Simulator, ok: bool) {
+	switch SIMULATOR_TYPE {
+	case "CPU":
+		cpuSimulator, cpuOk := vkField.create_cpu_simulator()
+		return cpuSimulator, cpuOk
+	case "VULKAN", "VK", "GPU":
+		vkSimulator, vkOk := vkField.create_vulkan_simulator()
+		return vkSimulator, vkOk == .SUCCESS
+	case:
+		panic(fmt.tprintf("Unsupported simulator type %q", SIMULATOR_TYPE))
+	}
+}
+
+destroy_simulator :: proc(simulator: ^vkField.Simulator) {
+	switch &sim in simulator^ {
+	case vkField.cpuSimulator:
+		vkField.destroy_cpu_simulator(&sim)
+	case vkField.vkSimulator:
+		vkField.destroy_vulkan_simulator(&sim)
+	}
+}
+
 oneRectSimulation :: proc() -> (ok := true) {
 
 	utility.prof_init("oneRectSimulation")
@@ -23,13 +48,12 @@ oneRectSimulation :: proc() -> (ok := true) {
 		transmitElementCount = 1,
 		receiveElementCount  = 1,
 		scatterCount         = 1,
-		cumulative           = true,
+		cumulative           = auto_cast CUMULATIVE,
 		dispatchWorkLimit    = 1 << 24,
 	}
 
-	simulator: vkField.Simulator
-	simulator = is_ok(check(vkField.create_vulkan_simulator())) or_return
-	defer vkField.destroy_vulkan_simulator(&simulator.(vkField.vkSimulator))
+	simulator := create_simulator() or_return
+	defer destroy_simulator(&simulator)
 
 	transmitElement: vkField.RectangularElement = {
 		position    = {0, 0, 0},
@@ -79,15 +103,14 @@ linearArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator: vkField.Simulator
-	simulator = is_ok(check(vkField.create_vulkan_simulator())) or_return
-	defer vkField.destroy_vulkan_simulator(&simulator.(vkField.vkSimulator))
+	simulator := create_simulator() or_return
+	defer destroy_simulator(&simulator)
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound      = 1540,
 		scatterCount      = scatterCount,
-		cumulative        = true,
+		cumulative        = auto_cast CUMULATIVE,
 		dispatchWorkLimit = 1 << 24,
 	}
 
@@ -115,15 +138,14 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator: vkField.Simulator
-	simulator = is_ok(check(vkField.create_vulkan_simulator())) or_return
-	defer vkField.destroy_vulkan_simulator(&simulator.(vkField.vkSimulator))
+	simulator := create_simulator() or_return
+	defer destroy_simulator(&simulator)
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound      = 1540,
 		scatterCount      = scatterCount,
-		cumulative        = true,
+		cumulative        = auto_cast CUMULATIVE,
 		dispatchWorkLimit = 1 << 24,
 	}
 
