@@ -64,6 +64,7 @@ simulate :: proc(
 	data: []f32,
 	ok := true,
 ) {
+	vkField_util.prof_scoped(#procedure)
 	assert(settings.transmitElementCount != 0)
 	assert(settings.receiveElementCount != 0)
 	assert(settings.scatterCount != 0)
@@ -106,6 +107,7 @@ plan_simulation :: proc(
 ) -> (
 	ok := true,
 ) {
+	vkField_util.prof_scoped(#procedure)
 	minDistance, maxDistance := findDistanceLimits(transmitElements, receiveElements, scatters)
 	settings.startTime = minDistance / settings.speedOfSound
 	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))
@@ -135,6 +137,7 @@ findDistanceLimits :: proc(
 	minDistance: f32,
 	maxDistance: f32,
 ) {
+	vkField_util.prof_scoped(#procedure)
 	defer assert(maxDistance - minDistance >= 0)
 	// Any distance range greater than 10m is likely an error, and furthermore would require an unreasonable amount of memory
 	defer assert(maxDistance - minDistance < 10)

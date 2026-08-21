@@ -12,6 +12,11 @@ check :: utility.check
 is_ok :: utility.is_ok
 
 oneRectSimulation :: proc() -> (ok := true) {
+
+	utility.prof_init("oneRectSimulation")
+	utility.prof_thread_init()
+	utility.prof_scoped(#procedure)
+
 	settings := vkField.SimulationSettings {
 		samplingFrequency    = 100e6,
 		speedOfSound         = 1540,
@@ -63,6 +68,11 @@ oneRectSimulation :: proc() -> (ok := true) {
 }
 
 linearArraySimulation :: proc() -> (ok := true) {
+
+	utility.prof_init("linearArraySimulation")
+	utility.prof_thread_init()
+	utility.prof_scoped(#procedure)
+
 	scatterCount :: 16
 	elementCount :: 128
 	elementWidth: f32 : 2.2e-4
@@ -94,6 +104,11 @@ linearArraySimulation :: proc() -> (ok := true) {
 }
 
 matrixArraySimulation :: proc() -> (ok := true) {
+
+	utility.prof_init("matrixArraySimulation")
+	utility.prof_thread_init()
+	utility.prof_scoped(#procedure)
+
 	scatterCount :: 16
 	elementCount :: 128
 	elementWidth: f32 : 2.2e-4

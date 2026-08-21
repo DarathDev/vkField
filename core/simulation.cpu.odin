@@ -2,6 +2,7 @@ package vkfield
 
 import "core:math/linalg"
 import "core:simd"
+import utility "vkField:utility"
 
 cpuSimulator :: struct {}
 
@@ -18,7 +19,7 @@ simulate_cpu :: proc(
 	data: []f32,
 	ok := true,
 ) {
-
+	utility.prof_scoped(#procedure)
 	data = make([]f32, settings.sampleCount * settings.receiveElementCount)
 
 	scatterCount: int = auto_cast settings.scatterCount
@@ -84,7 +85,7 @@ simulate_cpu_partial :: proc(
 ) -> (
 	ok := true,
 ) {
-
+	utility.prof_scoped(#procedure)
 	transmitCount := len(transmitImpulseResponses) / scatterCount
 	receiveCount := len(receiveImpulseResponses) / scatterCount
 
@@ -109,7 +110,9 @@ simulate_cpu_partial :: proc(
 						max(u32),
 						auto_cast settings.cumulative,
 					)
+					utility.prof_begin("advance dataline")
 					d = d[SIMD32_WIDTH:]
+					utility.prof_end()
 					sampleOffset += SIMD32_WIDTH
 				}
 
@@ -134,6 +137,8 @@ simulate_cpu_partial :: proc(
 }
 
 get_spatial_impulse_response :: proc(settings: SimulationSettings, element: RectangularElement, scatter: Scatter) -> (impulseResponse: ImpulseResponse) {
+	utility.prof_scoped(#procedure)
+
 	rotationAngle := linalg.quaternion_between_two_vector3(element.normal, [3]f32{0, 0, 1})
 	rotation := linalg.matrix4_from_quaternion(rotationAngle)
 	transform := rotation * linalg.matrix4_translate(element.position)
@@ -163,6 +168,7 @@ process_chunk :: proc(
 	mask: SIMD_U32,
 	cumulative: bool,
 ) {
+	utility.prof_scoped(#procedure)
 	sampleIndex := simd.iota(SIMD_I32)
 	sampleIndex = sampleIndex + cast(SIMD_I32)sampleOffset
 
@@ -175,25 +181,29 @@ process_chunk :: proc(
 	minKAll := simd.reduce_min(minK)
 	maxKAll := simd.reduce_max(maxK)
 
+	if minKAll > maxKAll do return
+
 	sum := SIMD_F32(0)
+	utility.prof_begin("convolution")
 	for k in minKAll ..= maxKAll {
 		tSample, rSample: SIMD_F32
 		if !cumulative {
 			tSample = sample_aperture_discrete(k, tir)
 			rSample = sample_aperture_discrete(sampleIndex - cast(SIMD_I32)k, rir)
-			// rSample = simd.select(simd.lanes_eq(SIMD_I32(linalg.round((rir.y + rir.z) / 2)), sampleIndex - cast(SIMD_I32)k), SIMD_F32(1), SIMD_F32(0))
 		} else {
 			tSample = sample_aperture_cumulative(k, tir) - sample_aperture_cumulative(k - 1, tir)
 			rSample = sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)k + 1, rir) - sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)k, rir)
-			// rSample = simd.select(simd.lanes_eq(SIMD_I32(linalg.round((rir.y + rir.z) / 2)), sampleIndex - cast(SIMD_I32)k + 1), SIMD_F32(1), SIMD_F32(0))
 		}
 		sumMask := simd.bit_and(simd.lanes_le(minK, SIMD_I32(k)), simd.lanes_ge(maxK, SIMD_I32(k)))
 		sum += simd.select(sumMask, tSample * rSample, SIMD_F32(0))
 	}
+	utility.prof_end()
+	utility.prof_begin("data save")
 	dataPtr := cast(^SIMD_F32)raw_data(data)
 	d := simd.masked_load(dataPtr, cast(SIMD_F32)0, mask)
 	d += sum * scale
 	simd.masked_store(dataPtr, d, mask)
+	utility.prof_end()
 }
 
 sample_aperture_discrete :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD_F32) {

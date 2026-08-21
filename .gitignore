@@ -62,3 +62,6 @@ lib/
 # Rad Debugger
 *.radproj
 *.rdi
+
+# Spall Profiles
+*.spall
