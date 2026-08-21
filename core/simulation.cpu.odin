@@ -98,8 +98,11 @@ simulate_cpu_partial :: proc(
 			for transmitIndex in 0 ..< transmitCount {
 				transmitImpulseResponse := transmitImpulseResponses[scatterIndex * transmitCount + transmitIndex]
 
-				d := dataLine
-				sampleOffset: i32 = 0
+				pairMinSample := i32(linalg.floor(transmitImpulseResponse.rect.x + receiveImpulseResponse.rect.x - 0.5))
+				pairMaxSample := i32(linalg.ceil(transmitImpulseResponse.rect.w + receiveImpulseResponse.rect.w + 1.5))
+
+				d := dataLine[pairMinSample:pairMaxSample]
+				sampleOffset: i32 = pairMinSample
 				for len(d) >= SIMD32_WIDTH {
 					process_chunk(
 						d,
@@ -110,9 +113,7 @@ simulate_cpu_partial :: proc(
 						max(u32),
 						auto_cast settings.cumulative,
 					)
-					utility.prof_begin("advance dataline")
 					d = d[SIMD32_WIDTH:]
-					utility.prof_end()
 					sampleOffset += SIMD32_WIDTH
 				}
 
