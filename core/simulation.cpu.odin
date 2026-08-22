@@ -185,26 +185,32 @@ process_chunk :: proc(
 	if minKAll > maxKAll do return
 
 	sum := SIMD_F32(0)
-	utility.prof_begin("convolution")
-	for k in minKAll ..= maxKAll {
-		tSample, rSample: SIMD_F32
+	for kt := minKAll; kt <= maxKAll; kt += SIMD32_WIDTH {
+		kts := SIMD_I32(kt) + simd.iota(SIMD_I32)
+		tSamples: SIMD_F32
 		if !cumulative {
-			tSample = sample_aperture_discrete(k, tir)
-			rSample = sample_aperture_discrete(sampleIndex - cast(SIMD_I32)k, rir)
+			tSamples = sample_aperture_discrete(kts, tir)
 		} else {
-			tSample = sample_aperture_cumulative(k, tir) - sample_aperture_cumulative(k - 1, tir)
-			rSample = sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)k + 1, rir) - sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)k, rir)
+			tSamples = sample_aperture_cumulative(kts, tir) - sample_aperture_cumulative(kts - 1, tir)
 		}
-		sumMask := simd.bit_and(simd.lanes_le(minK, SIMD_I32(k)), simd.lanes_ge(maxK, SIMD_I32(k)))
-		sum += simd.select(sumMask, tSample * rSample, SIMD_F32(0))
+
+		for k in 0 ..< min(SIMD32_WIDTH, maxKAll - kt) {
+			kr := k + kt
+			rSample: SIMD_F32
+			if !cumulative {
+				rSample = sample_aperture_discrete(sampleIndex - cast(SIMD_I32)kr, rir)
+			} else {
+				rSample = sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)kr + 1, rir) - sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)kr, rir)
+			}
+			sumMask := simd.bit_and(simd.lanes_le(minK, SIMD_I32(kr)), simd.lanes_ge(maxK, SIMD_I32(kr)))
+			tSample := cast(SIMD_F32)simd.extract(tSamples, k)
+			sum += simd.select(sumMask, tSample * rSample, SIMD_F32(0))
+		}
 	}
-	utility.prof_end()
-	utility.prof_begin("data save")
 	dataPtr := cast(^SIMD_F32)raw_data(data)
 	d := simd.masked_load(dataPtr, cast(SIMD_F32)0, mask)
 	d += sum * scale
 	simd.masked_store(dataPtr, d, mask)
-	utility.prof_end()
 }
 
 sample_aperture_discrete :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD_F32) {
