@@ -1,5 +1,6 @@
 package vkField_utility
 
+import "base:runtime"
 import "core:fmt"
 import "core:mem"
 import "core:prof/spall"
@@ -59,7 +60,7 @@ prof_deinit :: proc() {
 prof_thread_init :: proc(allocator := context.allocator) {
 	when PROF_MODE != .None {
 		prof_allocator = allocator
-		buffer_backing = make([]u8, spall.BUFFER_DEFAULT_SIZE, allocator)
+		buffer_backing = make([]u8, 8 * runtime.Megabyte, allocator)
 		spall_buffer = spall.buffer_create(buffer_backing, u32(sync.current_thread_id()))
 	}
 }
