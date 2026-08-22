@@ -101,28 +101,18 @@ simulate_cpu_partial :: proc(
 
 				pairMinSample := i32(linalg.floor(transmitImpulseResponse.rect.x + receiveImpulseResponse.rect.x - 0.5))
 				pairMaxSample := i32(linalg.ceil(transmitImpulseResponse.rect.w + receiveImpulseResponse.rect.w + 1.5))
+				pairMinSample = max(pairMinSample, 0)
+				pairMaxSample = min(pairMaxSample, auto_cast settings.sampleCount)
+				if pairMinSample >= pairMaxSample do continue
 
 				d := dataLine[pairMinSample:pairMaxSample]
-				sampleOffset: i32 = pairMinSample
-				for len(d) >= SIMD32_WIDTH {
-					process_chunk(
-						d,
-						sampleOffset,
-						transmitImpulseResponse.rect,
-						receiveImpulseResponse.rect,
-						transmitImpulseResponse.scale * receiveImpulseResponse.scale,
-						max(u32),
-						auto_cast settings.cumulative,
-					)
-					d = d[SIMD32_WIDTH:]
-					sampleOffset += SIMD32_WIDTH
-				}
-
-				if len(d) > 0 {
+				for chunkBase := 0; chunkBase < len(d); chunkBase += SIMD32_WIDTH {
+					sampleOffset := pairMinSample + i32(chunkBase)
+					chunkWidth := min(SIMD32_WIDTH, len(d) - chunkBase)
 					index := simd.iota(SIMD_I32)
-					mask := simd.lanes_lt(index, auto_cast len(d))
+					mask := simd.lanes_lt(index, auto_cast chunkWidth)
 					process_chunk(
-						d,
+						d[chunkBase:],
 						sampleOffset,
 						transmitImpulseResponse.rect,
 						receiveImpulseResponse.rect,
@@ -230,45 +220,52 @@ sample_aperture_discrete :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD
 	nf := cast(SIMD_F32)n
 	value := SIMD_F32(0)
 
-	qDelta := aperture.w - aperture.x <= 1
-	sDelta := 1 - simd.abs(nf - aperture.x)
-	value = select(SIMD_U32(qDelta), sDelta, value)
+	if qDelta := aperture.w - aperture.x <= 1; qDelta {
+		sDelta := 1 - simd.abs(nf - aperture.x)
+		return simd.clamp(sDelta, SIMD_F32(0), SIMD_F32(1))
+	}
 
-	qRect := !qDelta && (aperture.y - aperture.x <= 1)
+	if qRect := aperture.y - aperture.x <= 1; qRect {
+		qRectLeft := and(ge(nf, SIMD_F32(aperture.y - 0.5)), le(nf, SIMD_F32(aperture.y + 0.5)))
+		sRectLeft := nf - (aperture.y - 0.5)
+		value = select(SIMD_U32(and(SIMD_U32(qRect), qRectLeft)), sRectLeft, value)
+		qRectCenter := and(gt(nf, SIMD_F32(aperture.y + 0.5)), le(nf, SIMD_F32(aperture.z - 0.5)))
+		sRectCenter := SIMD_F32(1)
+		value = select(SIMD_U32(and(SIMD_U32(qRect), qRectCenter)), sRectCenter, value)
+		qRectRight := and(gt(nf, SIMD_F32(aperture.z - 0.5)), le(nf, SIMD_F32(aperture.z + 0.5)))
+		sRectRight := 1 - (nf - (aperture.z - 0.5))
+		value = select(SIMD_U32(and(SIMD_U32(qRect), qRectRight)), sRectRight, value)
+		return simd.clamp(value, SIMD_F32(0), SIMD_F32(1))
+	}
 
-	qRectLeft := and(ge(nf, SIMD_F32(aperture.y - 0.5)), le(nf, SIMD_F32(aperture.y + 0.5)))
-	sRectLeft := nf - (aperture.y - 0.5)
-	value = select(SIMD_U32(and(SIMD_U32(qRect), qRectLeft)), sRectLeft, value)
-	qRectCenter := and(gt(nf, SIMD_F32(aperture.y + 0.5)), le(nf, SIMD_F32(aperture.z - 0.5)))
-	sRectCenter := SIMD_F32(1)
-	value = select(SIMD_U32(and(SIMD_U32(qRect), qRectCenter)), sRectCenter, value)
-	qRectRight := and(gt(nf, SIMD_F32(aperture.z - 0.5)), le(nf, SIMD_F32(aperture.z + 0.5)))
-	sRectRight := 1 - (nf - (aperture.z - 0.5))
-	value = select(SIMD_U32(and(SIMD_U32(qRect), qRectRight)), sRectRight, value)
+	if qTri := aperture.z - aperture.y <= 1; qTri {
+		qTriLeft := and(ge(nf, SIMD_F32(aperture.x)), le(nf, SIMD_F32(aperture.y)))
+		sTriLeft := (nf - aperture.x) / (aperture.y - aperture.x + linalg.F32_EPSILON)
+		value = select(SIMD_U32(and(SIMD_U32(qTri), qTriLeft)), sTriLeft, value)
+		qTriRight := and(gt(nf, SIMD_F32(aperture.z)), le(nf, SIMD_F32(aperture.w)))
+		sTriRight := (1 - (nf - aperture.z) / (aperture.w - aperture.z + linalg.F32_EPSILON))
+		value = select(SIMD_U32(and(SIMD_U32(qTri), qTriRight)), sTriRight, value)
+		return simd.clamp(value, SIMD_F32(0), SIMD_F32(1))
+	}
 
-	qTri := !qDelta && (aperture.z - aperture.y <= 1)
-	qTriLeft := and(ge(nf, SIMD_F32(aperture.x)), le(nf, SIMD_F32(aperture.y)))
-	sTriLeft := (nf - aperture.x) / (aperture.y - aperture.x + linalg.F32_EPSILON)
-	value = select(SIMD_U32(and(SIMD_U32(qTri), qTriLeft)), sTriLeft, value)
-	qTriRight := and(gt(nf, SIMD_F32(aperture.z)), le(nf, SIMD_F32(aperture.w)))
-	sTriRight := (1 - (nf - aperture.z) / (aperture.w - aperture.z + linalg.F32_EPSILON))
-	value = select(SIMD_U32(and(SIMD_U32(qTri), qTriRight)), sTriRight, value)
-
-	qTrap := !(qDelta | qRect | qTri)
-	qTrapLeft := qTriLeft
-	sTrapLeft := sTriLeft
-	value = select(SIMD_U32(and(SIMD_U32(qTrap), qTrapLeft)), sTrapLeft, value)
-	qTrapCenter := and(gt(nf, SIMD_F32(aperture.y)), le(nf, SIMD_F32(aperture.z)))
-	sTrapCenter := sRectCenter
-	value = select(SIMD_U32(and(SIMD_U32(qTrap), qTrapCenter)), sTrapCenter, value)
-	qTrapRight := qTriRight
-	sTrapRight := sTriRight
-	value = select(SIMD_U32(and(SIMD_U32(qTrap), qTrapRight)), sTrapRight, value)
-
-	return simd.clamp(value, SIMD_F32(0), SIMD_F32(1))
+	if qTrap := true; qTrap {
+		qTrapLeft := and(ge(nf, SIMD_F32(aperture.x)), le(nf, SIMD_F32(aperture.y)))
+		sTrapLeft := (nf - aperture.x) / (aperture.y - aperture.x + linalg.F32_EPSILON)
+		value = select(SIMD_U32(and(SIMD_U32(qTrap), qTrapLeft)), sTrapLeft, value)
+		qTrapCenter := and(gt(nf, SIMD_F32(aperture.y)), le(nf, SIMD_F32(aperture.z)))
+		sTrapCenter := SIMD_F32(1)
+		value = select(SIMD_U32(and(SIMD_U32(qTrap), qTrapCenter)), sTrapCenter, value)
+		qTrapRight := and(gt(nf, SIMD_F32(aperture.z)), le(nf, SIMD_F32(aperture.w)))
+		sTrapRight := (1 - (nf - aperture.z) / (aperture.w - aperture.z + linalg.F32_EPSILON))
+		value = select(SIMD_U32(and(SIMD_U32(qTrap), qTrapRight)), sTrapRight, value)
+		return simd.clamp(value, SIMD_F32(0), SIMD_F32(1))
+	}
+	return
 }
 
 sample_aperture_cumulative :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD_F32) {
+	utility.prof_scoped(#procedure)
+
 	ge :: simd.lanes_ge
 	or :: simd.bit_or
 	select :: simd.select
@@ -278,21 +275,26 @@ sample_aperture_cumulative :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SI
 	value := SIMD_F32(0)
 
 	qDelta := aperture.w - aperture.x <= 1
-	sDelta := select(ge(nf, SIMD_F32(aperture.x)), SIMD_F32(1), SIMD_F32(0))
-	value = select(SIMD_U32(qDelta), sDelta, value)
-
 	qRect := !qDelta && (aperture.y - aperture.x <= 1)
 	qTri := !qDelta && (aperture.z - aperture.y <= 1)
 	qTrap := !(qDelta | qRect | qTri)
 
-	sRect := (aperture.z - aperture.y) * clamp((nf - aperture.y) / (aperture.z - aperture.y + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
-	value = select(SIMD_U32(qRect | qTrap), value + sRect, value)
+	if qDelta {
+		return select(ge(nf, SIMD_F32(aperture.x)), SIMD_F32(1), SIMD_F32(0))
+	}
 
-	sTriLeftSat := clamp((nf - aperture.x) / (aperture.y - aperture.x + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
-	sTriLeft := 0.5 * (aperture.y - aperture.x) * sTriLeftSat * sTriLeftSat
-	sTriRightSat := clamp((aperture.w - nf) / (aperture.w - aperture.z + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
-	sTriRight := 0.5 * (aperture.w - aperture.z) * (1 - sTriRightSat * sTriRightSat)
-	value = select(SIMD_U32(qTri | qTrap), value + sTriLeft + sTriRight, value)
+	if qRect | qTrap {
+		sRect := (aperture.z - aperture.y) * clamp((nf - aperture.y) / (aperture.z - aperture.y + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
+		value += sRect
+	}
+
+	if qTri | qTrap {
+		sTriLeftSat := clamp((nf - aperture.x) / (aperture.y - aperture.x + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
+		sTriLeft := 0.5 * (aperture.y - aperture.x) * sTriLeftSat * sTriLeftSat
+		sTriRightSat := clamp((aperture.w - nf) / (aperture.w - aperture.z + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
+		sTriRight := 0.5 * (aperture.w - aperture.z) * (1 - sTriRightSat * sTriRightSat)
+		value += sTriLeft + sTriRight
+	}
 
 	return value
 }
