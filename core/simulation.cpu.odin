@@ -1,5 +1,6 @@
 package vkfield
 
+import "base:intrinsics"
 import "core:math/linalg"
 import "core:simd"
 import utility "vkField:utility"
@@ -170,6 +171,7 @@ process_chunk :: proc(
 	cumulative: bool,
 ) {
 	utility.prof_scoped(#procedure)
+
 	sampleIndex := simd.iota(SIMD_I32)
 	sampleIndex = sampleIndex + cast(SIMD_I32)sampleOffset
 
@@ -194,19 +196,24 @@ process_chunk :: proc(
 			tSamples = sample_aperture_cumulative(kts, tir) - sample_aperture_cumulative(kts - 1, tir)
 		}
 
-		for k in 0 ..< min(SIMD32_WIDTH, maxKAll - kt) {
-			kr := k + kt
-			rSample: SIMD_F32
+		rSamples: [2 * SIMD32_WIDTH]f32
+		for kr in 0 ..< 2 {
+			krs := sampleOffset - kt + SIMD_I32((kr - 1) * SIMD32_WIDTH) + simd.iota(SIMD_I32)
+			rSample := cast(^SIMD_F32)raw_data(rSamples[kr * SIMD32_WIDTH:])
 			if !cumulative {
-				rSample = sample_aperture_discrete(sampleIndex - cast(SIMD_I32)kr, rir)
+				rSample^ = sample_aperture_discrete(krs, rir)
 			} else {
-				rSample = sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)kr + 1, rir) - sample_aperture_cumulative(sampleIndex - cast(SIMD_I32)kr, rir)
+				rSample^ = sample_aperture_cumulative(krs + 1, rir) - sample_aperture_cumulative(krs, rir)
 			}
-			sumMask := simd.bit_and(simd.lanes_le(minK, SIMD_I32(kr)), simd.lanes_ge(maxK, SIMD_I32(kr)))
+		}
+
+		for k in 0 ..< min(SIMD32_WIDTH, maxKAll - kt + 1) {
 			tSample := cast(SIMD_F32)simd.extract(tSamples, k)
-			sum += simd.select(sumMask, tSample * rSample, SIMD_F32(0))
+			rSample := intrinsics.unaligned_load(cast(^SIMD_F32)raw_data(rSamples[SIMD32_WIDTH - k:]))
+			sum += tSample * rSample
 		}
 	}
+
 	dataPtr := cast(^SIMD_F32)raw_data(data)
 	d := simd.masked_load(dataPtr, cast(SIMD_F32)0, mask)
 	d += sum * scale
