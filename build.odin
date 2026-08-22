@@ -5,6 +5,7 @@ import util "core/utility"
 import "core:fmt"
 import "core:log"
 import "core:os"
+import si "core:sys/info"
 
 when ODIN_DEBUG { VKFIELD_DEFAULT_BUILD_MODE :: "debug" } else { VKFIELD_DEFAULT_BUILD_MODE :: "release" }
 VKFIELD_BUILD_MODE: string
@@ -69,6 +70,7 @@ main :: proc() {
 	options := make([dynamic]OdinBuildOption)
 	append(&options, ..VKFIELD_ODIN_BUILD_OPTIONS)
 	append(&options, ..odin_collections_to_options(VKFIELD_COLLECTIONS))
+
 	args := os.args
 	for arg in args {
 		switch arg {
@@ -97,6 +99,14 @@ main :: proc() {
 		case "-no-break":
 			append(&options, ..odin_defines_to_options({{"MESSENGER_BREAKPOINT", "false"}}))
 		}
+	}
+
+	features := si.cpu_features()
+	append(&options, OdinBuildOption{flag = "microarch", value = {"native"}})
+	if .avx512f in features && .avx512bw in features && .avx512dq in features {
+		append(&options, OdinBuildOption{flag = "target-features", value = {"avx512f,avx512bw,avx512dq"}})
+	} else if .avx2 in features {
+		append(&options, OdinBuildOption{flag = "target-features", value = {"avx2"}})
 	}
 
 	if len(VKFIELD_BUILD_MODE) == 0 {
