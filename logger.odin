@@ -7,6 +7,8 @@ import "core:strings"
 import "core:terminal"
 import "core:terminal/ansi"
 import "core:time"
+import "core:time/datetime"
+import "core:time/timezone"
 
 LogType :: enum {
 	Info,
@@ -14,6 +16,26 @@ LogType :: enum {
 	Generate,
 	Warning,
 	Error,
+}
+
+@(thread_local)
+build_local_tz: Maybe(^datetime.TZ_Region)
+
+get_build_local_tz :: proc() -> (tz: ^datetime.TZ_Region, ok := true) {
+	tz = build_local_tz.? or_else timezone.region_load("local") or_return
+	build_local_tz = tz
+	return
+}
+
+append_local_time_header :: proc(buf: ^strings.Builder) -> (ok := true) {
+	now := time.now()
+	defer log.do_time_header({.Date, .Time}, buf, now)
+
+	now_dt := time.time_to_datetime(now) or_return
+	local_tz := get_build_local_tz() or_return
+	local_dt := timezone.datetime_to_tz(now_dt, local_tz) or_return
+	now = time.datetime_to_time(local_dt) or_return
+	return
 }
 
 build_log :: proc(h: ^os.File, type: LogType, text: string) {
@@ -53,7 +75,7 @@ build_log :: proc(h: ^os.File, type: LogType, text: string) {
 	fmt.sbprint(&buf, "] ")
 
 	when time.IS_SUPPORTED {
-		log.do_time_header({.Date, .Time}, &buf, time.now())
+		append_local_time_header(&buf)
 	}
 
 	if isColored {
