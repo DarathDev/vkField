@@ -3,6 +3,7 @@ package vkfield
 import "base:intrinsics"
 import "core:math/linalg"
 import "core:simd"
+import "core:slice"
 import utility "vkField:utility"
 
 cpuSimulator :: struct {}
@@ -13,6 +14,8 @@ destroy_cpu_simulator :: proc(simulator: ^cpuSimulator) { return }
 maxTransmitSirSize: i32
 maxReceiveSirSize: i32
 
+transmitImpulseResponses: []ImpulseResponse
+receiveImpulseResponses: []ImpulseResponse
 transmitApertureSampling: []f32
 receiveApertureSampling: []f32
 // Min Sample, Sample Count
@@ -67,8 +70,8 @@ simulate_cpu :: proc(
 	SCATTER_BATCH_SIZE :: 16
 	RECEIVE_BATCH_SIZE :: 16
 
-	transmitImpulseResponses := make([]ImpulseResponse, transmitCount * SCATTER_BATCH_SIZE, context.temp_allocator)
-	receiveImpulseResponses := make([]ImpulseResponse, RECEIVE_BATCH_SIZE * SCATTER_BATCH_SIZE, context.temp_allocator)
+	transmitImpulseResponses = make([]ImpulseResponse, transmitCount * SCATTER_BATCH_SIZE, context.temp_allocator)
+	receiveImpulseResponses = make([]ImpulseResponse, RECEIVE_BATCH_SIZE * SCATTER_BATCH_SIZE, context.temp_allocator)
 	transmitApertureSampling = make([]f32, transmitCount * SCATTER_BATCH_SIZE * auto_cast maxTransmitSirSize)
 	receiveApertureSampling = make([]f32, RECEIVE_BATCH_SIZE * SCATTER_BATCH_SIZE * auto_cast maxReceiveSirSize)
 	transmitSampleRanges = make([][2]i32, transmitCount * SCATTER_BATCH_SIZE)
@@ -78,6 +81,14 @@ simulate_cpu :: proc(
 	for scatterBaseIndex < scatterCount {
 		s := scatters[scatterBaseIndex:][:min(SCATTER_BATCH_SIZE, scatterCount - scatterBaseIndex)]
 		scatterBaseIndex += SCATTER_BATCH_SIZE
+
+		slice.zero(transmitImpulseResponses)
+		slice.zero(transmitApertureSampling)
+		slice.zero(transmitSampleRanges)
+		slice.zero(receiveImpulseResponses)
+		slice.zero(receiveApertureSampling)
+		slice.zero(receiveSampleRanges)
+
 		// This should be shared between all threads, TODO: add synchronization in the outer loop
 		for scatter, scatterIndex in s {
 			for transmitElement, transmitIndex in transmitElements {
@@ -99,7 +110,8 @@ simulate_cpu :: proc(
 		receiveBatchIndex := 0
 		r: #soa[]RectangularElement
 		for receiveBatchIndex < receiveCount {
-			r = receiveElements[receiveBatchIndex:][:min(RECEIVE_BATCH_SIZE, receiveCount - receiveBatchIndex)]
+			receiveBatchCount := min(RECEIVE_BATCH_SIZE, receiveCount - receiveBatchIndex)
+			r = receiveElements[receiveBatchIndex:][:receiveBatchCount]
 
 			for scatter, scatterIndex in s {
 				for receiveElement, receiveIndex in r {
@@ -122,7 +134,7 @@ simulate_cpu :: proc(
 				}
 			}
 			dataLine := data[receiveBatchIndex * auto_cast settings.sampleCount:][:settings.sampleCount * auto_cast len(r)]
-			simulate_cpu_partial(settings, len(s), transmitImpulseResponses[:len(s) * transmitCount], receiveImpulseResponses[:len(s) * len(r)], dataLine)
+			simulate_cpu_partial(settings, transmitCount, receiveBatchCount, len(s), dataLine)
 			receiveBatchIndex += RECEIVE_BATCH_SIZE
 		}
 	}
@@ -140,40 +152,32 @@ SIMD_F32 :: #simd[SIMD32_WIDTH]f32
 SIMD_I32 :: #simd[SIMD32_WIDTH]i32
 SIMD_U32 :: #simd[SIMD32_WIDTH]u32
 
-simulate_cpu_partial :: proc(
-	settings: SimulationSettings,
-	scatterCount: int,
-	transmitImpulseResponses: []ImpulseResponse,
-	receiveImpulseResponses: []ImpulseResponse,
-	data: []f32,
-) -> (
-	ok := true,
-) {
+simulate_cpu_partial :: proc(settings: SimulationSettings, transmitCount, receiveCount, scatterCount: int, data: []f32) -> (ok := true) {
 	utility.prof_scoped(#procedure)
-	transmitCount := len(transmitImpulseResponses) / scatterCount
-	receiveCount := len(receiveImpulseResponses) / scatterCount
 
 	assert(len(data) == auto_cast settings.sampleCount * receiveCount)
 
 	for receiveIndex in 0 ..< receiveCount {
-		dataLine := data[receiveIndex * auto_cast settings.sampleCount:][:settings.sampleCount]
+		#no_bounds_check dataLine := data[receiveIndex * auto_cast settings.sampleCount:][:settings.sampleCount]
 		for scatterIndex in 0 ..< scatterCount {
 			receiveArrayIndex := scatterIndex * receiveCount + receiveIndex
-			receiveImpulseResponse := receiveImpulseResponses[receiveArrayIndex]
-			receiveSampleRange := receiveSampleRanges[receiveArrayIndex]
+			#no_bounds_check receiveSampleRange := receiveSampleRanges[receiveArrayIndex]
 			receiveMinSample := receiveSampleRange.x
 			receiveSampleCount := receiveSampleRange.y
 			if receiveSampleCount <= 0 do continue
-			receiveAperture := receiveApertureSampling[receiveArrayIndex * auto_cast maxReceiveSirSize:][:maxReceiveSirSize]
+
+			#no_bounds_check receiveImpulseResponse := receiveImpulseResponses[receiveArrayIndex]
+			#no_bounds_check receiveAperture := receiveApertureSampling[receiveArrayIndex * auto_cast maxReceiveSirSize:][:maxReceiveSirSize]
 
 			for transmitIndex in 0 ..< transmitCount {
 				transmitArrayIndex := scatterIndex * transmitCount + transmitIndex
-				transmitImpulseResponse := transmitImpulseResponses[scatterIndex * transmitCount + transmitIndex]
-				transmitSampleRange := transmitSampleRanges[transmitArrayIndex]
+				#no_bounds_check transmitSampleRange := transmitSampleRanges[transmitArrayIndex]
 				transmitMinSample := transmitSampleRange.x
 				transmitSampleCount := transmitSampleRange.y
 				if transmitSampleCount <= 0 do continue
-				transmitAperture := transmitApertureSampling[transmitArrayIndex * auto_cast maxTransmitSirSize:][:maxTransmitSirSize]
+
+				#no_bounds_check transmitImpulseResponse := transmitImpulseResponses[scatterIndex * transmitCount + transmitIndex]
+				#no_bounds_check transmitAperture := transmitApertureSampling[transmitArrayIndex * auto_cast maxTransmitSirSize:][:maxTransmitSirSize]
 
 				minSample := i32(linalg.floor(transmitImpulseResponse.rect.x + receiveImpulseResponse.rect.x - 0.5))
 				maxSample := i32(linalg.ceil(transmitImpulseResponse.rect.w + receiveImpulseResponse.rect.w + 1.5))
@@ -181,7 +185,7 @@ simulate_cpu_partial :: proc(
 				maxSample = min(maxSample, auto_cast settings.sampleCount)
 				if minSample >= maxSample do continue
 
-				d := dataLine[minSample:maxSample]
+				#no_bounds_check d := dataLine[minSample:maxSample]
 				for chunkBase := 0; chunkBase < len(d); chunkBase += SIMD32_WIDTH {
 					sampleOffset := minSample + i32(chunkBase)
 					chunkWidth := min(SIMD32_WIDTH, len(d) - chunkBase)
@@ -201,17 +205,15 @@ simulate_cpu_partial :: proc(
 						kt := k - transmitMinSample
 						tSamples: SIMD_F32
 						if 0 <= kt && kt < transmitSampleCount {
-							tSamples = SIMD_F32(transmitAperture[kt])
+							#no_bounds_check tSamples = SIMD_F32(transmitAperture[kt])
 						}
-						#no_bounds_check {
-							kr := n - k - receiveMinSample
-							kr0 := sampleOffset - k - receiveMinSample
-							krMask := simd.bit_and(simd.lanes_ge(kr, 0), simd.lanes_lt(kr, SIMD_I32(receiveSampleCount)))
-							rSamples := simd.masked_load(cast(^SIMD_F32)raw_data(receiveAperture[kr0:]), SIMD_F32(0), krMask)
-							sum += tSamples * rSamples
-						}
+						kr := n - k - receiveMinSample
+						kr0 := sampleOffset - k - receiveMinSample
+						krMask := simd.bit_and(simd.lanes_ge(kr, 0), simd.lanes_lt(kr, SIMD_I32(receiveSampleCount)))
+						#no_bounds_check rSamples := simd.masked_load(cast(^SIMD_F32)raw_data(receiveAperture[kr0:]), SIMD_F32(0), krMask)
+						sum += tSamples * rSamples
 					}
-					dataPtr := cast(^SIMD_F32)raw_data(d[chunkBase:])
+					#no_bounds_check dataPtr := cast(^SIMD_F32)raw_data(d[chunkBase:])
 					d := simd.masked_load(dataPtr, cast(SIMD_F32)0, mask)
 					d += sum * transmitImpulseResponse.scale * receiveImpulseResponse.scale
 					simd.masked_store(dataPtr, d, mask)
