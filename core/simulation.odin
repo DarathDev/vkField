@@ -125,6 +125,7 @@ plan_simulation :: proc(
 	case vkSimulator:
 		is_ok(check(plan_vulkan_simulator(&sim, settings^))) or_return
 	case cpuSimulator:
+		check(plan_cpu_simulation(&sim, settings^, transmitElements, receiveElements)) or_return
 	}
 	return
 }

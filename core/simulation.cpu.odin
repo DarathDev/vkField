@@ -3,12 +3,37 @@ package vkfield
 import "base:intrinsics"
 import "core:math/linalg"
 import "core:simd"
+import "core:slice"
 import utility "vkField:utility"
 
 cpuSimulator :: struct {}
 
 create_cpu_simulator :: proc() -> (simulator: cpuSimulator, ok := true) { return }
 destroy_cpu_simulator :: proc(simulator: ^cpuSimulator) { return }
+
+maxTransmitSirSize: f32
+maxReceiveSirSize: f32
+
+plan_cpu_simulation :: proc(
+	simulator: ^cpuSimulator,
+	settings: SimulationSettings,
+	transmitElements: #soa[]RectangularElement,
+	receiveElements: #soa[]RectangularElement,
+) -> (
+	ok := true,
+) {
+	maxTransmitSirSize = 0
+	maxReceiveSirSize = 0
+	for transmit in transmitElements {
+		maxTransmitSirSize = max(maxTransmitSirSize, linalg.length(transmit.size))
+	}
+	for receive in receiveElements {
+		maxReceiveSirSize = max(maxReceiveSirSize, linalg.length(receive.size))
+	}
+	maxTransmitSirSize *= settings.samplingFrequency / settings.speedOfSound
+	maxReceiveSirSize *= settings.samplingFrequency / settings.speedOfSound
+	return
+}
 
 simulate_cpu :: proc(
 	simulator: ^cpuSimulator,
@@ -22,6 +47,10 @@ simulate_cpu :: proc(
 ) {
 	utility.prof_scoped(#procedure)
 	data = make([]f32, settings.sampleCount * settings.receiveElementCount)
+	transmitApertureSampling = make([]f32, int(linalg.ceil(maxTransmitSirSize)) + 3)
+	receiveApertureSampling = make([]f32, int(linalg.ceil(maxReceiveSirSize)) + 3)
+	defer delete(transmitApertureSampling)
+	defer delete(receiveApertureSampling)
 
 	scatterCount: int = auto_cast settings.scatterCount
 	transmitCount: int = auto_cast settings.transmitElementCount
@@ -96,30 +125,68 @@ simulate_cpu_partial :: proc(
 		dataLine := data[receiveIndex * auto_cast settings.sampleCount:][:settings.sampleCount]
 		for scatterIndex in 0 ..< scatterCount {
 			receiveImpulseResponse := receiveImpulseResponses[scatterIndex * receiveCount + receiveIndex]
+
+			rMinSample := i32(linalg.floor(receiveImpulseResponse.rect.x - 0.5))
+			rMaxSample := i32(linalg.ceil(receiveImpulseResponse.rect.w + 0.5))
+			rSampleCount := rMaxSample - rMinSample + 1
+			if rSampleCount <= 0 do continue
+			assert(len(receiveApertureSampling) >= auto_cast rSampleCount)
+			slice.zero(receiveApertureSampling)
+			rSamples := receiveApertureSampling[:rSampleCount]
+			sample_aperture_into(rSamples, rSampleCount, rMinSample, receiveImpulseResponse.rect, auto_cast settings.cumulative)
+
 			for transmitIndex in 0 ..< transmitCount {
 				transmitImpulseResponse := transmitImpulseResponses[scatterIndex * transmitCount + transmitIndex]
 
-				pairMinSample := i32(linalg.floor(transmitImpulseResponse.rect.x + receiveImpulseResponse.rect.x - 0.5))
-				pairMaxSample := i32(linalg.ceil(transmitImpulseResponse.rect.w + receiveImpulseResponse.rect.w + 1.5))
-				pairMinSample = max(pairMinSample, 0)
-				pairMaxSample = min(pairMaxSample, auto_cast settings.sampleCount)
-				if pairMinSample >= pairMaxSample do continue
+				tMinSample := i32(linalg.floor(transmitImpulseResponse.rect.x - 0.5))
+				tMaxSample := i32(linalg.ceil(transmitImpulseResponse.rect.w + 0.5))
+				tSampleCount := tMaxSample - tMinSample + 1
+				if tSampleCount <= 0 || rSampleCount <= 0 do continue
+				assert(len(transmitApertureSampling) >= auto_cast tSampleCount)
+				slice.zero(transmitApertureSampling)
+				tSamples := transmitApertureSampling[:tSampleCount]
+				sample_aperture_into(tSamples, tSampleCount, tMinSample, transmitImpulseResponse.rect, auto_cast settings.cumulative)
 
-				d := dataLine[pairMinSample:pairMaxSample]
+				minSample := i32(linalg.floor(transmitImpulseResponse.rect.x + receiveImpulseResponse.rect.x - 0.5))
+				maxSample := i32(linalg.ceil(transmitImpulseResponse.rect.w + receiveImpulseResponse.rect.w + 1.5))
+				minSample = max(minSample, 0)
+				maxSample = min(maxSample, auto_cast settings.sampleCount)
+				if minSample >= maxSample do continue
+
+				d := dataLine[minSample:maxSample]
 				for chunkBase := 0; chunkBase < len(d); chunkBase += SIMD32_WIDTH {
-					sampleOffset := pairMinSample + i32(chunkBase)
+					sampleOffset := minSample + i32(chunkBase)
 					chunkWidth := min(SIMD32_WIDTH, len(d) - chunkBase)
 					index := simd.iota(SIMD_I32)
 					mask := simd.lanes_lt(index, auto_cast chunkWidth)
-					process_chunk(
-						d[chunkBase:],
-						sampleOffset,
-						transmitImpulseResponse.rect,
-						receiveImpulseResponse.rect,
-						transmitImpulseResponse.scale * receiveImpulseResponse.scale,
-						mask,
-						auto_cast settings.cumulative,
-					)
+
+					tir := transmitImpulseResponse.rect
+					rir := receiveImpulseResponse.rect
+
+					minK := max(cast(i32)linalg.floor(tir.x - 0.5), sampleOffset - cast(i32)linalg.ceil(rir.w + 0.5))
+					maxK := min(cast(i32)linalg.ceil(tir.w + 0.5), sampleOffset + auto_cast chunkWidth - cast(i32)linalg.floor(rir.x - 0.5))
+					if minK > maxK do continue
+
+					n := SIMD_I32(sampleOffset) + simd.iota(SIMD_I32)
+					sum := SIMD_F32(0)
+					for k in minK ..= maxK {
+						kt := k - tMinSample
+						tSamples: SIMD_F32
+						if 0 <= kt && kt < tSampleCount {
+							tSamples = SIMD_F32(transmitApertureSampling[kt])
+						}
+						#no_bounds_check {
+							kr := n - k - rMinSample
+							kr0 := sampleOffset - k - rMinSample
+							krMask := simd.bit_and(simd.lanes_ge(kr, 0), simd.lanes_lt(kr, SIMD_I32(rSampleCount)))
+							rSamples := simd.masked_load(cast(^SIMD_F32)raw_data(rSamples[kr0:]), SIMD_F32(0), krMask)
+							sum += tSamples * rSamples
+						}
+					}
+					dataPtr := cast(^SIMD_F32)raw_data(d[chunkBase:])
+					d := simd.masked_load(dataPtr, cast(SIMD_F32)0, mask)
+					d += sum * transmitImpulseResponse.scale * receiveImpulseResponse.scale
+					simd.masked_store(dataPtr, d, mask)
 				}
 			}
 		}
@@ -151,63 +218,23 @@ get_spatial_impulse_response :: proc(settings: SimulationSettings, element: Rect
 	return
 }
 
-process_chunk :: proc(
-	data: []f32,
-	sampleOffset: i32,
-	transmitImpulseResponses: [4]f32,
-	receiveImpulseResponses: [4]f32,
-	scale: f32,
-	mask: SIMD_U32,
-	cumulative: bool,
-) {
-	utility.prof_scoped(#procedure)
+transmitApertureSampling: []f32
+receiveApertureSampling: []f32
 
-	sampleIndex := simd.iota(SIMD_I32)
-	sampleIndex = sampleIndex + cast(SIMD_I32)sampleOffset
+sample_aperture_into :: proc(samples: []f32, sampleCount, minSample: i32, aperture: [4]f32, cumulative: bool) {
+	for chunkBase: i32 = 0; chunkBase < sampleCount; chunkBase += SIMD32_WIDTH {
+		indices := chunkBase + simd.iota(SIMD_I32)
+		mask := simd.lanes_lt(indices, SIMD_I32(sampleCount))
 
-	tir := transmitImpulseResponses
-	rir := receiveImpulseResponses
-
-	minK := simd.max(cast(SIMD_I32)linalg.floor(tir.x - 0.5), sampleIndex - cast(SIMD_I32)linalg.ceil(rir.w + 0.5))
-	maxK := simd.min(cast(SIMD_I32)linalg.ceil(tir.w + 0.5), sampleIndex - cast(SIMD_I32)linalg.floor(rir.x - 0.5))
-
-	minKAll := simd.reduce_min(minK)
-	maxKAll := simd.reduce_max(maxK)
-
-	if minKAll > maxKAll do return
-
-	sum := SIMD_F32(0)
-	for kt := minKAll; kt <= maxKAll; kt += SIMD32_WIDTH {
-		kts := SIMD_I32(kt) + simd.iota(SIMD_I32)
-		tSamples: SIMD_F32
+		chunkSamples := SIMD_F32(0)
 		if !cumulative {
-			tSamples = sample_aperture_discrete(kts, tir)
+			chunkSamples = sample_aperture_discrete(indices + minSample, aperture)
 		} else {
-			tSamples = sample_aperture_cumulative(kts, tir) - sample_aperture_cumulative(kts - 1, tir)
+			chunkSamples = sample_aperture_cumulative(indices + minSample, aperture) - sample_aperture_cumulative(indices + minSample - 1, aperture)
 		}
 
-		rSamples: [2 * SIMD32_WIDTH]f32
-		for kr in 0 ..< 2 {
-			krs := sampleOffset - kt + SIMD_I32((kr - 1) * SIMD32_WIDTH) + simd.iota(SIMD_I32)
-			rSample := cast(^SIMD_F32)raw_data(rSamples[kr * SIMD32_WIDTH:])
-			if !cumulative {
-				rSample^ = sample_aperture_discrete(krs, rir)
-			} else {
-				rSample^ = sample_aperture_cumulative(krs + 1, rir) - sample_aperture_cumulative(krs, rir)
-			}
-		}
-
-		for k in 0 ..< min(SIMD32_WIDTH, maxKAll - kt + 1) {
-			tSample := cast(SIMD_F32)simd.extract(tSamples, k)
-			rSample := intrinsics.unaligned_load(cast(^SIMD_F32)raw_data(rSamples[SIMD32_WIDTH - k:]))
-			sum += tSample * rSample
-		}
+		simd.masked_store(cast(^SIMD_F32)raw_data(samples[int(chunkBase):]), chunkSamples, mask)
 	}
-
-	dataPtr := cast(^SIMD_F32)raw_data(data)
-	d := simd.masked_load(dataPtr, cast(SIMD_F32)0, mask)
-	d += sum * scale
-	simd.masked_store(dataPtr, d, mask)
 }
 
 sample_aperture_discrete :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD_F32) {
