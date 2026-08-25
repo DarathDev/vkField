@@ -25,7 +25,7 @@ Simulator :: union {
 	vkSimulator,
 }
 
-SimulationSettings :: struct {
+SimulationSettings :: struct #packed {
 	samplingFrequency:    f32,
 	speedOfSound:         f32,
 	transmitElementCount: i32,
@@ -34,8 +34,26 @@ SimulationSettings :: struct {
 	startTime:            f32,
 	sampleCount:          i32,
 	cumulative:           b32,
-	simulationTime:       f32,
-	dispatchWorkLimit:    i32,
+	cpuSettings:          CpuSettings,
+	gpuSettings:          GpuSettings,
+	metrics:              SimulationMetrics,
+}
+
+CpuSettings :: struct {
+	threadCount: u32,
+}
+
+GpuSettings :: struct {
+	backend:           GpuBackend,
+	dispatchWorkLimit: i32,
+}
+
+GpuBackend :: enum u32 {
+	Vulkan,
+}
+
+SimulationMetrics :: struct {
+	simulationTime: f32,
 }
 
 #assert(size_of(RectangularElement) == 40)
@@ -69,6 +87,13 @@ simulate :: proc(
 	assert(settings.receiveElementCount != 0)
 	assert(settings.scatterCount != 0)
 
+	switch &sim in simulator {
+	case cpuSimulator:
+		assert(settings.cpuSettings.threadCount == 1, "CPU multi-threading is not implemented yet; set CpuSettings.ThreadCount to 1")
+	case vkSimulator:
+		assert(settings.gpuSettings.backend == .Vulkan, "Only the Vulkan GPU backend is implemented")
+	}
+
 	rdoc_lib, rdoc_api, rdoc_ok := rdoc.load_api()
 	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
 	defer if rdoc_ok do rdoc.unload_api(rdoc_lib)
@@ -93,7 +118,7 @@ simulate :: proc(
 		data = check(simulate_cpu(&sim, settings^, transmitElements, receiveElements, scatters)) or_return
 	}
 	time.stopwatch_stop(&stopwatch)
-	settings.simulationTime = auto_cast time.duration_seconds(time.stopwatch_duration(stopwatch))
+	settings.metrics.simulationTime = auto_cast time.duration_seconds(time.stopwatch_duration(stopwatch))
 
 	return
 }
@@ -108,6 +133,12 @@ plan_simulation :: proc(
 	ok := true,
 ) {
 	utility.prof_scoped(#procedure)
+	switch &sim in simulator {
+	case cpuSimulator:
+		assert(settings.cpuSettings.threadCount == 1, "CPU multi-threading is not implemented yet; set CpuSettings.ThreadCount to 1")
+	case vkSimulator:
+		assert(settings.gpuSettings.backend == .Vulkan, "Only the Vulkan GPU backend is implemented")
+	}
 	minDistance, maxDistance := findDistanceLimits(transmitElements, receiveElements, scatters)
 	settings.startTime = minDistance / settings.speedOfSound
 	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))

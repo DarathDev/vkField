@@ -6,11 +6,16 @@ classdef Simulation < handle
     end
 
     properties
+        CpuSettings(1,1) vkField.CpuSettings = vkField.CpuSettings();
+        GpuSettings(1,1) vkField.GpuSettings = vkField.GpuSettings();
+        Metrics(1,1) vkField.SimulatorMetrics = vkField.SimulatorMetrics();
+    end
+
+    properties
         SamplingFrequency(1,1) single = 100e6;
         SpeedOfSound(1,1) single = 1540;
         StartTime(1,1) single = NaN;
         SampleCount(1,1) uint32 = 0;
-        SimulationTime(1,1) single = NaN;
     end
 
     properties (Dependent)

@@ -24,9 +24,26 @@ typedef size_t uz;
 
 struct Simulator { };
 
-enum class SimulatorTypeKind : u32 {
+enum class SimulatorType : u32 {
 	CPU = 0,
 	GPU = 1,
+};
+
+enum class GpuBackend : u32 {
+	Vulkan = 0,
+};
+
+struct CpuSettings {
+	u32 threadCount;
+};
+
+struct GpuSettings {
+	GpuBackend backend;
+	i32 dispatchWorkLimit;
+};
+
+struct SimulationMetrics {
+	f32 simulationTime;
 };
 
 struct SimulationSettings {
@@ -38,8 +55,9 @@ struct SimulationSettings {
 	f32 startTime;
 	i32 sampleCount;
 	bool cumulative;
-	f32 simulationTime;
-	i32 dispatchWorkLimit;
+	CpuSettings cpuSettings;
+	GpuSettings gpuSettings;
+	SimulationMetrics simulationMetrics;
 };
 
 typedef enum {

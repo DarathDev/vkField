@@ -49,7 +49,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 		receiveElementCount  = 1,
 		scatterCount         = 1,
 		cumulative           = auto_cast CUMULATIVE,
-		dispatchWorkLimit    = 1 << 24,
+		gpuSettings          = { dispatchWorkLimit = 1 << 24, },
 	}
 
 	simulator := create_simulator() or_return
@@ -111,7 +111,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 		speedOfSound      = 1540,
 		scatterCount      = scatterCount,
 		cumulative        = auto_cast CUMULATIVE,
-		dispatchWorkLimit = 1 << 24,
+		gpuSettings       = { dispatchWorkLimit = 1 << 24, },
 	}
 
 	transmitElements := make_grid_elements(elementCount, 1, elementPitch, elementWidth, 0)
@@ -146,7 +146,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 		speedOfSound      = 1540,
 		scatterCount      = scatterCount,
 		cumulative        = auto_cast CUMULATIVE,
-		dispatchWorkLimit = 1 << 24,
+		gpuSettings = { dispatchWorkLimit = 1 << 24, },
 	}
 
 	transmitElements := make_grid_elements(elementCount, elementCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)

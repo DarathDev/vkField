@@ -101,6 +101,8 @@ vkTime = toc(vkTimer);
 
 fprintf("fieldII Time == %d\n", fieldTime);
 fprintf("vkField Time == %d\n", vkTime);
+fprintf("vkField Self Time == %d\n", simulator.Metrics.SimulationTime);
+fprintf("Relative Speed Up == %d\n", fieldTime / simulator.Metrics.SimulationTime);
 
 pulseEcho = double(pulseEcho) * dt^4;
 

@@ -52,7 +52,7 @@ public:
 		ObjectArray mxSimulator(inputs[0]);
 
 		SimulationSettings settings;
-		SimulatorTypeKind simulatorType;
+		SimulatorType simulatorType;
 		RectangularElementSoaSlice transmitElements;
 		RectangularElementSoaSlice receiveElements;
 		ScatterSlice scatters;
@@ -62,10 +62,10 @@ public:
 
 		Simulator* simulator;
 		switch (simulatorType) {
-		case SimulatorTypeKind::CPU:
+		case SimulatorType::CPU:
 			create_cpu_simulator_c(&simulator, printLogger, this);
 			break;
-		case SimulatorTypeKind::GPU:
+		case SimulatorType::GPU:
 			create_vulkan_simulator_c(&simulator, printLogger, this);
 			break;
 		}
@@ -82,8 +82,10 @@ public:
 
 		simulate_c(simulator, &settings, transmitElements, receiveElements,
 				   scatters, pulseEchoBuffer.get(), printLogger, this);
-		matlabPtr->setProperty(mxSimulator, u"SimulationTime",
-							   factory.createScalar<f32>(settings.simulationTime));
+		ObjectArray mxMetrics = matlabPtr->getProperty(mxSimulator, u"Metrics");
+		matlabPtr->setProperty(mxMetrics, u"SimulationTime",
+							   factory.createScalar<f32>(settings.simulationMetrics.simulationTime));
+		matlabPtr->setProperty(mxSimulator, u"Metrics", mxMetrics);
 
 		ArrayDimensions pulseEchoDims;
 		pulseEchoDims.push_back((uz)settings.sampleCount);
@@ -92,10 +94,10 @@ public:
 												   std::move(pulseEchoBuffer));
 
 		switch (simulatorType) {
-		case SimulatorTypeKind::CPU:
+		case SimulatorType::CPU:
 			destroy_cpu_simulator_c(simulator, printLogger, this);
 			break;
-		case SimulatorTypeKind::GPU:
+		case SimulatorType::GPU:
 			destroy_vulkan_simulator_c(simulator, printLogger, this);
 			break;
 		}
@@ -123,7 +125,7 @@ public:
 	void readSimulationInputs(
 		const ObjectArray& mxSimulator,
 		SimulationSettings& settings,
-		SimulatorTypeKind& simulatorType,
+		SimulatorType& simulatorType,
 		RectangularElementSoaSlice& transmitElements,
 		RectangularElementSoaSlice& receiveElements,
 		ScatterSlice& scatters) {
@@ -131,6 +133,10 @@ public:
 
 		const EnumArray mxSimulatorType =
 			matlabPtr->getProperty(mxSimulator, u"SimulatorType");
+		const ObjectArray mxCpuSettings =
+			matlabPtr->getProperty(mxSimulator, u"CpuSettings");
+		const ObjectArray mxGpuSettings =
+			matlabPtr->getProperty(mxSimulator, u"GpuSettings");
 		const TypedArray<f32> mxSamplingFrequency =
 			matlabPtr->getProperty(mxSimulator, u"SamplingFrequency");
 		const TypedArray<f32> mxSpeedOfSound =
@@ -149,10 +155,10 @@ public:
 
 		const std::string simulatorTypeName = static_cast<std::string>( mxSimulatorType[0] );
 		if (simulatorTypeName == "CPU") {
-			simulatorType = SimulatorTypeKind::CPU;
+			simulatorType = SimulatorType::CPU;
 		}
 		else if (simulatorTypeName == "GPU") {
-			simulatorType = SimulatorTypeKind::GPU;
+			simulatorType = SimulatorType::GPU;
 		}
 		else {
 			assert(false, "Unsupported simulator type");
@@ -167,6 +173,17 @@ public:
 		settings.receiveElementCount =
 			(i32)matlabPtr->getProperty(mxReceiveElementSet, "Count")[0];
 		settings.scatterCount = (i32)matlabPtr->getProperty(mxScatterSet, "Count")[0];
+		settings.cpuSettings.threadCount = (u32)matlabPtr->getProperty(mxCpuSettings, "ThreadCount")[0];
+		const EnumArray mxGpuBackend = matlabPtr->getProperty(mxGpuSettings, u"Backend");
+		const std::string gpuBackendName = static_cast<std::string>( mxGpuBackend[0] );
+		if (gpuBackendName == "Vulkan") {
+			settings.gpuSettings.backend = GpuBackend::Vulkan;
+		}
+		else {
+			assert(false, "Unsupported GPU backend");
+		}
+		settings.gpuSettings.dispatchWorkLimit =
+			(i32)matlabPtr->getProperty(mxGpuSettings, "DispatchWorkLimit")[0];
 
 		transmitElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
 		receiveElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
