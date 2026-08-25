@@ -43,13 +43,14 @@ oneRectSimulation :: proc() -> (ok := true) {
 	utility.prof_scoped(#procedure)
 
 	settings := vkField.SimulationSettings {
-		samplingFrequency    = 100e6,
-		speedOfSound         = 1540,
+		samplingFrequency = 100e6,
+		speedOfSound = 1540,
 		transmitElementCount = 1,
-		receiveElementCount  = 1,
-		scatterCount         = 1,
-		cumulative           = auto_cast CUMULATIVE,
-		gpuSettings          = { dispatchWorkLimit = 1 << 24, },
+		receiveElementCount = 1,
+		scatterCount = 1,
+		cumulative = auto_cast CUMULATIVE,
+		cpuSettings = {threadCount = 1},
+		gpuSettings = {dispatchWorkLimit = 1 << 24},
 	}
 
 	simulator := create_simulator() or_return
@@ -108,10 +109,11 @@ linearArraySimulation :: proc() -> (ok := true) {
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
-		speedOfSound      = 1540,
-		scatterCount      = scatterCount,
-		cumulative        = auto_cast CUMULATIVE,
-		gpuSettings       = { dispatchWorkLimit = 1 << 24, },
+		speedOfSound = 1540,
+		scatterCount = scatterCount,
+		cumulative = auto_cast CUMULATIVE,
+		cpuSettings = {threadCount = 1},
+		gpuSettings = {dispatchWorkLimit = 1 << 24},
 	}
 
 	transmitElements := make_grid_elements(elementCount, 1, elementPitch, elementWidth, 0)
@@ -133,7 +135,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	utility.prof_scoped(#procedure)
 
 	scatterCount :: 16
-	elementCount :: 128
+	elementCount :: 16
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
@@ -143,10 +145,11 @@ matrixArraySimulation :: proc() -> (ok := true) {
 
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
-		speedOfSound      = 1540,
-		scatterCount      = scatterCount,
-		cumulative        = auto_cast CUMULATIVE,
-		gpuSettings = { dispatchWorkLimit = 1 << 24, },
+		speedOfSound = 1540,
+		scatterCount = scatterCount,
+		cumulative = auto_cast CUMULATIVE,
+		cpuSettings = {threadCount = 1},
+		gpuSettings = {dispatchWorkLimit = 1 << 24},
 	}
 
 	transmitElements := make_grid_elements(elementCount, elementCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
@@ -186,9 +189,9 @@ main :: proc() {
 	context.logger = log.create_console_logger()
 	defer log.destroy_console_logger(context.logger)
 
-	//oneRectSimulation()
+	oneRectSimulation()
 	linearArraySimulation()
-	//matrixArraySimulation()
+	matrixArraySimulation()
 }
 
 make_random_scatters :: proc(count: int) -> []vkField.Scatter {

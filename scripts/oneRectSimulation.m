@@ -1,3 +1,4 @@
+plotting = true;
 %% Simulation Settings
 fs = 100e6;
 c = 1540;
@@ -18,10 +19,10 @@ impulseResponse = 1;
 % excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
 excitation = 1;
 
-% scatterPosition = [0, 0, 20e-3]*4;
+% scatterPosition = [0, 0, 20e-3]*1;
 % scatterPosition = [0, 5e-3, 20e-3]*1;
-scatterPosition = [5e-3, 5e-3, 20e-3]*1;
-% scatterPosition = [10e-3, 5e-3, 20e-3]*1;
+% scatterPosition = [5e-3, 5e-3, 20e-3]*1;
+scatterPosition = [10e-3, 5e-3, 20e-3]*1;
 
 diePositionT = [0, 0, 0]*1e-3;
 diePositionR = [0, 0, 0]*1e-3;
@@ -62,6 +63,8 @@ addpath("matlab\")
 simulator = vkField.Simulation;
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
+simulator.Cumulative = true;
+simulator.SimulatorType = "CPU";
 
 transmitSet = vkField.RectangularElementSet();
 transmitSet.Count = 1;
@@ -207,7 +210,7 @@ for n = minN:maxN
         tR = double(n - j);
         vT = sample_rect_aperture(tT, nRectT);
         vR = sample_rect_aperture(tR, nRectROff);
-        summ = summ  + single(vT*vR);
+        summ = summ + single(vT*vR);
     end
     summ = summ * single(powerT * powerR * scatterSet.Amplitudes(1)*dt);
     if (n >= 0 && n < manVkSampleCount)
@@ -271,7 +274,7 @@ for n = minN:maxN
         tR = double(n - j);
         vT = sample_rect_aperture_cum(tT, nRectT) - sample_rect_aperture_cum(tT - 1, nRectT);
         vR = sample_rect_aperture_cum(tR + 1, nRectROff) - sample_rect_aperture_cum(tR, nRectROff);
-        summ = summ  + single(vT*vR);
+        summ = summ + single(vT*vR);
     end
     summ = summ * single(powerT * powerR * scatterSet.Amplitudes(1)*dt);
     if (n >= 0 && n < manVkSampleCount)
@@ -319,19 +322,22 @@ pulseEcho = double(pulseEcho) * dt^4;
 vkTimes = vkStartTime + (0:(size(pulseEcho, 1)-1))/fs;
 
 %% Plot
+if plotting
 
-f1 = figure(); ax1 = axes(); hold(ax1, "on");
-p1(1) = plot(ax1, times*1e6, fullRF, '-');
-p1(2) = plot(ax1, fraunTimes*1e6, fraun, '-');
-p1(3) = plot(ax1, manVkTimes*1e6, manualConvRf, '-');
-p1(4) = plot(ax1, manVkTimes*1e6, manualCumConvRf, '-');
-p1(5) = plot(ax1, vkTimes*1e6, pulseEcho, '-');
-legend(ax1, "FieldII", "Manual Fraunhoffer", "Manual Fraounhoffer with Manual Convolution", "Manual Fraounhoffer Cumulative with Manual Convolution", "vkField");
+    f1 = figure(); ax1 = axes(); hold(ax1, "on");
+    p1(1) = plot(ax1, times*1e6, fullRF, '-');
+    p1(2) = plot(ax1, fraunTimes*1e6, fraun, '-');
+    p1(3) = plot(ax1, manVkTimes*1e6, manualConvRf, '-');
+    p1(4) = plot(ax1, manVkTimes*1e6, manualCumConvRf, '-');
+    p1(5) = plot(ax1, vkTimes*1e6, pulseEcho, '-');
+    legend(ax1, "FieldII", "Manual Fraunhoffer", "Manual Fraounhoffer with Manual Convolution", "Manual Fraounhoffer Cumulative with Manual Convolution", "vkField");
 
-lineWidth = 16;
-for i = 1:numel(p1)
-    p1(i).LineWidth = lineWidth;
-    lineWidth = lineWidth * 0.75;
+    lineWidth = 16;
+    for i = 1:numel(p1)
+        p1(i).LineWidth = lineWidth;
+        lineWidth = lineWidth * 0.75;
+    end
+
 end
 
 %% Measurements

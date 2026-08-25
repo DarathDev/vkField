@@ -23,13 +23,29 @@
             "command": "build.exe",
             "args": [
                 "-test",
-                "-debug"
+                "-debug",
             ],
             "windows": {},
             "dependsOn": "Build Builder",
             "problemMatcher": [
                 "$odin"
-            ]
+            ],
+            "inAgents": true
+        },
+        {
+            "label": "Build Tests (Profile)",
+            "command": "build.exe",
+            "args": [
+                "-test",
+                "-release",
+                "-profile",
+            ],
+            "windows": {},
+            "dependsOn": "Build Builder",
+            "problemMatcher": [
+                "$odin"
+            ],
+            "inAgents": true
         },
     ]
 }

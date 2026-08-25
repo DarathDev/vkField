@@ -1,4 +1,6 @@
 addpath("matlab");
+
+plotting = false;
 %% Simulation Settings
 fs = 100e6;
 c = 1540;
@@ -29,7 +31,7 @@ excitation = 1;
 % scatterPosition = [0, 5e-3, 20e-3]'*1;
 % scatterPosition = [5e-3, 5e-3, 20e-3]'*1;
 % scatterPosition = [10e-3, 5e-3, 20e-3]'*1;
-nScatters = 128;
+nScatters = 16;
 scatterPosition = rand(3, nScatters) .* [16e-3, 16e-3, 100e-3]' + [-8e-3, -8e-3, 0]';
 scatterAmplitude = ones(size(scatterPosition, 2), 1);
 
@@ -72,6 +74,8 @@ rData = fieldII.xdc_get(rTh, 'rect');
 %% vkField Simulation
 
 simulator = vkField.Simulation();
+simulator.Cumulative = false;
+
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 
@@ -94,7 +98,7 @@ simulator.ReceiveElements.Apodizations = rData(5, :);
 simulator.ReceiveElements.Delays = rData(23, :);
 
 
-% mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
+mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
 vkTimer = tic();
 pulseEcho = vkField_mex(simulator);
 vkTime = toc(vkTimer);
@@ -108,35 +112,39 @@ pulseEcho = double(pulseEcho) * dt^4;
 
 vkTimes = simulator.StartTime + (0:(size(pulseEcho, 1)-1))/fs;
 
-f1 = figure(); tl1 = tiledlayout(f1, 1, 2);
-ax1 = gobjects(1, 2);
-for j = 1:numel(ax1)
-    ax1(j) = nexttile(tl1);
-end
+if plotting
 
-im1(1) = imagesc(ax1(1), 1:columnCountR, times*1e6, fullRF);
-im1(1) = imagesc(ax1(2), 1:columnCountR, vkTimes*1e6, pulseEcho);
-
-vw1 = VideoWriter(fullfile("figures", "matrixArrayComparison" + ".mp4"), "MPEG-4");
-vw1.FrameRate = 30;
-vw1.open();
-
-f2 = figure(); ax2 = axes(f2); hold(ax2, "on");
-for i = 1:size(fullRF, 2)
-    hold(ax2, "off");
-    p2(1) = plot(ax2, times*1e6, fullRF(:, i), '-'); hold(ax2, "on");
-    p2(2) = plot(ax2, vkTimes*1e6, pulseEcho(:, i), '-');
-    legend(ax2, "FieldII", "vkField");
-
-    lineWidth = 16;
-    for j = 1:numel(p2)
-        p2(j).LineWidth = lineWidth;
-        lineWidth = lineWidth * 0.50;
+    f1 = figure(); tl1 = tiledlayout(f1, 1, 2);
+    ax1 = gobjects(1, 2);
+    for j = 1:numel(ax1)
+        ax1(j) = nexttile(tl1);
     end
-    drawnow;
-    vw1.writeVideo(getframe(f2));
+
+    im1(1) = imagesc(ax1(1), 1:columnCountR, times*1e6, fullRF);
+    im1(1) = imagesc(ax1(2), 1:columnCountR, vkTimes*1e6, pulseEcho);
+
+    vw1 = VideoWriter(fullfile("figures", "matrixArrayComparison" + ".mp4"), "MPEG-4");
+    vw1.FrameRate = 30;
+    vw1.open();
+
+    f2 = figure(); ax2 = axes(f2); hold(ax2, "on");
+    for i = 1:size(fullRF, 2)
+        hold(ax2, "off");
+        p2(1) = plot(ax2, times*1e6, fullRF(:, i), '-'); hold(ax2, "on");
+        p2(2) = plot(ax2, vkTimes*1e6, pulseEcho(:, i), '-');
+        legend(ax2, "FieldII", "vkField");
+
+        lineWidth = 16;
+        for j = 1:numel(p2)
+            p2(j).LineWidth = lineWidth;
+            lineWidth = lineWidth * 0.50;
+        end
+        drawnow;
+        vw1.writeVideo(getframe(f2));
+    end
+    vw1.close();
+
 end
-vw1.close();
 
 function normals = tangentsToNormals(tangents)
 normals = [tangents(2, :)./sqrt(1 + tangents(2, :).^2);
