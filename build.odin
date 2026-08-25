@@ -147,7 +147,10 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 
 	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_LIBRARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
 	// Make Output Directory
-	if !os.is_directory(outputDir) do os.make_directory_all(outputDir)
+	if !os.is_directory(outputDir) {
+		build_log(os.stdout, .Info, fmt.tprintf("Making Directory %s", outputDir))
+		os.make_directory_all(outputDir)
+	}
 
 	// Odin Compilation
 	when ODIN_OS == .Windows {
@@ -173,6 +176,7 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 			matlabLibraryName := assume(os.join_filename(fmt.aprintf("%s_lib", VKFIELD_OUTPUT_LIB_NAME), "a", context.allocator))
 		}
 		matlabPath := assume(os.join_path({INSTALL_LOCATION, MATLAB_DIR, matlabLibraryName}, context.allocator))
+		build_log(os.stdout, .Info, fmt.tprintf("Copying %s to %s", libraryOutPath, matlabPath))
 		assert(os.copy_file(matlabPath, libraryOutPath))
 	}
 
@@ -188,7 +192,10 @@ build_test :: proc(options: ^[dynamic]OdinBuildOption) {
 
 	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_BINARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
 	// Make Output Directory
-	if !os.is_dir(outputDir) do os.make_directory_all(outputDir)
+	if !os.is_directory(outputDir) {
+		build_log(os.stdout, .Info, fmt.tprintf("Making Directory %s", outputDir))
+		os.make_directory_all(outputDir)
+	}
 
 	// Odin Compilation
 	when ODIN_OS == .Windows {
