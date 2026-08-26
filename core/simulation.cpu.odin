@@ -208,7 +208,7 @@ get_spatial_impulse_response :: proc(settings: SimulationSettings, element: Rect
 	dt1 := linalg.min_single(dieProjection) / distance / settings.speedOfSound
 	dt2 := linalg.max_single(dieProjection) / distance / settings.speedOfSound
 
-	rectTimes := t0 + 0.5 * (dt1 * [4]f32{-1, +1, -1, +1} + dt2 * [4]f32{-1, -1, +1, +1})
+	rectTimes := t0 + 0.5 * (dt1 * [4]f32{-1, +1, -1, +1} + dt2 * [4]f32{-1, -1, +1, +1}) + element.delay
 	impulseResponse.rect = rectTimes * settings.samplingFrequency
 	dt := 1 / settings.samplingFrequency
 
