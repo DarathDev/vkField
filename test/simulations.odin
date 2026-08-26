@@ -166,22 +166,16 @@ matrixArraySimulation :: proc() -> (ok := true) {
 
 @(test)
 oneRectSimulationTest :: proc(t: ^testing.T) {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
 	_ = utility.expect(t, oneRectSimulation())
 }
 
 @(test)
 linearArraySimulationTest :: proc(t: ^testing.T) {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
 	_ = utility.expect(t, linearArraySimulation())
 }
 
 @(test)
 matrixArraySimulationTest :: proc(t: ^testing.T) {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
 	_ = utility.expect(t, matrixArraySimulation())
 }
 
