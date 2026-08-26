@@ -2,25 +2,23 @@ module pulseEcho;
 
 import util;
 
-layout(constant_id =  0) const uint  WorkgroupSizeX    = 64;
-layout(constant_id =  1) const uint  SampleCount       = 0;
-layout(constant_id =  2) const uint  TransmitCount     = 0;
-layout(constant_id =  3) const uint  ReceiveBatchCount = 0;
-layout(constant_id =  4) const uint  ScatterBatchCount = 0;
-layout(constant_id =  5) const bool  Cumulative        = false;
+layout(constant_id = 0) const uint WorkgroupSizeX = 64;
+layout(constant_id = 1) const uint SampleCount = 0;
+layout(constant_id = 2) const uint TransmitCount = 0;
+layout(constant_id = 3) const uint ReceiveBatchCount = 0;
+layout(constant_id = 4) const uint ScatterBatchCount = 0;
+layout(constant_id = 5) const bool Cumulative = false;
 
 struct PulseEchoSettings {
-	float4* spatialImpulseResponses;
-	float* response;
-	uint receiveBatchOffset;
+  float4 *spatialImpulseResponses;
+  float *response;
+  uint receiveBatchOffset;
 };
 
 [[vk::push_constant]]
 ConstantBuffer<PulseEchoSettings> settings;
 
-float b2f(bool v) {
-  return v ? 1.0f : 0.0f;
-}
+float b2f(bool v) { return v ? 1.0f : 0.0f; }
 
 float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
   bool qDelta = rectSamples.w - rectSamples.x <= 1;
@@ -37,7 +35,8 @@ float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
   float sTriRightSat = saturate((rectSamples.w - n) / (rectSamples.w - rectSamples.z));
   float sTriRight = 0.5f * (rectSamples.w - rectSamples.z) * (1 - sTriRightSat * sTriRightSat);
 
-  float value = b2f(qDelta) * sDelta + b2f(qRect) * sRect + b2f(qTri) * (sTriLeft + sTriRight) + b2f(qTrap) * (sTriLeft + sRect + sTriRight);
+  float value =
+      b2f(qDelta) * sDelta + b2f(qRect) * sRect + b2f(qTri) * (sTriLeft + sTriRight) + b2f(qTrap) * (sTriLeft + sRect + sTriRight);
   return value;
 }
 
@@ -71,82 +70,84 @@ float sample_rect_aperture_discrete(in float n, in float4 rectSamples) {
   float sTrapCenter = sRectCenter;
   float sTrapRight = sTriRight;
 
-  float value = b2f(qDelta) * sDelta + b2f(qRect) * ((b2f(qRectLeft) * sRectLeft) + (b2f(qRectCenter) * sRectCenter) + (b2f(qRectRight) * sRectRight)) + b2f(qTri) * ((b2f(qTriLeft) * sTriLeft) + (b2f(qTriRight) * sTriRight)) + b2f(qTrap) * ((b2f(qTrapLeft) * sTrapLeft) + (b2f(qTrapCenter) * sTrapCenter) + (b2f(qTrapRight) * sTrapRight));
+  float value = b2f(qDelta) * sDelta +
+                b2f(qRect) * ((b2f(qRectLeft) * sRectLeft) + (b2f(qRectCenter) * sRectCenter) + (b2f(qRectRight) * sRectRight)) + //
+                b2f(qTri) * ((b2f(qTriLeft) * sTriLeft) + (b2f(qTriRight) * sTriRight)) +                                         //
+                b2f(qTrap) * ((b2f(qTrapLeft) * sTrapLeft) + (b2f(qTrapCenter) * sTrapCenter) + (b2f(qTrapRight) * sTrapRight));
   return saturate(value);
 }
 
 float sample_transmit_aperture(in int i, in float4 nRectT) {
-	if (Cumulative) {
-		return sample_rect_aperture_cumulative(i, nRectT) - sample_rect_aperture_cumulative(i - 1, nRectT);
-	} else {
-		return sample_rect_aperture_discrete(i, nRectT);
-	}
+  if (Cumulative) {
+    return sample_rect_aperture_cumulative(i, nRectT) - sample_rect_aperture_cumulative(i - 1, nRectT);
+  } else {
+    return sample_rect_aperture_discrete(i, nRectT);
+  }
 }
 
 float sample_receive_aperture(in int n, in int i, in float4 nRectR) {
-	if (Cumulative) {
-		return sample_rect_aperture_cumulative(n - i + 1, nRectR) - sample_rect_aperture_cumulative(n - i, nRectR);
-	} else {
-		return sample_rect_aperture_discrete(n - i, nRectR);
-	}
+  if (Cumulative) {
+    return sample_rect_aperture_cumulative(n - i + 1, nRectR) - sample_rect_aperture_cumulative(n - i, nRectR);
+  } else {
+    return sample_rect_aperture_discrete(n - i, nRectR);
+  }
 }
 
 groupshared float outputSamples[WorkgroupSizeX];
 
 [shader("compute")]
 [numthreads(WorkgroupSizeX, 1, 1)]
-void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex)
-{
-	const uint threadCount = WorkgroupSizeX;
+void main(uint3 GroupID: SV_GroupID, uint ThreadID: SV_GroupIndex) {
+  const uint threadCount = WorkgroupSizeX;
 
-	uint baseSample = WorkgroupSizeX * GroupID.x;
-	uint receiveIndex = GroupID.y;
+  uint baseSample = WorkgroupSizeX * GroupID.x;
+  uint receiveIndex = GroupID.y;
 
-	outputSamples[ThreadID] = 0;
+  outputSamples[ThreadID] = 0;
 
-	uint nTotal       = ScatterBatchCount * TransmitCount;
-	uint nPerThread  = nTotal / threadCount;
-	uint nLeftover    = nTotal % threadCount;
-	uint nThisThread = nPerThread + uint(ThreadID < nLeftover);
+  uint nTotal = ScatterBatchCount * TransmitCount;
+  uint nPerThread = nTotal / threadCount;
+  uint nLeftover = nTotal % threadCount;
+  uint nThisThread = nPerThread + uint(ThreadID < nLeftover);
 
-	for (uint n = 0; n < nThisThread; n++) {
-		uint packedIndex   = threadCount * n + ThreadID;
-		uint scatterIndex  = packedIndex / TransmitCount;
-		uint transmitIndex = packedIndex % TransmitCount;
+  for (uint n = 0; n < nThisThread; n++) {
+    uint packedIndex = threadCount * n + ThreadID;
+    uint scatterIndex = packedIndex / TransmitCount;
+    uint transmitIndex = packedIndex % TransmitCount;
 
-		uint t_index = scatterIndex * TransmitCount + transmitIndex;
-		uint r_index = ScatterBatchCount * TransmitCount + scatterIndex * ReceiveBatchCount + receiveIndex;
+    uint tIndex = scatterIndex * TransmitCount + transmitIndex;
+    uint rIndex = ScatterBatchCount * TransmitCount + scatterIndex * ReceiveBatchCount + receiveIndex;
 
-		float4 *sirRects = settings.spatialImpulseResponses;
-		float *sirScales = Ptr<float>(sirRects + (ScatterBatchCount * (TransmitCount + ReceiveBatchCount)));
+    float4 *sirRects = settings.spatialImpulseResponses;
+    float *sirScales = Ptr<float>(sirRects + (ScatterBatchCount * (TransmitCount + ReceiveBatchCount)));
 
-		float4 r_rect_samples = sirRects[r_index];
-		float  r_scale        = sirScales[r_index];
-		float4 t_rect_samples = sirRects[t_index];
-		float  t_scale        = sirScales[t_index];
+    float4 rRectSamples = sirRects[rIndex];
+    float rScale = sirScales[rIndex];
+    float4 tRectSamples = sirRects[tIndex];
+    float tScale = sirScales[tIndex];
 
-		for (int sampleIndex = 0; sampleIndex < WorkgroupSizeX; sampleIndex++) {
-			GroupMemoryBarrierWithGroupSync();
-			int sample_n      = (sampleIndex + ThreadID) % WorkgroupSizeX;
-			int full_sample_n = baseSample + sample_n;
-			if (full_sample_n < SampleCount) {
-				int minK = int(max(floor(t_rect_samples.x - 0.5f), full_sample_n - ceil(r_rect_samples.w + 0.5f)));
-				int maxK = int(min(ceil(t_rect_samples.w + 0.5f),  full_sample_n - floor(r_rect_samples.x - 0.5f)));
+    for (int sampleIndex = 0; sampleIndex < WorkgroupSizeX; sampleIndex++) {
+      GroupMemoryBarrierWithGroupSync();
+      int sampleN = (sampleIndex + ThreadID) % WorkgroupSizeX;
+      int fullSampleN = baseSample + sampleN;
+      if (fullSampleN < SampleCount) {
+        int minK = int(max(floor(tRectSamples.x - 0.5f), fullSampleN - ceil(rRectSamples.w + 0.5f)));
+        int maxK = int(min(ceil(tRectSamples.w + 0.5f), fullSampleN - floor(rRectSamples.x - 0.5f)));
 
-				float sum = 0;
-				for (int i = minK; i <= maxK; i++) {
-					float vT = sample_transmit_aperture(i, t_rect_samples);
-					float vR = sample_receive_aperture(full_sample_n, i, r_rect_samples);
-					sum += vT * vR;
-				}
-				outputSamples[sample_n] += t_scale * r_scale * sum;
-			}
-		}
-	}
+        float sum = 0;
+        for (int i = minK; i <= maxK; i++) {
+          float vT = sample_transmit_aperture(i, tRectSamples);
+          float vR = sample_receive_aperture(fullSampleN, i, rRectSamples);
+          sum += vT * vR;
+        }
+        outputSamples[sampleN] += tScale * rScale * sum;
+      }
+    }
+  }
 
-	GroupMemoryBarrierWithGroupSync();
-	uint sampleIndex      = baseSample + ThreadID;
-	uint receiveOutIndex = settings.receiveBatchOffset + receiveIndex;
-	if (sampleIndex < SampleCount)
-		settings.response[receiveOutIndex * SampleCount + sampleIndex] += outputSamples[ThreadID];
+  GroupMemoryBarrierWithGroupSync();
+  uint sampleIndex = baseSample + ThreadID;
+  uint receiveOutIndex = settings.receiveBatchOffset + receiveIndex;
+  if (sampleIndex < SampleCount)
+    settings.response[receiveOutIndex * SampleCount + sampleIndex] += outputSamples[ThreadID];
 }

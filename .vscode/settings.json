@@ -1,0 +1,7 @@
+{
+    "[slang]": {
+        "editor.defaultFormatter": "shader-slang.slang-language-extension"
+    },
+    "slang.format.clangFormatStyle": "file",
+    "slang.format.clangFormatFallbackStyle": "{ BasedOnStyle: LLVM, ColumnLimit: 140, BinPackArguments: true, BinPackParameters: true, Cpp11BracedListStyle: true, AlignAfterOpenBracket: Align }"
+}
