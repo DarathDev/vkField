@@ -27,14 +27,15 @@ destroy_cpu_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc = 
 }
 
 @(export)
-create_vulkan_simulator_c :: proc "c" (simulator: ^^Simulator, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
+create_vulkan_simulator_c :: proc "c" (simulator: ^^Simulator, settings: ^SimulationSettings, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
 	if !vkField_vk.VKFIELD_VULKAN_INITIALIZED {
 		vkField_vk.initialize()
 	}
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
 	simulator^ = new(Simulator)
-	simulator^^, ok = utility.is_ok(create_vulkan_simulator())
+	utility.check(settings != nil) or_return
+	simulator^^, ok = utility.is_ok(create_vulkan_simulator(settings^))
 	return
 }
 

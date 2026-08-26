@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <cstddef>
 
 #ifndef LIB_FN
 #if defined(_WIN32)
@@ -40,6 +41,7 @@ struct CpuSettings {
 struct GpuSettings {
 	GpuBackend backend;
 	i32 dispatchWorkLimit;
+	u32 enableDriverDebugMessages;
 };
 
 struct SimulationMetrics {
@@ -54,7 +56,7 @@ struct SimulationSettings {
 	i32 scatterCount;
 	f32 startTime;
 	i32 sampleCount;
-	bool cumulative;
+	u32 cumulative;
 	CpuSettings cpuSettings;
 	GpuSettings gpuSettings;
 	SimulationMetrics simulationMetrics;
@@ -111,7 +113,7 @@ extern "C" {
 													void* pUserData);
 	LIB_FN void destroy_cpu_simulator_c(Simulator* simulator, CLogProc logFunc,
 													 void* pUserData);
-	LIB_FN bool create_vulkan_simulator_c(Simulator** simulator, CLogProc logFunc,
+	LIB_FN bool create_vulkan_simulator_c(Simulator** simulator, SimulationSettings* settings, CLogProc logFunc,
 																				void* pUserData);
 	LIB_FN void destroy_vulkan_simulator_c(Simulator* simulator, CLogProc logFunc,
 																				 void* pUserData);

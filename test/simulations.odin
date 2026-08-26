@@ -14,13 +14,13 @@ is_ok :: utility.is_ok
 SIMULATOR_TYPE :: #config(TEST_SIMULATOR_TYPE, "CPU")
 CUMULATIVE :: bool(#config(TEST_CUMULATIVE, true))
 
-create_simulator :: proc() -> (simulator: vkField.Simulator, ok: bool) {
+create_simulator :: proc(settings: vkField.SimulationSettings) -> (simulator: vkField.Simulator, ok: bool) {
 	switch SIMULATOR_TYPE {
 	case "CPU":
 		cpuSimulator, cpuOk := vkField.create_cpu_simulator()
 		return cpuSimulator, cpuOk
 	case "VULKAN", "VK", "GPU":
-		vkSimulator, vkOk := vkField.create_vulkan_simulator()
+		vkSimulator, vkOk := vkField.create_vulkan_simulator(settings)
 		return vkSimulator, vkOk == .SUCCESS
 	case:
 		panic(fmt.tprintf("Unsupported simulator type %q", SIMULATOR_TYPE))
@@ -50,10 +50,10 @@ oneRectSimulation :: proc() -> (ok := true) {
 		scatterCount = 1,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24},
+		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
 	}
 
-	simulator := create_simulator() or_return
+	simulator := create_simulator(settings) or_return
 	defer destroy_simulator(&simulator)
 
 	transmitElement: vkField.RectangularElement = {
@@ -104,17 +104,17 @@ linearArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator := create_simulator() or_return
-	defer destroy_simulator(&simulator)
-
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
 		scatterCount = scatterCount,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24},
+		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
 	}
+
+	simulator := create_simulator(settings) or_return
+	defer destroy_simulator(&simulator)
 
 	transmitElements := make_grid_elements(elementCount, 1, elementPitch, elementWidth, 0)
 	defer delete(transmitElements)
@@ -140,17 +140,17 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	simulator := create_simulator() or_return
-	defer destroy_simulator(&simulator)
-
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
 		scatterCount = scatterCount,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24},
+		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
 	}
+
+	simulator := create_simulator(settings) or_return
+	defer destroy_simulator(&simulator)
 
 	transmitElements := make_grid_elements(elementCount, elementCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
 	defer delete(transmitElements)

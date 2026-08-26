@@ -66,7 +66,12 @@ public:
 			create_cpu_simulator_c(&simulator, printLogger, this);
 			break;
 		case SimulatorType::GPU:
-			create_vulkan_simulator_c(&simulator, printLogger, this);
+			create_vulkan_simulator_c(
+				&simulator,
+				&settings,
+				printLogger,
+				this
+			);
 			break;
 		}
 
@@ -167,7 +172,7 @@ public:
 		settings.speedOfSound = mxSpeedOfSound[0];
 		settings.startTime = mxStartTime[0];
 		settings.sampleCount = mxSampleCount[0];
-		settings.cumulative = mxCumulative[0];
+		settings.cumulative = mxCumulative[0] ? 1u : 0u;
 		settings.transmitElementCount =
 			(i32)matlabPtr->getProperty(mxTransmitElementSet, "Count")[0];
 		settings.receiveElementCount =
@@ -184,6 +189,8 @@ public:
 		}
 		settings.gpuSettings.dispatchWorkLimit =
 			(i32)matlabPtr->getProperty(mxGpuSettings, "DispatchWorkLimit")[0];
+		settings.gpuSettings.enableDriverDebugMessages =
+			matlabPtr->getProperty(mxGpuSettings, "EnableDriverDebugMessages")[0] ? 1u : 0u;
 
 		transmitElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
 		receiveElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };

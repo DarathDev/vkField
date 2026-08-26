@@ -44,8 +44,9 @@ CpuSettings :: struct {
 }
 
 GpuSettings :: struct {
-	backend:           GpuBackend,
-	dispatchWorkLimit: i32,
+	backend:                   GpuBackend,
+	dispatchWorkLimit:         i32,
+	enableDriverDebugMessages: b32,
 }
 
 GpuBackend :: enum u32 {

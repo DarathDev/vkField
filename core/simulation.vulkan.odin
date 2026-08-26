@@ -114,12 +114,14 @@ vkStagableBuffer :: struct {
 	staging: Maybe(vkField_vk.Buffer),
 }
 
-create_vulkan_simulator :: proc() -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
+create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
+	instanceCapabilities: vkField_vk.InstanceCapabilities = {}
+	if settings.gpuSettings.enableDriverDebugMessages do instanceCapabilities = {.Validation, .DebugUtils}
 	simulator.instance = confirm(
 		vkField_vk.create_instance(
-			{appName = "vkField", vulkanVersion = vk.API_VERSION_1_3, optionalCapabilities = {.Validation, .DebugUtils}},
+			{appName = "vkField", vulkanVersion = vk.API_VERSION_1_3, optionalCapabilities = instanceCapabilities},
 			debugUserData = simulator.debugUserData,
 		),
 	) or_return
@@ -190,7 +192,7 @@ destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 	vkField_vk.destroy_descriptor_set_layout(simulator.device, simulator.computeDescriptorSetLayout)
 	vkField_vk.destroy_device(&simulator.device)
 	vkField_vk.free_physical_devices(&simulator.physicalDevices)
-	if .Validation in simulator.instance.enabledCapabilities {
+	if .DebugUtils in simulator.instance.enabledCapabilities {
 		vkField_vk.destroy_debug_messenger(simulator.instance.instance, &simulator.debugMessenger)
 	}
 	vkField_vk.destroy_instance(&simulator.instance)
