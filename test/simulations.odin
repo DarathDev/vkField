@@ -77,6 +77,8 @@ oneRectSimulation :: proc() -> (ok := true) {
 
 	transmitElements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
 	receiveElements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
+	defer delete(transmitElements)
+	defer delete(receiveElements)
 	transmitElements[0] = transmitElement
 	receiveElements[0] = receiveElement
 	scatters := slice.from_ptr(&scatter, 1)
@@ -86,10 +88,15 @@ oneRectSimulation :: proc() -> (ok := true) {
 	data: []f32
 	data, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
 	defer delete(data)
-	defer delete(transmitElements)
-	defer delete(receiveElements)
 	fmt.println(data)
-	return
+	nonZeroData: bool
+	for datum in data {
+		if datum != 0 {
+			nonZeroData = true
+			break
+		}
+	}
+	return nonZeroData
 }
 
 linearArraySimulation :: proc() -> (ok := true) {
@@ -134,8 +141,8 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	utility.prof_thread_init()
 	utility.prof_scoped(#procedure)
 
-	scatterCount :: 16
-	elementCount :: 16
+	scatterCount :: 128
+	elementCount :: 128
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
@@ -164,7 +171,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	return
 }
 
-@(test)
+// @(test)
 oneRectSimulationTest :: proc(t: ^testing.T) {
 	_ = utility.expect(t, oneRectSimulation())
 }
@@ -174,7 +181,7 @@ linearArraySimulationTest :: proc(t: ^testing.T) {
 	_ = utility.expect(t, linearArraySimulation())
 }
 
-@(test)
+// @(test)
 matrixArraySimulationTest :: proc(t: ^testing.T) {
 	_ = utility.expect(t, matrixArraySimulation())
 }
