@@ -1,6 +1,8 @@
 #include "vkField_lib.hpp"
 #include "mex.hpp"
 #include "mexAdapter.hpp"
+#include <algorithm>
+#include <cstring>
 #include <functional>
 #include <stdint.h>
 
@@ -31,6 +33,25 @@ static void freeRectangularElementSoaSlice(RectangularElementSoaSlice* slice) {
 	slice->len = 0;
 }
 
+static void freeTransmissionSlice(TransmissionSlice* transmissions) {
+	if (transmissions == nullptr || transmissions->data == nullptr) {
+		return;
+	}
+	for (iz i = 0; i < transmissions->len; ++i) {
+		Transmission transmission = transmissions->data[i];
+		delete[ ] transmission.elements.index;
+		delete[ ] transmission.elements.apodization;
+		delete[ ] transmission.elements.delay;
+	}
+	delete[ ] transmissions->data;
+	transmissions->data = nullptr;
+	transmissions->len = 0;
+}
+
+static void freeReceiveChannelSlice(ReceiveChannelSlice* receiveChannels) {
+	freeTransmissionSlice(reinterpret_cast<TransmissionSlice*>( receiveChannels ));
+}
+
 template <typename T> const T* getDataPtr(matlab::data::Array arr) {
 	const matlab::data::TypedArray<T> arr_t = arr;
 	matlab::data::TypedIterator<const T> it(arr_t.begin());
@@ -53,12 +74,13 @@ public:
 
 		SimulationSettings settings;
 		SimulatorType simulatorType;
-		RectangularElementSoaSlice transmitElements;
-		RectangularElementSoaSlice receiveElements;
+		RectangularElementSoaSlice elements;
+		TransmissionSlice transmissions;
+		ReceiveChannelSlice receiveChannels;
 		ScatterSlice scatters;
 
 		readSimulationInputs(mxSimulator, settings, simulatorType,
-			transmitElements, receiveElements, scatters);
+			elements, transmissions, receiveChannels, scatters);
 
 		Simulator* simulator;
 		switch (simulatorType) {
@@ -75,7 +97,7 @@ public:
 			break;
 		}
 
-		plan_simulation_c(simulator, &settings, transmitElements, receiveElements,
+		plan_simulation_c(simulator, &settings, transmissions, receiveChannels, elements,
 					  scatters, printLogger, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime",
 						   factory.createScalar<f32>(settings.startTime));
@@ -83,9 +105,9 @@ public:
 						   factory.createScalar<u32>(settings.sampleCount));
 
 		auto pulseEchoBuffer = factory.createBuffer<float>(
-			settings.sampleCount * settings.receiveElementCount);
+			settings.sampleCount * receiveChannels.len * transmissions.len);
 
-		simulate_c(simulator, &settings, transmitElements, receiveElements,
+		simulate_c(simulator, &settings, transmissions, receiveChannels, elements,
 				   scatters, pulseEchoBuffer.get(), printLogger, this);
 		ObjectArray mxMetrics = matlabPtr->getProperty(mxSimulator, u"Metrics");
 		matlabPtr->setProperty(mxMetrics, u"SimulationTime",
@@ -94,7 +116,8 @@ public:
 
 		ArrayDimensions pulseEchoDims;
 		pulseEchoDims.push_back((uz)settings.sampleCount);
-		pulseEchoDims.push_back((uz)settings.receiveElementCount);
+		pulseEchoDims.push_back((uz)receiveChannels.len);
+		pulseEchoDims.push_back((uz)transmissions.len);
 		outputs[0] = factory.createArrayFromBuffer(pulseEchoDims,
 												   std::move(pulseEchoBuffer));
 
@@ -107,8 +130,9 @@ public:
 			break;
 		}
 
-		freeRectangularElementSoaSlice(&transmitElements);
-		freeRectangularElementSoaSlice(&receiveElements);
+		freeRectangularElementSoaSlice(&elements);
+		freeTransmissionSlice(&transmissions);
+		freeReceiveChannelSlice(&receiveChannels);
 		free(scatters.data);
 
 		void mexUnlock();
@@ -131,8 +155,9 @@ public:
 		const ObjectArray& mxSimulator,
 		SimulationSettings& settings,
 		SimulatorType& simulatorType,
-		RectangularElementSoaSlice& transmitElements,
-		RectangularElementSoaSlice& receiveElements,
+		RectangularElementSoaSlice& elements,
+		TransmissionSlice& transmissions,
+		ReceiveChannelSlice& receiveChannels,
 		ScatterSlice& scatters) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
 
@@ -151,10 +176,12 @@ public:
 		const TypedArray<u32> mxSampleCount =
 			matlabPtr->getProperty(mxSimulator, u"SampleCount");
 		const Array mxCumulative = matlabPtr->getProperty(mxSimulator, u"Cumulative");
-		const ObjectArray mxTransmitElementSet =
-			matlabPtr->getProperty(mxSimulator, u"TransmitElements");
-		const ObjectArray mxReceiveElementSet =
-			matlabPtr->getProperty(mxSimulator, u"ReceiveElements");
+		const ObjectArray mxElementSet =
+			matlabPtr->getProperty(mxSimulator, u"Elements");
+		const ObjectArray mxTransmissions =
+			matlabPtr->getProperty(mxSimulator, u"Transmissions");
+		const ObjectArray mxReceiveChannels =
+			matlabPtr->getProperty(mxSimulator, u"ReceiveChannels");
 		const ObjectArray mxScatterSet =
 			matlabPtr->getProperty(mxSimulator, u"Scatters");
 
@@ -173,11 +200,7 @@ public:
 		settings.startTime = mxStartTime[0];
 		settings.sampleCount = mxSampleCount[0];
 		settings.cumulative = mxCumulative[0] ? 1u : 0u;
-		settings.transmitElementCount =
-			(i32)matlabPtr->getProperty(mxTransmitElementSet, "Count")[0];
-		settings.receiveElementCount =
-			(i32)matlabPtr->getProperty(mxReceiveElementSet, "Count")[0];
-		settings.scatterCount = (i32)matlabPtr->getProperty(mxScatterSet, "Count")[0];
+		i32 scatterCount = (i32)matlabPtr->getProperty(mxScatterSet, "Count")[0];
 		settings.cpuSettings.threadCount = (u32)matlabPtr->getProperty(mxCpuSettings, "ThreadCount")[0];
 		const EnumArray mxGpuBackend = matlabPtr->getProperty(mxGpuSettings, u"Backend");
 		const std::string gpuBackendName = static_cast<std::string>( mxGpuBackend[0] );
@@ -192,49 +215,92 @@ public:
 		settings.gpuSettings.enableDriverDebugMessages =
 			matlabPtr->getProperty(mxGpuSettings, "EnableDriverDebugMessages")[0] ? 1u : 0u;
 
-		transmitElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
-		receiveElements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
-		scatters.data = (Scatter*)malloc(sizeof(Scatter) * settings.scatterCount);
-		scatters.len = settings.scatterCount;
+		elements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
+		transmissions = { nullptr, 0 };
+		receiveChannels = { nullptr, 0 };
+		scatters.data = (Scatter*)malloc(sizeof(Scatter) * scatterCount);
+		scatters.len = scatterCount;
 
-		copyElements(mxTransmitElementSet, &transmitElements);
-		copyElements(mxReceiveElementSet, &receiveElements);
+		copyElements(mxElementSet, &elements);
+		copyTransmissions(mxTransmissions, &transmissions);
+		copyReceiveChannels(mxReceiveChannels, &receiveChannels);
 		copyScatters(mxScatterSet, scatters.data, scatters.len);
 	}
 
 	void copyElements(const Array& matlabArray, RectangularElementSoaSlice* slice) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
 
-		Array propertyCount = matlabPtr->getProperty(matlabArray, "Count");
-		Array propertyPositions = matlabPtr->getProperty(matlabArray, "Positions");
-		Array propertyNormals = matlabPtr->getProperty(matlabArray, "Normals");
-		Array propertySizes = matlabPtr->getProperty(matlabArray, "Sizes");
-		Array propertyApodizations = matlabPtr->getProperty(matlabArray, "Apodizations");
-		Array propertyDelays = matlabPtr->getProperty(matlabArray, "Delays");
+		Array mxCount = matlabPtr->getProperty(matlabArray, "Count");
+		Array mxPositions = matlabPtr->getProperty(matlabArray, "Positions");
+		Array mxNormals = matlabPtr->getProperty(matlabArray, "Normals");
+		Array mxSizes = matlabPtr->getProperty(matlabArray, "Sizes");
+		Array mxApodizations = matlabPtr->getProperty(matlabArray, "Apodizations");
+		Array mxDelays = matlabPtr->getProperty(matlabArray, "Delays");
 
-		uz numelPositions = propertyPositions.getNumberOfElements();
-		uz numelNormals = propertyNormals.getNumberOfElements();
-		uz numelSizes = propertySizes.getNumberOfElements();
-		uz numelApodizations = propertyApodizations.getNumberOfElements();
-		uz numelDelays = propertyDelays.getNumberOfElements();
-		const f32* pPositions = getDataPtr<f32>(propertyPositions);
-		const f32* pNormals = getDataPtr<f32>(propertyNormals);
-		const f32* pSizes = getDataPtr<f32>(propertySizes);
-		const f32* pApodizations = getDataPtr<f32>(propertyApodizations);
-		const f32* pDelays = getDataPtr<f32>(propertyDelays);
+		const uz count = static_cast<uz>( mxCount[0] );
+		uz numelPositions = std::min(mxPositions.getNumberOfElements(), 3 * count);
+		uz numelNormals = std::min(mxNormals.getNumberOfElements(), 3 * count);
+		uz numelSizes = std::min(mxSizes.getNumberOfElements(), 2 * count);
+		uz numelApodizations = std::min(mxApodizations.getNumberOfElements(), 1 * count);
+		uz numelDelays = std::min(mxDelays.getNumberOfElements(), 1 * count);
+
+		const f32* pPositions = getDataPtr<f32>(mxPositions);
+		const f32* pNormals = getDataPtr<f32>(mxNormals);
+		const f32* pSizes = getDataPtr<f32>(mxSizes);
+		const f32* pApodizations = getDataPtr<f32>(mxApodizations);
+		const f32* pDelays = getDataPtr<f32>(mxDelays);
 
 		slice->position = new f32[numelPositions];
 		slice->normal = new f32[numelNormals];
 		slice->size = new f32[numelSizes];
 		slice->apodization = new f32[numelApodizations];
 		slice->delay = new f32[numelDelays];
-		slice->len = static_cast<int>( propertyCount[0] );
+		slice->len = static_cast<int>( mxCount[0] );
 
 		std::memcpy(slice->position, pPositions, numelPositions * sizeof(f32));
 		std::memcpy(slice->normal, pNormals, numelNormals * sizeof(f32));
 		std::memcpy(slice->size, pSizes, numelSizes * sizeof(f32));
 		std::memcpy(slice->apodization, pApodizations, numelApodizations * sizeof(f32));
 		std::memcpy(slice->delay, pDelays, numelDelays * sizeof(f32));
+	}
+
+	void copyTransmissions(const ObjectArray& mxTransmissions, TransmissionSlice* slice) {
+		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
+		slice->len = static_cast<iz>( mxTransmissions.getNumberOfElements() );
+		slice->data = new Transmission[slice->len];
+		for (iz i = 0; i < slice->len; ++i) {
+			const TypedArray<u32> mxCount = matlabPtr->getProperty(mxTransmissions, i, u"Count");
+			const TypedArray<i32> mxIndices = matlabPtr->getProperty(mxTransmissions, i, u"Indices");
+			const TypedArray<f32> mxApodizations = matlabPtr->getProperty(mxTransmissions, i, u"Apodizations");
+			const TypedArray<f32> mxDelays = matlabPtr->getProperty(mxTransmissions, i, u"Delays");
+
+
+			const uz count = static_cast<uz>(mxCount[0]);
+			const uz numelIndices = std::min(mxIndices.getNumberOfElements(), 1 * count);
+			const uz numelApodizations = std::min(mxApodizations.getNumberOfElements(), 1 * count);
+			const uz numelDelays = std::min(mxDelays.getNumberOfElements(), 1 * count);
+
+			const i32* pIndices = getDataPtr<i32>(mxIndices);
+			const f32* pApodizations = getDataPtr<f32>(mxApodizations);
+			const f32* pDelays = getDataPtr<f32>(mxDelays);
+
+			slice->data[i].elements.len = static_cast<iz>( count );
+			slice->data[i].elements.index = new i32[numelIndices];
+			slice->data[i].elements.apodization = new f32[numelApodizations];
+			slice->data[i].elements.delay = new f32[numelDelays];
+
+			std::memcpy(slice->data[i].elements.index, pIndices, numelIndices * sizeof(i32));
+			std::memcpy(slice->data[i].elements.apodization, pApodizations, numelApodizations * sizeof(f32));
+			std::memcpy(slice->data[i].elements.delay, pDelays, numelDelays * sizeof(f32));
+
+			for (uz j = 0; j < numelIndices; ++j) {
+				slice->data[i].elements.index[j] -= 1;
+			}
+		}
+	}
+
+	void copyReceiveChannels(const ObjectArray& matlabArray, ReceiveChannelSlice* slice) {
+		copyTransmissions(matlabArray, reinterpret_cast<TransmissionSlice*>(slice));
 	}
 
 	void copyScatters(const Array& matlabArray, Scatter* array, uz length) {

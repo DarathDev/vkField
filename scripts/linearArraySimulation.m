@@ -6,7 +6,7 @@ fs = 100e6;
 c = 1540;
 dt = 1/fs;
 
-rowCount = 128;
+rowCount = 1;
 columnCount = 128;
 
 rowCountT = rowCount;
@@ -27,7 +27,7 @@ impulseResponse = 1;
 % excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
 excitation = 1;
 
-nScatters = 128;
+nScatters = 16;
 scatterPosition = rand(3, nScatters) .* [16e-3, 16e-3, 100e-3]' + [-8e-3, -8e-3, 0]';
 scatterAmplitude = ones(size(scatterPosition, 2), 1);
 
@@ -45,8 +45,8 @@ fieldII.set_field('fs', fs);
 
 % tTh = fieldII.xdc_2d_array(columnCountT, rowCountT, dieWidthT(1), dieWidthT(2), dieKerfT, dieKerfT, ones(columnCountT, rowCountT)',1,1,[0, 0, 1e10]);
 % rTh = fieldII.xdc_2d_array(columnCountR, rowCountR, dieWidthR(1), dieWidthR(2), dieKerfR, dieKerfR, ones(columnCountR, rowCountR)',1,1,[0, 0, 1e10]);
-tTh = fieldII.xdc_linear_array(columnCountT, dieWidthT(1), dieWidthT(2), dieKerfT, 1, 1, [0, 0, 1e10]);
-rTh = fieldII.xdc_linear_array(columnCountR, dieWidthR(1), dieWidthR(2), dieKerfR, 1, 1, [0, 0, 1e10]);
+tTh = fieldII.xdc_linear_array(columnCountT, dieWidthT(1), dieWidthT(2)*rowCount, dieKerfT, 1, rowCount, [0, 0, 1e10]);
+rTh = fieldII.xdc_linear_array(columnCountR, dieWidthR(1), dieWidthR(2)*rowCount, dieKerfR, 1, rowCount, [0, 0, 1e10]);
 
 fieldII.xdc_impulse(tTh, double(impulseResponse));
 fieldII.xdc_impulse(rTh, double(impulseResponse));
@@ -74,26 +74,40 @@ rData = fieldII.xdc_get(rTh, 'rect');
 %% vkField Simulation
 
 simulator = vkField.Simulation();
+simulator.Cumulative = true;
+simulator.SimulatorType = vkField.SimulatorType.CPU;
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 
-simulator.Scatters.Count = size(scatterPosition, 2);
-simulator.Scatters.Positions = scatterPosition;
-simulator.Scatters.Amplitudes = scatterAmplitude;
+simulator.Elements = vkField.RectangularElementSet();
+simulator.Elements.Count = uint32(size(tData, 2) + size(rData, 2));
+simulator.Elements.Positions = single([tData(8:10, :), rData(8:10, :)]);
+simulator.Elements.Normals = single([tangentsToNormals(tData(8:10, :)), tangentsToNormals(rData(8:10, :))]);
+simulator.Elements.Sizes = single([tData(3:4, :), rData(3:4, :)]);
+simulator.Elements.Apodizations = single([tData(5, :), rData(5, :)]);
+simulator.Elements.Delays = single([tData(23, :), rData(23, :)]);
 
-simulator.TransmitElements.Count = size(tData, 2);
-simulator.TransmitElements.Positions = tData(8:10, :);
-simulator.TransmitElements.Normals = tangentsToNormals(tData(8:10, :));
-simulator.TransmitElements.Sizes = tData(3:4, :);
-simulator.TransmitElements.Apodizations = tData(5, :);
-simulator.TransmitElements.Delays = tData(23, :);
+transmit = vkField.Transmission();
+transmit.Count = uint32(size(tData, 2));
+transmit.Indices = int32(1:size(tData, 2));
+transmit.Apodizations = single(tData(5, :));
+transmit.Delays = single(tData(23, :));
+simulator.Transmissions = transmit;
 
-simulator.ReceiveElements.Count = size(rData, 2);
-simulator.ReceiveElements.Positions = rData(8:10, :);
-simulator.ReceiveElements.Normals = tangentsToNormals(rData(8:10, :));
-simulator.ReceiveElements.Sizes = rData(3:4, :);
-simulator.ReceiveElements.Apodizations = rData(5, :);
-simulator.ReceiveElements.Delays = rData(23, :);
+receiveChannels = repmat(vkField.ReceiveChannel(), 1, columnCountR);
+for col = 1:columnCountR
+    elementIndices = size(tData, 2) + (col - 1) * rowCountR + (1:rowCountR);
+    receiveChannels(col).Count = uint32(rowCountR);
+    receiveChannels(col).Indices = int32(elementIndices);
+    receiveChannels(col).Apodizations = single(rData(5, (col - 1) * rowCountR + (1:rowCountR)));
+    receiveChannels(col).Delays = single(rData(23, (col - 1) * rowCountR + (1:rowCountR)));
+end
+simulator.ReceiveChannels = receiveChannels;
+
+simulator.Scatters = vkField.ScatterSet();
+simulator.Scatters.Count = uint32(size(scatterPosition, 2));
+simulator.Scatters.Positions = single(scatterPosition);
+simulator.Scatters.Amplitudes = single(scatterAmplitude);
 
 
 mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
@@ -105,9 +119,10 @@ vkTime = toc(vkTimer);
 fprintf("fieldII Time == %d\n", fieldTime);
 fprintf("vkField Time == %d\n", vkTime);
 fprintf("vkField Self Time == %d\n", simulator.Metrics.SimulationTime);
-fprintf("Relative Speed Up == %d\n", fieldTime / simulator.Metrics.SimulationTime);
+fprintf("Relative Speed Up == %.3fx\n", fieldTime / simulator.Metrics.SimulationTime);
 
 pulseEcho = double(pulseEcho) * dt^4;
+pulseEcho = fliplr(pulseEcho);
 
 vkTimes = simulator.StartTime + (0:(size(pulseEcho, 1)-1))/fs;
 if plotting

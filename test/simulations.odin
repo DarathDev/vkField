@@ -45,9 +45,6 @@ oneRectSimulation :: proc() -> (ok := true) {
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
-		transmitElementCount = 1,
-		receiveElementCount = 1,
-		scatterCount = 1,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
 		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
@@ -75,18 +72,42 @@ oneRectSimulation :: proc() -> (ok := true) {
 		amplitude = 1,
 	}
 
-	transmitElements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
-	receiveElements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
-	defer delete(transmitElements)
-	defer delete(receiveElements)
-	transmitElements[0] = transmitElement
-	receiveElements[0] = receiveElement
+	elements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
+	defer delete(elements)
+	elements[0] = transmitElement
+	elements[0].apodization = receiveElement.apodization
+
+	transmissionElements := make(#soa[]vkField.TransmissionElement, 1, context.allocator)
+	defer delete(transmissionElements)
+	transmissionElements[0] = {
+		index       = 0,
+		apodization = 1,
+		delay       = 0,
+	}
+	receiveChannelElements := make(#soa[]vkField.TransmissionElement, 1, context.allocator)
+	defer delete(receiveChannelElements)
+	receiveChannelElements[0] = vkField.TransmissionElement {
+		index       = 0,
+		apodization = 1,
+		delay       = 0,
+	}
+
+	transmissions := make([]vkField.Transmission, 1, context.allocator)
+	defer delete(transmissions)
+	transmissions[0] = {
+		elements = transmissionElements,
+	}
+	receiveChannels := make([]vkField.ReceiveChannel, 1, context.allocator)
+	defer delete(receiveChannels)
+	receiveChannels[0] = {
+		elements = receiveChannelElements,
+	}
 	scatters := slice.from_ptr(&scatter, 1)
 
-	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
+	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
 
 	data: []f32
-	data, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
+	data, ok = vkField.simulate(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
 	defer delete(data)
 	fmt.println(data)
 	nonZeroData: bool
@@ -114,7 +135,6 @@ linearArraySimulation :: proc() -> (ok := true) {
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
-		scatterCount = scatterCount,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
 		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
@@ -123,15 +143,21 @@ linearArraySimulation :: proc() -> (ok := true) {
 	simulator := create_simulator(settings) or_return
 	defer destroy_simulator(&simulator)
 
-	transmitElements := make_grid_elements(elementCount, 1, elementPitch, elementWidth, 0)
-	defer delete(transmitElements)
-	receiveElements := make_grid_elements(elementCount, 1, elementPitch, elementWidth, 0)
-	defer delete(receiveElements)
+	elements := make_grid_elements(elementCount, 1, elementPitch, elementWidth, 0)
+	defer delete(elements)
+	transmissions := make_full_aperture_transmissions(elementCount)
+	defer delete(transmissions[0].elements)
+	defer delete(transmissions)
+	receiveChannels := make_single_element_receive_channels(elementCount)
+	defer for receiveChannel in receiveChannels do delete(receiveChannel.elements)
+	defer delete(receiveChannels)
 	scatters := make_random_scatters(scatterCount)
 	defer delete(scatters)
 
-	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
-	_, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
+	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
+	data: []f32
+	data, ok = vkField.simulate(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
+	defer delete(data)
 	return
 }
 
@@ -150,7 +176,6 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	settings := vkField.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
-		scatterCount = scatterCount,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
 		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
@@ -159,15 +184,21 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	simulator := create_simulator(settings) or_return
 	defer destroy_simulator(&simulator)
 
-	transmitElements := make_grid_elements(elementCount, elementCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
-	defer delete(transmitElements)
-	receiveElements := make_grid_elements(elementCount, elementCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
-	defer delete(receiveElements)
+	elements := make_grid_elements(elementCount, elementCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
+	defer delete(elements)
+	transmissions := make_full_aperture_transmissions(elementCount * elementCount)
+	defer delete(transmissions[0].elements)
+	defer delete(transmissions)
+	receiveChannels := make_single_element_receive_channels(elementCount * elementCount)
+	defer for receiveChannel in receiveChannels do delete(receiveChannel.elements)
+	defer delete(receiveChannels)
 	scatters := make_random_scatters(scatterCount)
 	defer delete(scatters)
 
-	vkField.plan_simulation(&simulator, &settings, transmitElements, receiveElements, scatters)
-	_, ok = vkField.simulate(&simulator, &settings, transmitElements, receiveElements, scatters)
+	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
+	data: []f32
+	data, ok = vkField.simulate(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
+	defer delete(data)
 	return
 }
 
@@ -226,4 +257,36 @@ make_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f
 		}
 	}
 	return elements
+}
+
+make_full_aperture_transmissions :: proc(elementCount: int) -> []vkField.Transmission {
+	transmissionElements := make(#soa[]vkField.TransmissionElement, elementCount, context.allocator)
+	for i in 0 ..< elementCount {
+		transmissionElements[i] = {
+			index       = i32(i),
+			apodization = 1,
+			delay       = 0,
+		}
+	}
+	transmissions := make([]vkField.Transmission, 1, context.allocator)
+	transmissions[0] = {
+		elements = transmissionElements,
+	}
+	return transmissions
+}
+
+make_single_element_receive_channels :: proc(elementCount: int) -> []vkField.ReceiveChannel {
+	receiveChannels := make([]vkField.ReceiveChannel, elementCount, context.allocator)
+	for i in 0 ..< elementCount {
+		elements := make(#soa[]vkField.TransmissionElement, 1, context.allocator)
+		elements[0] = vkField.TransmissionElement {
+			index       = i32(i),
+			apodization = 1,
+			delay       = 0,
+		}
+		receiveChannels[i] = {
+			elements = elements,
+		}
+	}
+	return receiveChannels
 }

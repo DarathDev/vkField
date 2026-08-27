@@ -27,7 +27,14 @@ destroy_cpu_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc = 
 }
 
 @(export)
-create_vulkan_simulator_c :: proc "c" (simulator: ^^Simulator, settings: ^SimulationSettings, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
+create_vulkan_simulator_c :: proc "c" (
+	simulator: ^^Simulator,
+	settings: ^SimulationSettings,
+	cLogger: cLogProc = nil,
+	loggerUserData: rawptr = nil,
+) -> (
+	ok := true,
+) {
 	if !vkField_vk.VKFIELD_VULKAN_INITIALIZED {
 		vkField_vk.initialize()
 	}
@@ -54,8 +61,9 @@ destroy_vulkan_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc
 plan_simulation_c :: proc "c" (
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: #soa[]RectangularElement,
-	receiveElements: #soa[]RectangularElement,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
 	cLogger: cLogProc = nil,
 	loggerUserData: rawptr = nil,
@@ -64,15 +72,16 @@ plan_simulation_c :: proc "c" (
 ) {
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	return plan_simulation(simulator, settings, transmitElements, receiveElements, scatters)
+	return plan_simulation(simulator, settings, transmissions, receiveChannels, elements, scatters)
 }
 
 @(export)
 simulate_c :: proc "c" (
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: #soa[]RectangularElement,
-	receiveElements: #soa[]RectangularElement,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
 	pulseEcho: [^]f32,
 	cLogger: cLogProc = nil,
@@ -80,13 +89,7 @@ simulate_c :: proc "c" (
 ) -> bool {
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	data, ok := simulate(
-		simulator,
-		settings,
-		transmitElements[:settings.transmitElementCount],
-		receiveElements[:settings.receiveElementCount],
-		scatters[:settings.scatterCount],
-	)
+	data, ok := simulate(simulator, settings, transmissions, receiveChannels, elements, scatters)
 	copy(pulseEcho[:len(data)], data)
 	delete(data)
 	free_all(context.temp_allocator)

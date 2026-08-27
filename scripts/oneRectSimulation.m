@@ -60,36 +60,55 @@ data = fieldII.xdc_get(rTh, 'rect');
 
 addpath("matlab\")
 
-simulator = vkField.Simulation;
+simulator = vkField.Simulation();
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
-simulator.Cumulative = true;
-simulator.SimulatorType = "CPU";
+simulator.Cumulative = false;
+simulator.SimulatorType = vkField.SimulatorType.CPU;
 
-transmitSet = vkField.RectangularElementSet();
-transmitSet.Count = 1;
-transmitSet.Positions = single(reshape(diePositionT(:), 3, 1));
-transmitSet.Normals = single(reshape([0, 0, 1], 3, 1));
-transmitSet.Sizes = single(reshape(dieWidthT(:), 2, 1));
-transmitSet.Apodizations = single(1);
-transmitSet.Delays = single(0);
+simulator.Elements = vkField.RectangularElementSet();
+simulator.Elements.Count = uint32(2);
+simulator.Elements.Positions = single([reshape(diePositionT(:), 3, 1), reshape(diePositionR(:), 3, 1)]);
+simulator.Elements.Normals = single([reshape([0, 0, 1], 3, 1), reshape([0, 0, 1], 3, 1)]);
+simulator.Elements.Sizes = single([reshape(dieWidthT(:), 2, 1), reshape(dieWidthR(:), 2, 1)]);
+simulator.Elements.Apodizations = single([1, 1]);
+simulator.Elements.Delays = single([0, 0]);
 
-receiveSet = vkField.RectangularElementSet();
-receiveSet.Count = 1;
-receiveSet.Positions = single(reshape(diePositionR(:), 3, 1));
-receiveSet.Normals = single(reshape([0, 0, 1], 3, 1));
-receiveSet.Sizes = single(reshape(dieWidthR(:), 2, 1));
-receiveSet.Apodizations = single(1);
-receiveSet.Delays = single(0);
+transmissions = vkField.Transmission();
+transmissions.Count = uint32(1);
+transmissions.Indices = int32(1);
+transmissions.Apodizations = single(1);
+transmissions.Delays = single(0);
+simulator.Transmissions = transmissions;
+
+receiveChannels = vkField.ReceiveChannel();
+receiveChannels.Count = uint32(1);
+receiveChannels.Indices = int32(2);
+receiveChannels.Apodizations = single(1);
+receiveChannels.Delays = single(0);
+simulator.ReceiveChannels = receiveChannels;
 
 scatterSet = vkField.ScatterSet();
-scatterSet.Count = 1;
+scatterSet.Count = uint32(1);
 scatterSet.Positions = single(reshape(scatterPosition(:), 3, 1));
 scatterSet.Amplitudes = single(1);
-
-simulator.TransmitElements = transmitSet;
-simulator.ReceiveElements = receiveSet;
 simulator.Scatters = scatterSet;
+
+transmitSet = vkField.RectangularElementSet();
+transmitSet.Count = uint32(1);
+transmitSet.Positions = single(simulator.Elements.Positions(:, transmissions.Indices(1)));
+transmitSet.Normals = single(simulator.Elements.Normals(:, transmissions.Indices(1)));
+transmitSet.Sizes = single(simulator.Elements.Sizes(:, transmissions.Indices(1)));
+transmitSet.Apodizations = single(simulator.Elements.Apodizations(transmissions.Indices(1)));
+transmitSet.Delays = single(simulator.Elements.Delays(transmissions.Indices(1)));
+
+receiveSet = vkField.RectangularElementSet();
+receiveSet.Count = uint32(1);
+receiveSet.Positions = single(simulator.Elements.Positions(:, receiveChannels.Indices(1)));
+receiveSet.Normals = single(simulator.Elements.Normals(:, receiveChannels.Indices(1)));
+receiveSet.Sizes = single(simulator.Elements.Sizes(:, receiveChannels.Indices(1)));
+receiveSet.Apodizations = single(simulator.Elements.Apodizations(receiveChannels.Indices(1)));
+receiveSet.Delays = single(simulator.Elements.Delays(receiveChannels.Indices(1)));
 
 pT = scatterSet.Positions(:, 1) - transmitSet.Positions(:, 1);
 pR = scatterSet.Positions(:, 1) - receiveSet.Positions(:, 1);

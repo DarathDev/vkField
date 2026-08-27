@@ -51,9 +51,6 @@ struct SimulationMetrics {
 struct SimulationSettings {
 	f32 samplingFrequency;
 	f32 speedOfSound;
-	i32 transmitElementCount;
-	i32 receiveElementCount;
-	i32 scatterCount;
 	f32 startTime;
 	i32 sampleCount;
 	u32 cumulative;
@@ -94,6 +91,33 @@ typedef struct {
 } RectangularElementSoaSlice;
 
 typedef struct {
+	i32* index;
+	f32* apodization;
+	f32* delay;
+	iz len;
+} TransmissionElementSoaSlice;
+
+typedef TransmissionElementSoaSlice ReceiveChannelElementSoaSlice;
+
+typedef struct {
+	TransmissionElementSoaSlice elements;
+} Transmission;
+
+typedef struct {
+	ReceiveChannelElementSoaSlice elements;
+} ReceiveChannel;
+
+typedef struct {
+	Transmission* data;
+	iz len;
+} TransmissionSlice;
+
+typedef struct {
+	ReceiveChannel* data;
+	iz len;
+} ReceiveChannelSlice;
+
+typedef struct {
 	f32 position[3];
 	f32 amplitude;
 } Scatter;
@@ -109,25 +133,53 @@ typedef void ( *CLogProc )( void* pUserData, const char* text );
 extern "C" {
 #endif
 
-	LIB_FN bool create_cpu_simulator_c(Simulator** simulator, CLogProc logFunc,
-													void* pUserData);
-	LIB_FN void destroy_cpu_simulator_c(Simulator* simulator, CLogProc logFunc,
-													 void* pUserData);
-	LIB_FN bool create_vulkan_simulator_c(Simulator** simulator, SimulationSettings* settings, CLogProc logFunc,
-																				void* pUserData);
-	LIB_FN void destroy_vulkan_simulator_c(Simulator* simulator, CLogProc logFunc,
-																				 void* pUserData);
-	LIB_FN bool plan_simulation_c(Simulator* simulator,
-																SimulationSettings* settings,
-																RectangularElementSoaSlice transmitElements,
-																RectangularElementSoaSlice receiveElements,
-													ScatterSlice scatters, CLogProc logFunc,
-																void* pUserData);
-	LIB_FN bool simulate_c(Simulator* simulator, SimulationSettings* settings,
-												 RectangularElementSoaSlice transmitElements,
-												 RectangularElementSoaSlice receiveElements,
-													ScatterSlice scatters, float* pulseEcho, CLogProc logFunc,
-												 void* pUserData);
+	LIB_FN bool create_cpu_simulator_c(
+		Simulator** simulator,
+		CLogProc logFunc,
+		void* pUserData
+	);
+
+	LIB_FN void destroy_cpu_simulator_c(
+		Simulator* simulator,
+		CLogProc logFunc,
+		void* pUserData
+	);
+
+	LIB_FN bool create_vulkan_simulator_c(
+		Simulator** simulator,
+		SimulationSettings* settings,
+		CLogProc logFunc,
+		void* pUserData
+	);
+
+	LIB_FN void destroy_vulkan_simulator_c(
+		Simulator* simulator,
+		CLogProc logFunc,
+		void* pUserData
+	);
+
+	LIB_FN bool plan_simulation_c(
+		Simulator* simulator,
+		SimulationSettings* settings,
+		TransmissionSlice transmissions,
+		ReceiveChannelSlice receiveChannels,
+		RectangularElementSoaSlice elements,
+		ScatterSlice scatters,
+		CLogProc logFunc,
+		void* pUserData
+	);
+
+	LIB_FN bool simulate_c(
+		Simulator* simulator,
+		SimulationSettings* settings,
+		TransmissionSlice transmissions,
+		ReceiveChannelSlice receiveChannels,
+		RectangularElementSoaSlice elements,
+		ScatterSlice scatters,
+		float* pulseEcho,
+		CLogProc logFunc,
+		void* pUserData
+	);
 
 #ifdef __cplusplus
 }

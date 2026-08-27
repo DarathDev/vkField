@@ -200,40 +200,54 @@ destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 	simulator^ = {}
 }
 
-plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSettings) -> (result: vk.Result) {
+plan_vulkan_simulator :: proc(
+	simulator: ^vkSimulator,
+	settings: SimulationSettings,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
+	scatters: []Scatter,
+) -> (
+	result: vk.Result,
+) {
 	destroy_vulkan_simulator_resources(simulator)
 
 	device := simulator.device
 
-	elementTotalSize := vkElementBufferSize(settings)
+	assert(len(transmissions) <= 1, "The Vulkan backend currently supports at most one transmission")
+	transmitCount := len(transmissions[0].elements)
+	receiveCount: int = 0
+	for receiveChannel in receiveChannels {
+		receiveCount += len(receiveChannel.elements)
+	}
+	scatterCount := len(scatters)
+
+	elementTotalSize := vkElementBufferSize(transmitCount, receiveCount)
 
 	elementsBuffer := check(prepare_stream(device, elementTotalSize)) or_return
-	scattersBuffer := check(prepare_stream(device, size_of(Scatter) * auto_cast settings.scatterCount)) or_return
-	responseBuffer := check(prepare_readback(device, size_of(f32) * auto_cast (settings.receiveElementCount * settings.sampleCount))) or_return
+	scattersBuffer := check(prepare_stream(device, size_of(Scatter) * auto_cast scatterCount)) or_return
+	responseBuffer := check(prepare_readback(device, auto_cast (receiveCount * int(settings.sampleCount)) * size_of(f32))) or_return
 
 	packSirWorkGroupSize: [3]u32 : {4, 4, 4}
 
 	sirBufferSize :: 32 * runtime.Megabyte
 	sirPerScatterSize :: size_of([4]f32) + size_of(f32) // Size of Spatial Impulse Response Rectangle Control Points + Scaling Factor
-	scatterBatchCount := u32(settings.scatterCount)
-	receiveBatchCount := u32(settings.receiveElementCount)
-	sirTotalSize := u32(sirPerScatterSize * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+	scatterBatchCount := u32(scatterCount)
+	receiveBatchCount := u32(receiveCount)
+	sirTotalSize := u32(sirPerScatterSize * scatterBatchCount * (receiveBatchCount + u32(transmitCount)))
 
 	// Batch Receives to reduce temp buffer size
 	if sirTotalSize > sirBufferSize {
-		maxReceiveBatchCount := min(
-			u32(settings.receiveElementCount),
-			device.physicalDevice.properties.limits.maxComputeWorkGroupCount.y * packSirWorkGroupSize.y,
-		)
-		receiveBatchCount = clamp((sirBufferSize / (sirPerScatterSize * scatterBatchCount)) - u32(settings.transmitElementCount), 1, maxReceiveBatchCount)
-		sirTotalSize = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+		maxReceiveBatchCount := min(u32(receiveCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.y * packSirWorkGroupSize.y)
+		receiveBatchCount = clamp((sirBufferSize / (sirPerScatterSize * scatterBatchCount)) - u32(transmitCount), 1, maxReceiveBatchCount)
+		sirTotalSize = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(transmitCount)))
 	}
 
 	// Batch Scatters to reduce temp buffer size
 	if sirTotalSize > sirBufferSize {
-		maxScatterBatchCount := min(u32(settings.scatterCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.x * packSirWorkGroupSize.x)
-		scatterBatchCount = clamp(sirBufferSize / (sirPerScatterSize * (receiveBatchCount + u32(settings.transmitElementCount))), 1, maxScatterBatchCount)
-		sirTotalSize = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(settings.transmitElementCount)))
+		maxScatterBatchCount := min(u32(scatterCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.x * packSirWorkGroupSize.x)
+		scatterBatchCount = clamp(sirBufferSize / (sirPerScatterSize * (receiveBatchCount + u32(transmitCount))), 1, maxScatterBatchCount)
+		sirTotalSize = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(transmitCount)))
 	}
 
 	assert(sirTotalSize <= sirBufferSize)
@@ -249,9 +263,9 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 				WorkgroupSizeX = 4,
 				WorkgroupSizeY = 4,
 				WorkgroupSizeZ = 4,
-				TransmitCount = u32(settings.transmitElementCount),
-				ReceiveCount = u32(settings.receiveElementCount),
-				ScatterCount = u32(settings.scatterCount),
+				TransmitCount = u32(transmitCount),
+				ReceiveCount = u32(receiveCount),
+				ScatterCount = u32(scatterCount),
 				ReceiveBatchCount = u32(receiveBatchCount),
 				ScatterBatchCount = u32(scatterBatchCount),
 				Cumulative = settings.cumulative ? 1 : 0,
@@ -272,7 +286,7 @@ plan_vulkan_simulator :: proc(simulator: ^vkSimulator, settings: SimulationSetti
 				// TODO(rnp): subgroup size
 				WorkgroupSizeX    = 64,
 				SampleCount       = u32(settings.sampleCount),
-				TransmitCount     = u32(settings.transmitElementCount),
+				TransmitCount     = u32(transmitCount),
 				ReceiveBatchCount = u32(receiveBatchCount),
 				ScatterBatchCount = u32(scatterBatchCount),
 				Cumulative        = settings.cumulative ? 1 : 0,
@@ -318,8 +332,9 @@ destroy_vulkan_simulator_resources :: proc(simulator: ^vkSimulator) {
 vkSimulate :: proc(
 	simulator: ^vkSimulator,
 	settings: SimulationSettings,
-	transmitElements: #soa[]RectangularElement,
-	receiveElements: #soa[]RectangularElement,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
 	allocator := context.allocator,
 ) -> (
@@ -331,8 +346,34 @@ vkSimulate :: proc(
 
 	device := simulator.device
 
-	elements := vkPackElementBuffer(settings, transmitElements, receiveElements)
-	defer delete(elements)
+	assert(len(transmissions) <= 1, "The Vulkan backend currently supports at most one transmission")
+	transmitCount := len(transmissions[0].elements)
+	receiveCount: int = 0
+	for receiveChannel in receiveChannels {
+		receiveCount += len(receiveChannel.elements)
+	}
+
+	scatterCount := len(scatters)
+
+	transmitElements := make(#soa[]RectangularElement, transmitCount, allocator)
+	defer delete(transmitElements)
+	receiveElements := make(#soa[]RectangularElement, receiveCount, allocator)
+	defer delete(receiveElements)
+	if len(transmissions) > 0 {
+		for transmissionIndex in 0 ..< len(transmissions[0].elements) {
+			transmitElements[transmissionIndex] = elements[transmissions[0].elements[transmissionIndex].index]
+		}
+	}
+	receiveOffset := 0
+	for receiveChannel in receiveChannels {
+		for receiveElement in receiveChannel.elements {
+			receiveElements[receiveOffset] = elements[receiveElement.index]
+			receiveOffset += 1
+		}
+	}
+
+	elementsPacked := vkPackElementBuffer(transmitElements, receiveElements)
+	defer delete(elementsPacked)
 	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
 
 	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
@@ -343,7 +384,7 @@ vkSimulate :: proc(
 	}
 	check(vk.BeginCommandBuffer(commandBuffer, &commandBeginInfo)) or_return
 
-	vkField_vk.cmd_upload(commandBuffer, elements, resources.elementsBuffer.main, resources.elementsBuffer.staging.? or_else {})
+	vkField_vk.cmd_upload(commandBuffer, elementsPacked, resources.elementsBuffer.main, resources.elementsBuffer.staging.? or_else {})
 	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(scatters), resources.scattersBuffer.main, resources.scattersBuffer.staging.? or_else {})
 	vkField_vk.cmd_clear_buffer(commandBuffer, resources.responseBuffer.main)
 
@@ -382,8 +423,8 @@ vkSimulate :: proc(
 
 	sirSpecConstants := resources.packSirPipeline.specializationConstants
 	pulseEchoConstants := resources.pulseEchoPipeline.specializationConstants
-	for receiveOffset: u32 = 0; receiveOffset < u32(settings.receiveElementCount); receiveOffset += u32(sirSpecConstants.ReceiveBatchCount) {
-		for scatterOffset: u32 = 0; scatterOffset < u32(settings.scatterCount); scatterOffset += u32(sirSpecConstants.ScatterBatchCount) {
+	for receiveOffset: u32 = 0; receiveOffset < u32(receiveCount); receiveOffset += u32(sirSpecConstants.ReceiveBatchCount) {
+		for scatterOffset: u32 = 0; scatterOffset < u32(scatterCount); scatterOffset += u32(sirSpecConstants.ScatterBatchCount) {
 			vkField_vk.cmd_pipeline_barrier(
 				commandBuffer,
 				{},
@@ -618,11 +659,9 @@ prepare_readback :: proc(device: vkField_vk.Device, size: vk.DeviceSize) -> (buf
 	return
 }
 
-vkPackElementBuffer :: proc(settings: SimulationSettings, transmitElements: #soa[]RectangularElement, receiveElements: #soa[]RectangularElement) -> []byte {
-	assert(len(transmitElements) == auto_cast settings.transmitElementCount)
-	assert(len(receiveElements) == auto_cast settings.receiveElementCount)
-	elementTotalSize := vkElementBufferSize(settings)
-	elementCount: int = auto_cast (settings.transmitElementCount + settings.receiveElementCount)
+vkPackElementBuffer :: proc(transmitElements: #soa[]RectangularElement, receiveElements: #soa[]RectangularElement) -> []byte {
+	elementTotalSize := vkElementBufferSize(len(transmitElements), len(receiveElements))
+	elementCount: int = len(transmitElements) + len(receiveElements)
 	rectangularElements := make([]byte, elementTotalSize)
 	elementBuffer := rectangularElements
 	positions: [][3]f32; normals: [][3]f32; sizes: [][2]f32; apodizations: []f32; delays: []f32
@@ -654,13 +693,13 @@ vkPackElementBuffer :: proc(settings: SimulationSettings, transmitElements: #soa
 	return rectangularElements
 }
 
-vkElementBufferSize :: proc(settings: SimulationSettings) -> vk.DeviceSize {
+vkElementBufferSize :: proc(transmitCount, receiveCount: int) -> vk.DeviceSize {
 	elementTotalSize: vk.DeviceSize
 	elementTotalSize += size_of([3]f32) // Position
 	elementTotalSize += size_of([3]f32) // Normals
 	elementTotalSize += size_of([2]f32) // Sizes
 	elementTotalSize += size_of(f32) // Apodizations
 	elementTotalSize += size_of(f32) // Delays
-	elementTotalSize *= auto_cast (settings.transmitElementCount + settings.receiveElementCount)
+	elementTotalSize *= auto_cast (transmitCount + receiveCount)
 	return elementTotalSize
 }

@@ -26,17 +26,14 @@ Simulator :: union {
 }
 
 SimulationSettings :: struct #packed {
-	samplingFrequency:    f32,
-	speedOfSound:         f32,
-	transmitElementCount: i32,
-	receiveElementCount:  i32,
-	scatterCount:         i32,
-	startTime:            f32,
-	sampleCount:          i32,
-	cumulative:           b32,
-	cpuSettings:          CpuSettings,
-	gpuSettings:          GpuSettings,
-	metrics:              SimulationMetrics,
+	samplingFrequency: f32,
+	speedOfSound:      f32,
+	startTime:         f32,
+	sampleCount:       i32,
+	cumulative:        b32,
+	cpuSettings:       CpuSettings,
+	gpuSettings:       GpuSettings,
+	metrics:           SimulationMetrics,
 }
 
 CpuSettings :: struct {
@@ -72,11 +69,26 @@ Scatter :: struct {
 }
 #assert(size_of(Scatter) == 16)
 
+Transmission :: struct {
+	elements: #soa[]TransmissionElement,
+}
+
+ReceiveChannel :: distinct Transmission
+
+TransmissionElement :: struct {
+	index:       i32,
+	apodization: f32,
+	delay:       f32,
+}
+
+ReceiveChannelElement :: distinct TransmissionElement
+
 simulate :: proc(
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: #soa[]RectangularElement,
-	receiveElements: #soa[]RectangularElement,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
 	allocator := context.allocator,
 ) -> (
@@ -84,9 +96,6 @@ simulate :: proc(
 	ok := true,
 ) {
 	utility.prof_scoped(#procedure)
-	assert(settings.transmitElementCount != 0)
-	assert(settings.receiveElementCount != 0)
-	assert(settings.scatterCount != 0)
 
 	switch &sim in simulator {
 	case cpuSimulator:
@@ -98,6 +107,8 @@ simulate :: proc(
 	rdoc_lib, rdoc_api, rdoc_ok := rdoc.load_api()
 	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
 	defer if rdoc_ok do rdoc.unload_api(rdoc_lib)
+
+	data = make([]f32, len(scatters) * len(receiveChannels) * len(transmissions), allocator)
 
 	stopwatch: time.Stopwatch
 	time.stopwatch_start(&stopwatch)
@@ -114,9 +125,9 @@ simulate :: proc(
 			// LaunchOrShowRenderdocUI(rdoc_api)
 		}
 
-		data = is_ok(check(vkSimulate(&sim, settings^, transmitElements, receiveElements, scatters))) or_return
+		data = is_ok(check(vkSimulate(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
 	case cpuSimulator:
-		data = check(simulate_cpu(&sim, settings^, transmitElements, receiveElements, scatters)) or_return
+		data = check(simulate_cpu(&sim, settings^, transmissions, receiveChannels, elements, scatters)) or_return
 	}
 	time.stopwatch_stop(&stopwatch)
 	settings.metrics.simulationTime = auto_cast time.duration_seconds(time.stopwatch_duration(stopwatch))
@@ -127,8 +138,9 @@ simulate :: proc(
 plan_simulation :: proc(
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
-	transmitElements: #soa[]RectangularElement,
-	receiveElements: #soa[]RectangularElement,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
 ) -> (
 	ok := true,
@@ -140,31 +152,37 @@ plan_simulation :: proc(
 	case vkSimulator:
 		assert(settings.gpuSettings.backend == .Vulkan, "Only the Vulkan GPU backend is implemented")
 	}
-	minDistance, maxDistance := findDistanceLimits(transmitElements, receiveElements, scatters)
+	for transmission in transmissions {
+		for element in transmission.elements {
+			check(element.index >= 0 && element.index < i32(len(elements)))
+		}
+	}
+	for receiveChannel in receiveChannels {
+		for element in receiveChannel.elements {
+			assert(element.index >= 0 && element.index < i32(len(elements)))
+		}
+	}
+
+	minDistance, maxDistance := findDistanceLimits(transmissions, receiveChannels, elements, scatters)
 	settings.startTime = minDistance / settings.speedOfSound
 	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))
 	sampleCountPadding :: 6
 	settings.sampleCount += sampleCountPadding
 	settings.startTime -= sampleCountPadding / 4 / settings.samplingFrequency
-	if (settings.transmitElementCount == 0) do settings.transmitElementCount = i32(len(transmitElements))
-	if (settings.receiveElementCount == 0) do settings.receiveElementCount = i32(len(receiveElements))
-	if (settings.scatterCount == 0) do settings.scatterCount = i32(len(scatters))
-	assert(settings.transmitElementCount <= auto_cast len(transmitElements))
-	assert(settings.receiveElementCount <= auto_cast len(receiveElements))
-	assert(settings.scatterCount <= auto_cast len(scatters))
 
 	switch &sim in simulator {
 	case vkSimulator:
-		is_ok(check(plan_vulkan_simulator(&sim, settings^))) or_return
+		is_ok(check(plan_vulkan_simulator(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
 	case cpuSimulator:
-		check(plan_cpu_simulation(&sim, settings^, transmitElements, receiveElements)) or_return
+		check(plan_cpu_simulation(&sim, settings^)) or_return
 	}
 	return
 }
 
 findDistanceLimits :: proc(
-	transmitElements: #soa[]RectangularElement,
-	receiveElements: #soa[]RectangularElement,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
 ) -> (
 	minDistance: f32,
@@ -178,18 +196,25 @@ findDistanceLimits :: proc(
 	minTransmitDistance, maxTransmitDistance: f32 = math.INF_F32, 0
 	minReceiveDistance, maxReceiveDistance: f32 = math.INF_F32, 0
 	for scatter in scatters {
-		for transmit in transmitElements {
-			delta := linalg.length(scatter.position - transmit.position)
-			elementDelta := linalg.length(transmit.size) / 2
-			minTransmitDistance = min(minTransmitDistance, delta - elementDelta)
-			maxTransmitDistance = max(maxTransmitDistance, delta + elementDelta)
+		for transmission in transmissions {
+			for transmissionElement in transmission.elements {
+				transmit := elements[transmissionElement.index]
+				delta := linalg.length(scatter.position - transmit.position)
+				elementDelta := linalg.length(transmit.size) / 2
+				minTransmitDistance = min(minTransmitDistance, delta - elementDelta)
+				maxTransmitDistance = max(maxTransmitDistance, delta + elementDelta)
+			}
 		}
 
-		for receive in receiveElements {
-			delta := linalg.length(scatter.position - receive.position)
-			elementDelta := linalg.length(receive.size) / 2
-			minReceiveDistance = min(minReceiveDistance, delta - elementDelta)
-			maxReceiveDistance = max(maxReceiveDistance, delta + elementDelta)
+		for receiveChannel in receiveChannels {
+			for receiveChannelElement in receiveChannel.elements {
+				element := TransmissionElement(receiveChannelElement)
+				receive := elements[element.index]
+				delta := linalg.length(scatter.position - receive.position)
+				elementDelta := linalg.length(receive.size) / 2
+				minReceiveDistance = min(minReceiveDistance, delta - elementDelta)
+				maxReceiveDistance = max(maxReceiveDistance, delta + elementDelta)
+			}
 		}
 	}
 

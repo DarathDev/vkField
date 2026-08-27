@@ -6,7 +6,7 @@ fs = 100e6;
 c = 1540;
 dt = 1/fs;
 
-rowCount = 128;
+rowCount = 32;
 columnCount = 128;
 
 rowCountT = rowCount;
@@ -47,8 +47,8 @@ fieldII.field_init(-1);
 fieldII.set_field('c', c);
 fieldII.set_field('fs', fs);
 
-tTh = fieldII.xdc_2d_array(columnCountT, rowCountT, dieWidthT(1), dieWidthT(2), dieKerfT, dieKerfT, ones(columnCountT, rowCountT)',1,1,[0, 0, 1e10]);
-rTh = fieldII.xdc_2d_array(columnCountR, rowCountR, dieWidthR(1), dieWidthR(2), dieKerfR, dieKerfR, ones(columnCountR, rowCountR)',1,1,[0, 0, 1e10]);
+tTh = fieldII.xdc_2d_array(columnCountT, rowCountT, dieWidthT(1), dieWidthT(2), dieKerfT, dieKerfT, ones(rowCountT, columnCountT)',1,1,[0, 0, 1e10]);
+rTh = fieldII.xdc_2d_array(columnCountR, rowCountR, dieWidthR(1), dieWidthR(2), dieKerfR, dieKerfR, ones(rowCountR, columnCountR)',1,1,[0, 0, 1e10]);
 
 fieldII.xdc_impulse(tTh, double(impulseResponse));
 fieldII.xdc_impulse(rTh, double(impulseResponse));
@@ -79,23 +79,34 @@ simulator.Cumulative = false;
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 
-simulator.Scatters.Count = size(scatterPosition, 2);
-simulator.Scatters.Positions = scatterPosition;
-simulator.Scatters.Amplitudes = scatterAmplitude;
+simulator.Elements = vkField.RectangularElementSet();
+simulator.Elements.Count = uint32(size(tData, 2) + size(rData, 2));
+simulator.Elements.Positions = single([tData(8:10, :), rData(8:10, :)]);
+simulator.Elements.Normals = single([tangentsToNormals(tData(8:10, :)), tangentsToNormals(rData(8:10, :))]);
+simulator.Elements.Sizes = single([tData(3:4, :), rData(3:4, :)]);
+simulator.Elements.Apodizations = single([tData(5, :), rData(5, :)]);
+simulator.Elements.Delays = single([tData(23, :), rData(23, :)]);
 
-simulator.TransmitElements.Count = size(tData, 2);
-simulator.TransmitElements.Positions = tData(8:10, :);
-simulator.TransmitElements.Normals = tangentsToNormals(tData(8:10, :));
-simulator.TransmitElements.Sizes = tData(3:4, :);
-simulator.TransmitElements.Apodizations = tData(5, :);
-simulator.TransmitElements.Delays = tData(23, :);
+transmit = vkField.Transmission();
+transmit.Count = uint32(size(tData, 2));
+transmit.Indices = int32(1:size(tData, 2));
+transmit.Apodizations = single(tData(5, :));
+transmit.Delays = single(tData(23, :));
+simulator.Transmissions = transmit;
 
-simulator.ReceiveElements.Count = size(rData, 2);
-simulator.ReceiveElements.Positions = rData(8:10, :);
-simulator.ReceiveElements.Normals = tangentsToNormals(rData(8:10, :));
-simulator.ReceiveElements.Sizes = rData(3:4, :);
-simulator.ReceiveElements.Apodizations = rData(5, :);
-simulator.ReceiveElements.Delays = rData(23, :);
+receiveChannels = repmat(vkField.ReceiveChannel(), 1, size(rData, 2));
+for i = 1:size(rData, 2)
+    receiveChannels(i).Count = uint32(1);
+    receiveChannels(i).Indices = int32(size(tData, 2) + i);
+    receiveChannels(i).Apodizations = single(rData(5, i));
+    receiveChannels(i).Delays = single(rData(23, i));
+end
+simulator.ReceiveChannels = receiveChannels;
+
+simulator.Scatters = vkField.ScatterSet();
+simulator.Scatters.Count = uint32(size(scatterPosition, 2));
+simulator.Scatters.Positions = single(scatterPosition);
+simulator.Scatters.Amplitudes = single(scatterAmplitude);
 
 
 mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
