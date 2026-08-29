@@ -1,9 +1,11 @@
 package vkfield
 
 import "base:intrinsics"
+import "core:log"
 import "core:math/linalg"
 import "core:simd"
 import "core:slice"
+import "import:pffft"
 import utility "vkField:utility"
 
 cpuSimulator :: struct {}
@@ -13,7 +15,11 @@ destroy_cpu_simulator :: proc(simulator: ^cpuSimulator) { return }
 
 maxSpatialImpulseResponseSize: i32
 
-plan_cpu_simulation :: proc(simulator: ^cpuSimulator, settings: SimulationSettings) -> (ok := true) { return }
+plan_cpu_simulation :: proc(simulator: ^cpuSimulator, settings: ^SimulationSettings) -> (ok := true) {
+	// Round up to the nearest multiple of 32
+	settings.sampleCount = (settings.sampleCount + (31)) & ~i32(31)
+	return
+}
 
 simulate_cpu :: proc(
 	simulator: ^cpuSimulator,
@@ -40,37 +46,29 @@ simulate_cpu :: proc(
 	receiveChannelCount: i32 = auto_cast len(receiveChannels)
 
 	utility.prof_begin("Allocate")
-	data = make([]f32, sampleCount * receiveChannelCount * transmissionCount)
+	data = make_aligned([]f32, sampleCount * receiveChannelCount * transmissionCount, 16)
 	elementImpulses := make([]ImpulseResponse, auto_cast len(elements), context.allocator)
-	maxImpulseBlockSize := sampleCount
-	transmissionImpulses := make([][dynamic]f32, transmissionCount, context.allocator)
-	receiveChannelImpulses := make([][dynamic]f32, receiveChannelCount, context.allocator)
 	transmissionMinSamples := make([]i32, transmissionCount, context.allocator)
+	transmissionSampleCounts := make([]i32, transmissionCount, context.allocator)
 	receiveChannelMinSamples := make([]i32, receiveChannelCount, context.allocator)
-	for &transmissionImpulse in transmissionImpulses {
-		transmissionImpulse = make([dynamic]f32, 0, maxImpulseBlockSize, context.allocator)
-	}
-	for &receiveChannelImpulse in receiveChannelImpulses {
-		receiveChannelImpulse = make([dynamic]f32, 0, maxImpulseBlockSize, context.allocator)
-	}
+	receiveChannelSampleCounts := make([]i32, receiveChannelCount, context.allocator)
+	// TODO: I might need to check the alignment of all subslices, they need to be 16-byte aligned
+	transmissionImpulses := make_aligned([]f32, transmissionCount * sampleCount, 16, context.allocator)
+	receiveChannelImpulses := make_aligned([]f32, receiveChannelCount * sampleCount, 16, context.allocator)
 	defer {
 		delete(elementImpulses)
-		for transmissionImpulse in transmissionImpulses {
-			delete(transmissionImpulse)
-		}
-		for receiveChannelImpulse in receiveChannelImpulses {
-			delete(receiveChannelImpulse)
-		}
 		delete(transmissionImpulses)
 		delete(receiveChannelImpulses)
 		delete(transmissionMinSamples)
 		delete(receiveChannelMinSamples)
+		delete(transmissionSampleCounts)
+		delete(receiveChannelSampleCounts)
 	}
 	utility.prof_end()
 
 	// TODO: Choose where to put the scatter scaling
 
-	for scatter in scatters {
+	for scatter, scatterIndex in scatters {
 		utility.prof_scoped("Scatter")
 
 		utility.prof_begin("Element SIR Calculation")
@@ -94,13 +92,11 @@ simulate_cpu :: proc(
 				transmissionMinSample = min(transmissionMinSample, i32(linalg.floor(elementImpulse.rect.x - 0.5)))
 				transmissionMaxSample = max(transmissionMaxSample, i32(linalg.ceil(elementImpulse.rect.w + 0.5)))
 			}
-			transmissionSampleCount := transmissionMaxSample - transmissionMinSample + 1
 
 			transmissionMinSamples[transmissionIndex] = transmissionMinSample
-			transmissionImpulse := &transmissionImpulses[transmissionIndex]
-			resize(transmissionImpulse, transmissionSampleCount)
-			slice.zero(transmissionImpulse[:])
-
+			transmissionSampleCounts[transmissionIndex] = transmissionMaxSample - transmissionMinSample + 1
+			transmissionImpulse := transmissionImpulses[transmissionIndex * auto_cast sampleCount:][:sampleCount]
+			slice.zero(transmissionImpulse)
 			utility.prof_end()
 
 			utility.prof_begin("Transmission Sampling")
@@ -122,10 +118,6 @@ simulate_cpu :: proc(
 				)
 			}
 
-			// One of the impulse responses need the amplitude of the scatter included
-			for &value in transmissionImpulse {
-				value *= scatter.amplitude
-			}
 			utility.prof_end()
 		}
 		utility.prof_end()
@@ -149,13 +141,11 @@ simulate_cpu :: proc(
 				receiveChannelMinSample = min(receiveChannelMinSample, i32(linalg.floor(elementImpulse.rect.x - 0.5)))
 				receiveChannelMaxSample = max(receiveChannelMaxSample, i32(linalg.ceil(elementImpulse.rect.w + 0.5)))
 			}
-			receiveChannelSampleCount := receiveChannelMaxSample - receiveChannelMinSample + 1
 
 			receiveChannelMinSamples[receiveChannelIndex] = receiveChannelMinSample
-			receiveChannelImpulse := &receiveChannelImpulses[receiveChannelIndex]
-			resize(receiveChannelImpulse, receiveChannelSampleCount)
-			slice.zero(receiveChannelImpulse[:])
-
+			receiveChannelSampleCounts[receiveChannelIndex] = receiveChannelMaxSample - receiveChannelMinSample + 1
+			receiveChannelImpulse := receiveChannelImpulses[receiveChannelIndex * auto_cast sampleCount:][:sampleCount]
+			slice.zero(receiveChannelImpulse)
 			utility.prof_end()
 
 			utility.prof_begin("Receive Channel Sampling")
@@ -181,60 +171,168 @@ simulate_cpu :: proc(
 				)
 			}
 
-			for &value in receiveChannelImpulse {
-				value *= scatter.amplitude
-			}
 			utility.prof_end()
 		}
 		utility.prof_end()
 
-		utility.prof_begin("Convolution")
-		for transmissionImpulse, transmissionIndex in transmissionImpulses {
-			transmissionMinSample := transmissionMinSamples[transmissionIndex]
-			transmissionMaxSample := transmissionMinSample + auto_cast len(transmissionImpulse) - 1
-			for receiveChannelImpulse, receiveChannelIndex in receiveChannelImpulses {
-				receiveChannelMinSample := receiveChannelMinSamples[receiveChannelIndex]
-				receiveChannelMaxSample := receiveChannelMinSample + auto_cast len(receiveChannelImpulse) - 1
-				receiveChannelSampleCount := len(receiveChannelImpulse)
+		maxTransmissionSampleCount := slice.max(transmissionSampleCounts)
+		maxReceiveChannelSampleCount := slice.max(receiveChannelSampleCounts)
+		fftCount := pffft.adjust_n(auto_cast max(maxTransmissionSampleCount, maxReceiveChannelSampleCount))
 
-				minSample := transmissionMinSample + receiveChannelMinSample
-				maxSample := transmissionMaxSample + receiveChannelMaxSample + 1
-				minSample = max(minSample, 0)
-				maxSample = min(maxSample, auto_cast sampleCount)
-				if minSample >= maxSample do continue
-
-				#no_bounds_check receiveDataLine := data[(cast(i32)receiveChannelIndex + (cast(i32)transmissionIndex * receiveChannelCount)) *
-				auto_cast sampleCount:][:sampleCount]
-
-				utility.prof_scoped("Convolution Core")
-				for baseSample := minSample; baseSample < maxSample; baseSample += SIMD32_WIDTH {
-					samples := baseSample + simd.iota(SIMD_I32)
-					sampleMask := simd.lanes_le(samples, SIMD_I32(maxSample))
-
-					minK := max(transmissionMinSample, baseSample - receiveChannelMaxSample)
-					maxK := min(transmissionMaxSample, min(baseSample + SIMD32_WIDTH, maxSample) - receiveChannelMinSample)
-					if minK > maxK do continue
-
-					sum := SIMD_F32(0)
-					for k in minK ..= maxK {
-						kt := k - transmissionMinSample
-						#no_bounds_check tSamples := SIMD_F32(transmissionImpulse[kt])
-						kr := samples - k - receiveChannelMinSample
-						kr0 := baseSample - k - receiveChannelMinSample
-						krMask := simd.bit_and(simd.lanes_ge(kr, 0), simd.lanes_lt(kr, SIMD_I32(receiveChannelSampleCount)))
-						#no_bounds_check rSamples := simd.masked_load(cast(^SIMD_F32)raw_data(receiveChannelImpulse[kr0:]), SIMD_F32(0), krMask)
-						sum += tSamples * rSamples
-					}
-					#no_bounds_check dataPtr := cast(^SIMD_F32)raw_data(receiveDataLine[baseSample:])
-					d := simd.masked_load(dataPtr, cast(SIMD_F32)0, sampleMask)
-					d += sum
-					simd.masked_store(dataPtr, d, sampleMask)
-				}
-			}
+		if fftCount < 128 {
+			convolve_time_domain(
+				sampleCount,
+				transmissionCount,
+				receiveChannelCount,
+				scatter,
+				transmissionMinSamples,
+				receiveChannelMinSamples,
+				transmissionSampleCounts,
+				receiveChannelSampleCounts,
+				transmissionImpulses,
+				receiveChannelImpulses,
+				data,
+			)
+		} else {
+			convolve_frequency_domain(
+				sampleCount,
+				transmissionCount,
+				receiveChannelCount,
+				scatter,
+				transmissionMinSamples,
+				receiveChannelMinSamples,
+				transmissionSampleCounts,
+				receiveChannelSampleCounts,
+				transmissionImpulses,
+				receiveChannelImpulses,
+				data,
+			)
 		}
-		utility.prof_end()
+
 	}
 	return
+}
+
+convolve_time_domain :: proc(
+	sampleCount, transmissionCount, receiveChannelCount: i32,
+	scatter: Scatter,
+	transmissionMinSamples, receiveChannelMinSamples, transmissionSampleCounts, receiveChannelSampleCounts: []i32,
+	transmissionImpulses, receiveChannelImpulses, data: []f32,
+) {
+	utility.prof_scoped(#procedure)
+	for transmissionIndex in 0 ..< transmissionCount {
+		transmissionMinSample := transmissionMinSamples[transmissionIndex]
+		transmissionSampleCount := transmissionSampleCounts[transmissionIndex]
+		transmissionMaxSample := transmissionMinSample + transmissionSampleCount - 1
+		transmissionImpulse := transmissionImpulses[transmissionIndex * auto_cast sampleCount:][:sampleCount]
+		for receiveChannelIndex in 0 ..< receiveChannelCount {
+			receiveChannelMinSample := receiveChannelMinSamples[receiveChannelIndex]
+			receiveChannelSampleCount := receiveChannelSampleCounts[receiveChannelIndex]
+			receiveChannelMaxSample := receiveChannelMinSample + receiveChannelSampleCount - 1
+			receiveChannelImpulse := receiveChannelImpulses[receiveChannelIndex * auto_cast sampleCount:][:sampleCount]
+
+			minSample := transmissionMinSample + receiveChannelMinSample
+			maxSample := transmissionMaxSample + receiveChannelMaxSample + 1
+			minSample = max(minSample, 0)
+			maxSample = min(maxSample, auto_cast sampleCount)
+			if minSample >= maxSample do continue
+
+			#no_bounds_check receiveDataLine := data[(receiveChannelIndex + (transmissionIndex * receiveChannelCount)) * auto_cast sampleCount:][:sampleCount]
+
+			for baseSample := minSample; baseSample < maxSample; baseSample += SIMD32_WIDTH {
+				samples := baseSample + simd.iota(SIMD_I32)
+				sampleMask := simd.lanes_le(samples, SIMD_I32(maxSample))
+
+				minK := max(transmissionMinSample, baseSample - receiveChannelMaxSample)
+				maxK := min(transmissionMaxSample, min(baseSample + SIMD32_WIDTH, maxSample) - receiveChannelMinSample)
+				if minK > maxK do continue
+
+				sum := SIMD_F32(0)
+				for k in minK ..= maxK {
+					kt := k - transmissionMinSample
+					#no_bounds_check tSamples := SIMD_F32(transmissionImpulse[kt])
+					kr := samples - k - receiveChannelMinSample
+					kr0 := baseSample - k - receiveChannelMinSample
+					krMask := simd.bit_and(simd.lanes_ge(kr, 0), simd.lanes_lt(kr, SIMD_I32(receiveChannelSampleCount)))
+					#no_bounds_check rSamples := simd.masked_load(cast(^SIMD_F32)raw_data(receiveChannelImpulse[kr0:]), SIMD_F32(0), krMask)
+					sum += tSamples * rSamples
+				}
+				#no_bounds_check dataPtr := cast(^SIMD_F32)raw_data(receiveDataLine[baseSample:])
+				d := simd.masked_load(dataPtr, cast(SIMD_F32)0, sampleMask)
+				d += sum
+				simd.masked_store(dataPtr, d, sampleMask)
+			}
+		}
+	}
+}
+
+convolve_frequency_domain :: proc(
+	sampleCount, transmissionCount, receiveChannelCount: i32,
+	scatter: Scatter,
+	transmissionMinSamples, receiveChannelMinSamples, transmissionSampleCounts, receiveChannelSampleCounts: []i32,
+	transmissionImpulses, receiveChannelImpulses, data: []f32,
+) {
+	utility.prof_scoped(#procedure)
+
+	fourierWork := make_aligned([]f32, sampleCount, 16, context.allocator)
+	convolutionData := make_aligned([]f32, sampleCount, 16, context.allocator)
+
+	utility.prof_begin("Forward FFT")
+	maxTransmissionSampleCount := slice.max(transmissionSampleCounts)
+	maxReceiveChannelSampleCount := slice.max(receiveChannelSampleCounts)
+	fftCount := pffft.adjust_n(auto_cast max(maxTransmissionSampleCount, maxReceiveChannelSampleCount))
+	pffftSession := pffft.new_setup(fftCount, .REAL)
+	assert(pffftSession != nil)
+	defer pffft.destroy_setup(pffftSession)
+	for transmissionIndex in 0 ..< transmissionCount {
+		transmissionImpulse := raw_data(transmissionImpulses[transmissionIndex * auto_cast sampleCount:][:sampleCount])
+		pffft.transform(pffftSession, transmissionImpulse, transmissionImpulse, raw_data(fourierWork), .FORWARD)
+	}
+	for receiveChannelIndex in 0 ..< receiveChannelCount {
+		receiveChannelImpulse := raw_data(receiveChannelImpulses[receiveChannelIndex * auto_cast sampleCount:][:sampleCount])
+		pffft.transform(pffftSession, receiveChannelImpulse, receiveChannelImpulse, raw_data(fourierWork), .FORWARD)
+	}
+	utility.prof_end()
+
+	utility.prof_begin("Inverse FFT")
+	for transmissionIndex in 0 ..< transmissionCount {
+		transmissionMinSample := transmissionMinSamples[transmissionIndex]
+		transmissionSampleCount := transmissionSampleCounts[transmissionIndex]
+		transmissionMaxSample := transmissionMinSample + transmissionSampleCount - 1
+		transmissionImpulse := transmissionImpulses[transmissionIndex * auto_cast sampleCount:][:sampleCount]
+		for receiveChannelIndex in 0 ..< receiveChannelCount {
+			receiveChannelMinSample := receiveChannelMinSamples[receiveChannelIndex]
+			receiveChannelSampleCount := receiveChannelSampleCounts[receiveChannelIndex]
+			receiveChannelMaxSample := receiveChannelMinSample + receiveChannelSampleCount - 1
+			receiveChannelImpulse := receiveChannelImpulses[receiveChannelIndex * auto_cast sampleCount:][:sampleCount]
+
+			minSample := transmissionMinSample + receiveChannelMinSample
+			maxSample := transmissionMaxSample + receiveChannelMaxSample + 1
+			minSample = max(minSample, 0)
+			maxSample = min(maxSample, auto_cast sampleCount)
+			if minSample >= maxSample do continue
+
+			#no_bounds_check receiveDataLine := data[(receiveChannelIndex + (transmissionIndex * receiveChannelCount)) * auto_cast sampleCount:][:sampleCount]
+
+			slice.zero(convolutionData)
+			pffft.zconvolve_accumulate(
+				pffftSession,
+				raw_data(transmissionImpulse),
+				raw_data(receiveChannelImpulse),
+				raw_data(convolutionData),
+				scatter.amplitude / f32(fftCount),
+			)
+
+			utility.prof_begin("Inverse Fourier Transform")
+			pffft.transform(pffftSession, raw_data(convolutionData), raw_data(convolutionData), raw_data(fourierWork), .BACKWARD)
+			utility.prof_end()
+
+			for sample := minSample; sample < maxSample; sample += 1 {
+				receiveDataLine[sample] += convolutionData[sample - minSample]
+			}
+		}
+	}
+	utility.prof_end()
 }
 
 ImpulseResponse :: struct {
@@ -254,8 +352,6 @@ get_spatial_impulse_response :: proc(
 ) -> (
 	impulseResponse: ImpulseResponse,
 ) {
-	utility.prof_scoped(#procedure)
-
 	rotationAngle := linalg.quaternion_between_two_vector3(element.normal, [3]f32{0, 0, 1})
 	rotation := linalg.matrix4_from_quaternion(rotationAngle)
 	transform := rotation * linalg.matrix4_translate(element.position)
@@ -304,7 +400,6 @@ sample_aperture_add :: proc(samples: []f32, minSample: i32, impulseResponse: Imp
 }
 
 sample_aperture :: #force_inline proc(n: SIMD_I32, aperture: [4]f32, cumulative: bool) -> (result: SIMD_F32) {
-	utility.prof_scoped(#procedure)
 	return (!cumulative) ? sample_aperture_discrete(n, aperture) : sample_aperture_cumulative(n, aperture) - sample_aperture_cumulative(n - 1, aperture)
 }
 
@@ -362,8 +457,6 @@ sample_aperture_discrete :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD
 }
 
 sample_aperture_cumulative :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD_F32) {
-	utility.prof_scoped(#procedure)
-
 	ge :: simd.lanes_ge
 	or :: simd.bit_or
 	select :: simd.select

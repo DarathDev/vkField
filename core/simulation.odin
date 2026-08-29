@@ -174,7 +174,7 @@ plan_simulation :: proc(
 	case vkSimulator:
 		is_ok(check(plan_vulkan_simulator(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
 	case cpuSimulator:
-		check(plan_cpu_simulation(&sim, settings^)) or_return
+		check(plan_cpu_simulation(&sim, settings)) or_return
 	}
 	return
 }
