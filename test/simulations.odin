@@ -127,7 +127,8 @@ linearArraySimulation :: proc() -> (ok := true) {
 	utility.prof_scoped(#procedure)
 
 	scatterCount :: 16
-	elementCount :: 128
+	rowCount :: 1
+	columnCount :: 128
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
@@ -143,15 +144,15 @@ linearArraySimulation :: proc() -> (ok := true) {
 	simulator := create_simulator(settings) or_return
 	defer destroy_simulator(&simulator)
 
-	elements := make_grid_elements(elementCount, 1, elementPitch, elementWidth, 0)
+	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch, elementWidth, 0)
 	defer delete(elements)
-	transmissions := make_full_aperture_transmissions(elementCount)
+	transmissions := make_full_aperture_transmissions(columnCount * rowCount)
 	defer delete(transmissions[0].elements)
 	defer delete(transmissions)
-	receiveChannels := make_single_element_receive_channels(elementCount)
+	receiveChannels := make_column_receive_channels(columnCount, rowCount, len(transmissions[0].elements))
 	defer for receiveChannel in receiveChannels do delete(receiveChannel.elements)
 	defer delete(receiveChannels)
-	scatters := make_random_scatters(scatterCount)
+	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {10e-3, 100e-3})
 	defer delete(scatters)
 
 	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
@@ -168,7 +169,8 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	utility.prof_scoped(#procedure)
 
 	scatterCount :: 128
-	elementCount :: 128
+	rowCount :: 32
+	columnCount :: 128
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
@@ -184,15 +186,15 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	simulator := create_simulator(settings) or_return
 	defer destroy_simulator(&simulator)
 
-	elements := make_grid_elements(elementCount, elementCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
+	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
 	defer delete(elements)
-	transmissions := make_full_aperture_transmissions(elementCount * elementCount)
+	transmissions := make_full_aperture_transmissions(columnCount * rowCount)
 	defer delete(transmissions[0].elements)
 	defer delete(transmissions)
-	receiveChannels := make_single_element_receive_channels(elementCount * elementCount)
+	receiveChannels := make_single_element_receive_channels(columnCount * rowCount, len(transmissions[0].elements))
 	defer for receiveChannel in receiveChannels do delete(receiveChannel.elements)
 	defer delete(receiveChannels)
-	scatters := make_random_scatters(scatterCount)
+	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {0, 100e-3})
 	defer delete(scatters)
 
 	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
@@ -202,7 +204,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	return
 }
 
-// @(test)
+@(test)
 oneRectSimulationTest :: proc(t: ^testing.T) {
 	_ = utility.expect(t, oneRectSimulation())
 }
@@ -212,7 +214,7 @@ linearArraySimulationTest :: proc(t: ^testing.T) {
 	_ = utility.expect(t, linearArraySimulation())
 }
 
-// @(test)
+@(test)
 matrixArraySimulationTest :: proc(t: ^testing.T) {
 	_ = utility.expect(t, matrixArraySimulation())
 }
@@ -226,12 +228,12 @@ main :: proc() {
 	matrixArraySimulation()
 }
 
-make_random_scatters :: proc(count: int) -> []vkField.Scatter {
+make_random_scatters :: proc(count: int, xRange, yRange, zRange: [2]f32) -> []vkField.Scatter {
 	scatters := make([]vkField.Scatter, count, context.allocator)
 	for i in 0 ..< count {
-		x := rand.float32_range(-8e-3, 8e-3)
-		y := rand.float32_range(-8e-3, 8e-3)
-		z := rand.float32_range(0, 100e-3)
+		x := rand.float32_range(xRange[0], xRange[1])
+		y := rand.float32_range(yRange[0], yRange[1])
+		z := rand.float32_range(zRange[0], zRange[1])
 		scatters[i] = {
 			position  = {x, y, z},
 			amplitude = 1,
@@ -259,6 +261,21 @@ make_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f
 	return elements
 }
 
+make_transmit_and_receive_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f32) -> #soa[]vkField.RectangularElement {
+	transmitElements := make_grid_elements(columnCount, rowCount, pitch, size, z)
+	receiveElements := make_grid_elements(columnCount, rowCount, pitch, size, z)
+	elements := make(#soa[]vkField.RectangularElement, len(transmitElements) + len(receiveElements), context.allocator)
+	for i in 0 ..< len(transmitElements) {
+		elements[i] = transmitElements[i]
+	}
+	for i in 0 ..< len(receiveElements) {
+		elements[len(transmitElements) + i] = receiveElements[i]
+	}
+	defer delete(transmitElements)
+	defer delete(receiveElements)
+	return elements
+}
+
 make_full_aperture_transmissions :: proc(elementCount: int) -> []vkField.Transmission {
 	transmissionElements := make(#soa[]vkField.TransmissionElement, elementCount, context.allocator)
 	for i in 0 ..< elementCount {
@@ -275,16 +292,35 @@ make_full_aperture_transmissions :: proc(elementCount: int) -> []vkField.Transmi
 	return transmissions
 }
 
-make_single_element_receive_channels :: proc(elementCount: int) -> []vkField.ReceiveChannel {
+make_single_element_receive_channels :: proc(elementCount, elementIndexOffset: int) -> []vkField.ReceiveChannel {
 	receiveChannels := make([]vkField.ReceiveChannel, elementCount, context.allocator)
 	for i in 0 ..< elementCount {
 		elements := make(#soa[]vkField.TransmissionElement, 1, context.allocator)
 		elements[0] = vkField.TransmissionElement {
-			index       = i32(i),
+			index       = i32(elementIndexOffset + i),
 			apodization = 1,
 			delay       = 0,
 		}
 		receiveChannels[i] = {
+			elements = elements,
+		}
+	}
+	return receiveChannels
+}
+
+make_column_receive_channels :: proc(columnCount, rowCount, elementIndexOffset: int) -> []vkField.ReceiveChannel {
+	receiveChannels := make([]vkField.ReceiveChannel, columnCount, context.allocator)
+	for column in 0 ..< columnCount {
+		elements := make(#soa[]vkField.TransmissionElement, rowCount, context.allocator)
+		for row in 0 ..< rowCount {
+			elementIndex := elementIndexOffset + column * rowCount + row
+			elements[row] = vkField.TransmissionElement {
+				index       = i32(elementIndex),
+				apodization = 1,
+				delay       = 0,
+			}
+		}
+		receiveChannels[column] = {
 			elements = elements,
 		}
 	}
