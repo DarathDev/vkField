@@ -1,5 +1,6 @@
 package vkField_build
 
+import "base:runtime"
 import util "core/utility"
 import "core:fmt"
 import "core:os"
@@ -214,37 +215,82 @@ CompilerKind :: enum {
 }
 
 CppDefine :: distinct CliDefine
-CppOptions :: struct {
+CppOption :: struct {
 	flag:  string,
 	value: string,
 }
 
 CppCompileParameters :: struct {
-	compiler_path:         string,
-	source_path:           string,
-	output_path:           string,
-	build_type:            string,
-	language_standard:     string,
-	include_paths:         []string,
-	defines:               []CppDefine,
-	optional_debug_db_dir: string,
+	compilerPath:      string,
+	outputType:        CppCompileOutputType,
+	sourcePaths:       []string,
+	outputPath:        string,
+	symbolsName:       string,
+	includePaths:      []string,
+	languageStandard:  string,
+	optimizationLevel: CppOptimizationLevel,
+	debug:             bool,
+	warnings:          bool,
+	fastMath:          bool,
+	defines:           []CppDefine,
+}
+
+CppCompileOutputType :: enum {
+	ObjectFiles,
+	SharedLibrary,
+	Executable,
+}
+
+CppOptimizationLevel :: enum {
+	Debug, // Debug
+	Release, // Standard Release
+	Speed, // Maximium Speed
+	Size, // Size
 }
 
 CppArchiveParameters :: struct {
-	archiver_path: string,
-	output_path:   string,
-	object_files:  []string,
-	ar_mode:       string,
+	archiverPath: string,
+	outputPath:   string,
+	objectFiles:  []string,
+	mode:         string,
 }
 
-detect_cpp_compiler :: proc() -> (compiler_path: string, kind: CompilerKind, ok := true) {
-	compile := ""
-	compiler_env := os.get_env("CXX", context.allocator)
-	if len(compiler_env) == 0 {
-		compiler_env = os.get_env("CC", context.allocator)
+DEFAULT_ARCHIVE_MODE :: "rcs"
+
+get_cpp_object_extension :: proc(kind: CompilerKind) -> string {
+	switch kind {
+	case .MSVC:
+		return "obj"
+	case .Clang:
+		fallthrough
+	case .GCC:
+		return "o"
 	}
-	if len(compiler_env) > 0 {
-		compile = compiler_env
+	return "o"
+}
+
+get_static_library_extensions :: proc(platform: runtime.Odin_OS_Type) -> string {
+	#partial switch platform {
+	case .Windows:
+		return "lib"
+	case .Darwin:
+		fallthrough
+	case .Linux:
+		return "a"
+	}
+	build_log(os.stdout, .Error, fmt.tprintf("Invalid Platform %s", platform))
+	assert(false)
+	return ""
+}
+
+detect_cpp_compiler :: proc() -> (path: string, kind: CompilerKind, ok := true) {
+	compile := ""
+	compilerEnv := os.get_env("CXX", context.allocator)
+	if len(compilerEnv) == 0 {
+		compilerEnv = os.get_env("CC", context.allocator)
+	}
+	if len(compilerEnv) > 0 {
+		compile = compilerEnv
 	}
 
 	if len(compile) == 0 {
@@ -289,26 +335,14 @@ detect_cpp_compiler :: proc() -> (compiler_path: string, kind: CompilerKind, ok 
 		kind = .GCC
 	}
 	CPP_COMPILER_KIND = kind
-	compiler_path = compile
+	path = compile
 	return
 }
 
-get_cpp_object_extension :: proc(kind: CompilerKind) -> string {
+get_cpp_static_archiver :: proc(kind: CompilerKind) -> string {
 	switch kind {
 	case .MSVC:
-		return "obj"
-	case .Clang:
-		fallthrough
-	case .GCC:
-		return "o"
-	}
-	return "o"
-}
-
-get_cpp_static_linker :: proc(kind: CompilerKind) -> string {
-	switch kind {
-	case .MSVC:
-		return "lib.exe"
+		return "lib"
 	case .Clang:
 		fallthrough
 	case .GCC:
@@ -317,89 +351,133 @@ get_cpp_static_linker :: proc(kind: CompilerKind) -> string {
 	return "ar"
 }
 
-build_cpp_compile_command :: proc(compilerKind: CompilerKind, parameters: CppCompileParameters) -> (args: []string) {
-	d_args := make([dynamic]string)
-	append(&d_args, parameters.compiler_path)
+build_cpp_compile_command :: proc(compilerKind: CompilerKind, parameters: CppCompileParameters) -> (cmd: []string, ok := true) {
+	dCmd := make([dynamic]string)
+	append(&dCmd, parameters.compilerPath)
 
-	cpp_options := make([dynamic]CppOptions)
-	append(&cpp_options, CppOptions{flag = "c"})
+	cppOptions := make([dynamic]CppOption)
 
-	if len(parameters.language_standard) > 0 {
-		if compilerKind == .MSVC {
-			append(&cpp_options, CppOptions{flag = fmt.tprintf("std:%s", parameters.language_standard)})
-		} else {
-			append(&cpp_options, CppOptions{flag = fmt.tprintf("std=%s", parameters.language_standard)})
+	outputPath: string
+	switch parameters.outputType {
+	case .ObjectFiles:
+		append(&cppOptions, CppOption{flag = "c"})
+		outputDirectory, outputFilename := os.split_path(parameters.outputPath)
+		if !os.is_dir(outputDirectory) {
+			build_log(os.stdout, .Info, fmt.tprintf("Making Directory %s", outputDirectory))
+			assert(os.make_directory_all(outputDirectory))
 		}
+		if len(outputFilename) == 0 do outputPath = parameters.outputPath
+		else {
+			objExt := get_cpp_object_extension(compilerKind)
+			if strings.compare(os.ext(outputFilename), fmt.tprintf(".%s", objExt)) == 0 do outputPath = parameters.outputPath
+			else if len(outputFilename) > 0 {
+				build_log(os.stdout, .Error, fmt.tprintf("Output file %s has an invalid object file extension", outputFilename))
+				return {}, false
+			} else do outputPath = assume(os.join_path({outputDirectory, assume(os.join_filename(outputFilename, objExt, context.temp_allocator))}, context.temp_allocator))
+
+			if len(parameters.sourcePaths) > 1 {
+				build_log(os.stdout, .Error, fmt.tprintf("Cannot specify a single output file %s when there are multiple source files", parameters.outputPath))
+				return {}, false
+			}
+		}
+		if compilerKind != .MSVC do append(&cppOptions, CppOption{flag = "fPIC"})
+	case .SharedLibrary:
+		fallthrough
+	case .Executable:
+		build_log(os.stdout, .Error, fmt.tprintf("C++ Output Type %s Not Implemented!", parameters.outputType))
 	}
 
 	if compilerKind == .MSVC {
-		append(&cpp_options, CppOptions{flag = "W3"})
+		append(&cppOptions, CppOption{flag = "Fo", value = parameters.outputPath})
 	} else {
-		append(&cpp_options, CppOptions{flag = "Wall"})
+		append(&cppOptions, CppOption{flag = "o", value = parameters.outputPath})
 	}
 
-	is_debug_build := strings.equal_fold(parameters.build_type, "debug")
-	if is_debug_build {
+	if len(parameters.languageStandard) > 0 {
 		if compilerKind == .MSVC {
-			append(&cpp_options, CppOptions{flag = "Zi"})
-			append(&cpp_options, CppOptions{flag = "Od"})
+			append(&cppOptions, CppOption{flag = fmt.tprintf("std:%s", parameters.languageStandard)})
 		} else {
-			append(&cpp_options, CppOptions{flag = "g"})
-			append(&cpp_options, CppOptions{flag = "O0"})
-		}
-	} else {
-		append(&cpp_options, CppOptions{flag = "O2"})
-		if compilerKind == .MSVC {
-			append(&cpp_options, CppOptions{flag = "Zi"})
-		} else {
-			append(&cpp_options, CppOptions{flag = "g"})
+			append(&cppOptions, CppOption{flag = fmt.tprintf("std=%s", parameters.languageStandard)})
 		}
 	}
 
-	for include_path in parameters.include_paths {
+	if parameters.warnings {
+		if compilerKind == .MSVC do append(&cppOptions, CppOption{flag = "W3"})
+		else do append(&cppOptions, CppOption{flag = "Wall"})
+	}
+
+	if parameters.debug {
+		if compilerKind == .MSVC {
+			append(&cppOptions, CppOption{flag = "Zi"})
+			pdbFilename := assume(os.join_filename(parameters.symbolsName, "pdb", context.temp_allocator))
+			pdbPath := assume(os.join_path({parameters.outputPath, pdbFilename}, context.temp_allocator))
+			append(&cppOptions, CppOption{flag = "Fd", value = pdbPath})
+		} else {
+			append(&cppOptions, CppOption{flag = "g"})
+		}
+	}
+
+	switch parameters.optimizationLevel {
+	case .Debug:
+		if compilerKind == .MSVC do append(&cppOptions, CppOption{flag = "Od"})
+		else do append(&cppOptions, CppOption{flag = "O0"})
+	case .Release:
+		if compilerKind == .MSVC {
+			if parameters.debug do build_log(os.stdout, .Warning, "Building with Release optimizations conflicts with debug information!")
+			append(&cppOptions, CppOption{flag = "O2"})
+		} else {
+			if parameters.debug do append(&cppOptions, CppOption{flag = "Og"})
+			else do append(&cppOptions, CppOption{flag = "O2"})
+		}
+	case .Speed:
+		if parameters.debug do build_log(os.stdout, .Warning, "Building with Speed optimizations conflicts with debug information!")
+		if compilerKind == .MSVC do append(&cppOptions, CppOption{flag = "O2"})
+		else do append(&cppOptions, CppOption{flag = "O3"})
+	case .Size:
+		if parameters.debug do build_log(os.stdout, .Warning, "Building with Size optimizations conflicts with debug information!")
+		if compilerKind == .MSVC do append(&cppOptions, CppOption{flag = "Os"})
+		else do append(&cppOptions, CppOption{flag = "O1"})
+	}
+
+	if parameters.fastMath {
+		if compilerKind == .MSVC do append(&cppOptions, CppOption{flag = "fp", value = "fast"})
+		else do append(&cppOptions, CppOption{flag = "ffast-math"})
+	}
+
+	for include_path in parameters.includePaths {
 		if len(include_path) > 0 {
-			append(&cpp_options, CppOptions{flag = "I", value = include_path})
+			append(&cppOptions, CppOption{flag = "I", value = include_path})
 		}
 	}
 
-	if compilerKind == .MSVC && len(parameters.optional_debug_db_dir) > 0 {
-		append(&cpp_options, CppOptions{flag = "Fd", value = parameters.optional_debug_db_dir})
-	}
+	append(&dCmd, ..parameters.sourcePaths)
+	append(&dCmd, ..cpp_options_to_args(compilerKind, cppOptions[:]))
+	append(&dCmd, ..cpp_defines_to_args(compilerKind, parameters.defines))
 
-	if compilerKind == .MSVC {
-		append(&cpp_options, CppOptions{flag = "Fo", value = parameters.output_path})
-	} else {
-		append(&cpp_options, CppOptions{flag = "o", value = parameters.output_path})
-	}
-
-	append(&d_args, ..cpp_options_to_args(compilerKind, cpp_options[:]))
-	append(&d_args, ..cpp_defines_to_args(compilerKind, parameters.defines))
-	append(&d_args, parameters.source_path)
-
-	args = d_args[:]
+	cmd = dCmd[:]
 	return
 }
 
-build_cpp_archive_command :: proc(compilerKind: CompilerKind, parameters: CppArchiveParameters) -> (args: []string) {
-	d_args := make([dynamic]string)
-	append(&d_args, parameters.archiver_path)
+build_cpp_archive_command :: proc(compilerKind: CompilerKind, parameters: CppArchiveParameters) -> (cmd: []string, ok := true) {
+	dCmd := make([dynamic]string)
+	append(&dCmd, parameters.archiverPath)
 
 	if compilerKind == .MSVC {
-		append(&d_args, fmt.tprintf("/OUT:%s", parameters.output_path))
+		append(&dCmd, fmt.tprintf("/OUT:%s", parameters.outputPath))
 	} else {
-		mode := parameters.ar_mode
-		if len(mode) == 0 do mode = "rcs"
-		append(&d_args, mode)
-		append(&d_args, parameters.output_path)
+		mode := parameters.mode
+		if len(mode) == 0 do mode = DEFAULT_ARCHIVE_MODE
+		append(&dCmd, mode)
+		append(&dCmd, parameters.outputPath)
 	}
 
-	for object_file in parameters.object_files {
+	for object_file in parameters.objectFiles {
 		if len(object_file) > 0 {
-			append(&d_args, object_file)
+			append(&dCmd, object_file)
 		}
 	}
 
-	args = d_args[:]
+	cmd = dCmd[:]
 	return
 }
 
@@ -419,7 +497,7 @@ cpp_defines_to_args :: proc(compilerKind: CompilerKind, defines: []CppDefine) ->
 	return
 }
 
-cpp_options_to_args :: proc(compilerKind: CompilerKind, options: []CppOptions) -> (args: []string) {
+cpp_options_to_args :: proc(compilerKind: CompilerKind, options: []CppOption) -> (args: []string) {
 	dArgs := make([dynamic]string)
 	prefix := "-"
 	if compilerKind == .MSVC {

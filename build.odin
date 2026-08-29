@@ -14,6 +14,10 @@ VKFIELD_BUILD_TYPE: string
 
 INSTALL_LOCATION :: #config(INSTALL_LOCATION, ".")
 
+TMP_DIRECTORY :: #config(TMP_DIRECTORY, "tmp/")
+EXTERN_DIRECTORY :: #config(EXTERN_DIRECTORY, "extern/")
+IMPORT_DIRECTORY :: #config(IMPORT_DIRECTORY, "import/")
+
 VKFIELD_BINARY_OUT_DIR := "bin"
 VKFIELD_LIBRARY_OUT_DIR := "lib"
 VKFIELD_RELEASE_OUT_SUBDIR := "release"
@@ -29,7 +33,7 @@ VKFIELD_SRC_DIR := "core"
 MATLAB_DIR := "matlab"
 VKFIELD_TEST_DIR := "test"
 
-VKFIELD_COLLECTIONS: []OdinCollection = {{name = "vkField", path = "core"}}
+VKFIELD_COLLECTIONS: []OdinCollection = {{name = "vkField", path = "core"}, {name = "import", path = IMPORT_DIRECTORY}}
 VKFIELD_ODIN_BUILD_OPTIONS: []OdinBuildOption = {}
 VKFIELD_ODIN_RELEASE_OPTIONS: []OdinBuildOption = {{flag = "o", value = {"speed"}}}
 VKFIELD_ODIN_DEBUG_OPTIONS: []OdinBuildOption = {{flag = "debug"}}
@@ -53,11 +57,6 @@ assert :: util.assert
 assume :: util.assume
 
 VKFIELD_GLSLANG_OPTIONS: []CliOptions = {{flag = 'V'}, {flag = 'e', value = "main"}, {flag = "target-env", value = "vulkan1.2"}, {flag = "spirv-val"}}
-
-// odin build ./core -build-mode:lib -out:bin/debug/vkField.lib -collection:vkField=core -debug
-// odin build ./scripts -out:bin/debug/oneRectSimulation.exe -debug -collection:vkField=core
-// glslang -V shaders/pulse_echo.comp.hlsl -o shaders/pulse_echo.comp.spv -e main -gVS --target-env vulkan1.2 --spirv-val
-// glslang -V shaders/pulse_echo_cum.comp.hlsl -o shaders/pulse_echo_cum.comp.spv -e main -gVS --target-env vulkan1.2 --spirv-val
 
 main :: proc() {
 	logger: runtime.Logger
@@ -145,6 +144,9 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	// Compile Shaders
 	for shader in VKFIELD_PULSE_ECHO_SHADERS do confirm(compile_shader_slangc(shader))
 
+	// Compile PFFFT
+	build_pffft() or_return
+
 	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_LIBRARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
 	// Make Output Directory
 	if !os.is_directory(outputDir) {
@@ -183,12 +185,15 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	return
 }
 
-build_test :: proc(options: ^[dynamic]OdinBuildOption) {
+build_test :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	assert(check_cmd(ODIN_CMD), fmt.aprintf("Odin Command \"%v\" not found", ODIN_CMD))
 	assert(check_cmd(SLANG_CMD), fmt.aprintf("Slang Command \"%v\" not found", SLANG_CMD))
 
 	// Compile Shaders
 	for shader in VKFIELD_PULSE_ECHO_SHADERS do assert(compile_shader_slangc(shader))
+
+	// Compile PFFFT
+	build_pffft() or_return
 
 	outputDir := assume(os.join_path({INSTALL_LOCATION, VKFIELD_BINARY_OUT_DIR, VKFIELD_OUTPUT_SUBDIR}, context.allocator))
 	// Make Output Directory
@@ -212,5 +217,43 @@ build_test :: proc(options: ^[dynamic]OdinBuildOption) {
 	append(&odinCmd, ODIN_CMD, ODIN_BUILD_ARG, VKFIELD_TEST_DIR)
 	append(&odinCmd, ..odin_options_to_args(options[:]))
 	assert(assert(run_cmd(odinCmd[:])) == 0)
+	return
+}
+
+PFFFT_DIRECTORY :: EXTERN_DIRECTORY + "pffft/"
+PFFFT_SOURCE :: PFFFT_DIRECTORY + "pffft.c"
+
+build_pffft :: proc() -> (ok := true) {
+	build_log(os.stdout, .Info, "Building PFFFT")
+	compilerPath, compilerKind := detect_cpp_compiler() or_return
+	tmpDirectory := TMP_DIRECTORY + "pffft/"
+	compileParameters: CppCompileParameters = {
+		compilerPath      = compilerPath,
+		outputType        = .ObjectFiles,
+		sourcePaths       = {PFFFT_SOURCE},
+		outputPath        = tmpDirectory,
+		optimizationLevel = .Debug,
+		fastMath          = false,
+		debug             = VKFIELD_BUILD_MODE == "debug",
+	}
+	compileCmd := build_cpp_compile_command(compilerKind, compileParameters) or_return
+	assert(assert(run_cmd(compileCmd)) == 0)
+	objectPath := assume(
+		os.join_path(
+			{tmpDirectory, assume(os.join_filename("pffft", get_cpp_object_extension(compilerKind), context.temp_allocator))},
+			context.temp_allocator,
+		),
+	)
+	importDirectory :: IMPORT_DIRECTORY + "pffft/"
+	libraryPath := assume(
+		os.join_path({importDirectory, assume(os.join_filename("pffft", get_static_library_extensions(ODIN_OS), context.allocator))}, context.allocator),
+	)
+	archiveParameters: CppArchiveParameters = {
+		archiverPath = get_cpp_static_archiver(compilerKind),
+		objectFiles  = {objectPath},
+		outputPath   = libraryPath,
+	}
+	archiveCmd := build_cpp_archive_command(compilerKind, archiveParameters) or_return
+	assert(assert(run_cmd(archiveCmd)) == 0)
 	return
 }

@@ -1,0 +1,3 @@
+[submodule "extern/pffft"]
+	path = extern/pffft
+	url = https://bitbucket.org/jpommier/pffft/src/master/

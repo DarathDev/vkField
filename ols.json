@@ -4,6 +4,10 @@
         {
             "name": "vkField",
             "path": "core"
+        },
+        {
+            "name": "import",
+            "path": "import"
         }
     ],
     "enable_semantic_tokens": true,
