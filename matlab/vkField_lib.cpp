@@ -264,38 +264,47 @@ public:
 		std::memcpy(slice->delay, pDelays, numelDelays * sizeof(f32));
 	}
 
-	void copyTransmissions(const ObjectArray& mxTransmissions, TransmissionSlice* slice) {
+	void copyTransmissions(const ObjectArray& mxTransmissionSet, TransmissionSlice* slice) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
-		slice->len = static_cast<iz>( mxTransmissions.getNumberOfElements() );
+		const TypedArray<u32> mxCount = matlabPtr->getProperty(mxTransmissionSet, u"Count");
+		const TypedArray<u32> mxElementCounts = matlabPtr->getProperty(mxTransmissionSet, u"ElementCounts");
+		const TypedArray<i32> mxIndices = matlabPtr->getProperty(mxTransmissionSet, u"Indices");
+		const TypedArray<f32> mxApodizations = matlabPtr->getProperty(mxTransmissionSet, u"Apodizations");
+		const TypedArray<f32> mxDelays = matlabPtr->getProperty(mxTransmissionSet, u"Delays");
+
+		slice->len = static_cast<iz>( mxCount[0] );
 		slice->data = new Transmission[slice->len];
+
+		const uz totalElementCount = std::min({
+			mxIndices.getNumberOfElements(),
+			mxApodizations.getNumberOfElements(),
+			mxDelays.getNumberOfElements(),
+		});
+		const u32* pElementCounts = getDataPtr<u32>(mxElementCounts);
+		const i32* pIndices = getDataPtr<i32>(mxIndices);
+		const f32* pApodizations = getDataPtr<f32>(mxApodizations);
+		const f32* pDelays = getDataPtr<f32>(mxDelays);
+
+		uz offset = 0;
 		for (iz i = 0; i < slice->len; ++i) {
-			const TypedArray<u32> mxCount = matlabPtr->getProperty(mxTransmissions, i, u"Count");
-			const TypedArray<i32> mxIndices = matlabPtr->getProperty(mxTransmissions, i, u"Indices");
-			const TypedArray<f32> mxApodizations = matlabPtr->getProperty(mxTransmissions, i, u"Apodizations");
-			const TypedArray<f32> mxDelays = matlabPtr->getProperty(mxTransmissions, i, u"Delays");
+			const uz count = static_cast<uz>(pElementCounts[i]);
+			const uz available = offset < totalElementCount ? totalElementCount - offset : 0;
+			const uz numel = std::min(count, available);
 
+			slice->data[i].elements.len = static_cast<iz>(count);
+			slice->data[i].elements.index = new i32[numel];
+			slice->data[i].elements.apodization = new f32[numel];
+			slice->data[i].elements.delay = new f32[numel];
 
-			const uz count = static_cast<uz>(mxCount[0]);
-			const uz numelIndices = std::min(mxIndices.getNumberOfElements(), 1 * count);
-			const uz numelApodizations = std::min(mxApodizations.getNumberOfElements(), 1 * count);
-			const uz numelDelays = std::min(mxDelays.getNumberOfElements(), 1 * count);
+			std::memcpy(slice->data[i].elements.index, pIndices + offset, numel * sizeof(i32));
+			std::memcpy(slice->data[i].elements.apodization, pApodizations + offset, numel * sizeof(f32));
+			std::memcpy(slice->data[i].elements.delay, pDelays + offset, numel * sizeof(f32));
 
-			const i32* pIndices = getDataPtr<i32>(mxIndices);
-			const f32* pApodizations = getDataPtr<f32>(mxApodizations);
-			const f32* pDelays = getDataPtr<f32>(mxDelays);
-
-			slice->data[i].elements.len = static_cast<iz>( count );
-			slice->data[i].elements.index = new i32[numelIndices];
-			slice->data[i].elements.apodization = new f32[numelApodizations];
-			slice->data[i].elements.delay = new f32[numelDelays];
-
-			std::memcpy(slice->data[i].elements.index, pIndices, numelIndices * sizeof(i32));
-			std::memcpy(slice->data[i].elements.apodization, pApodizations, numelApodizations * sizeof(f32));
-			std::memcpy(slice->data[i].elements.delay, pDelays, numelDelays * sizeof(f32));
-
-			for (uz j = 0; j < numelIndices; ++j) {
+			for (uz j = 0; j < numel; ++j) {
 				slice->data[i].elements.index[j] -= 1;
 			}
+
+			offset += count;
 		}
 	}
 

@@ -24,8 +24,8 @@ classdef Simulation < handle
 
     properties
         Elements(1,1) vkField.RectangularElementSet
-        Transmissions(:,1) vkField.Transmission
-        ReceiveChannels(:,1) vkField.ReceiveChannel
+        Transmissions(1,1) vkField.TransmissionSet
+        ReceiveChannels(1,1) vkField.ReceiveChannelSet
         Scatters(1,1) vkField.ScatterSet
     end
 

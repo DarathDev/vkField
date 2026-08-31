@@ -7,15 +7,17 @@ simulation.Elements.Sizes = single(repmat([2.2e-4; 2.2e-4], 1, 3));
 simulation.Elements.Apodizations = single(ones(1, 3));
 simulation.Elements.Delays = single(zeros(1, 3));
 
-tx = vkField.Transmission();
-tx.Count = uint32(3);
+tx = vkField.TransmissionSet();
+tx.Count = uint32(1);
+tx.ElementCounts = uint32(3);
 tx.Indices = int32([1, 2, 3]);
 tx.Apodizations = single([1, 1, 1]);
 tx.Delays = single([0, 0, 0]);
 simulation.Transmissions = tx;
 
-rx = vkField.ReceiveChannel();
+rx = vkField.ReceiveChannelSet();
 rx.Count = uint32(1);
+rx.ElementCounts = uint32(1);
 rx.Indices = int32(2);
 rx.Apodizations = single(1);
 rx.Delays = single(0);

@@ -74,15 +74,17 @@ simulator.Elements.Sizes = single([reshape(dieWidthT(:), 2, 1), reshape(dieWidth
 simulator.Elements.Apodizations = single([1, 1]);
 simulator.Elements.Delays = single([0, 0]);
 
-transmissions = vkField.Transmission();
+transmissions = vkField.TransmissionSet();
 transmissions.Count = uint32(1);
+transmissions.ElementCounts = uint32(1);
 transmissions.Indices = int32(1);
 transmissions.Apodizations = single(1);
 transmissions.Delays = single(0);
 simulator.Transmissions = transmissions;
 
-receiveChannels = vkField.ReceiveChannel();
+receiveChannels = vkField.ReceiveChannelSet();
 receiveChannels.Count = uint32(1);
+receiveChannels.ElementCounts = uint32(1);
 receiveChannels.Indices = int32(2);
 receiveChannels.Apodizations = single(1);
 receiveChannels.Delays = single(0);

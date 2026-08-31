@@ -87,21 +87,20 @@ simulator.Elements.Sizes = single([tData(3:4, :), rData(3:4, :)]);
 simulator.Elements.Apodizations = single([tData(5, :), rData(5, :)]);
 simulator.Elements.Delays = single([tData(23, :), rData(23, :)]);
 
-transmit = vkField.Transmission();
-transmit.Count = uint32(size(tData, 2));
+transmit = vkField.TransmissionSet();
+transmit.Count = uint32(1);
+transmit.ElementCounts = uint32(size(tData, 2));
 transmit.Indices = int32(1:size(tData, 2));
 transmit.Apodizations = single(tData(5, :));
 transmit.Delays = single(tData(23, :));
 simulator.Transmissions = transmit;
 
-receiveChannels = repmat(vkField.ReceiveChannel(), 1, columnCountR);
-for col = 1:columnCountR
-    elementIndices = size(tData, 2) + (col - 1) * rowCountR + (1:rowCountR);
-    receiveChannels(col).Count = uint32(rowCountR);
-    receiveChannels(col).Indices = int32(elementIndices);
-    receiveChannels(col).Apodizations = single(rData(5, (col - 1) * rowCountR + (1:rowCountR)));
-    receiveChannels(col).Delays = single(rData(23, (col - 1) * rowCountR + (1:rowCountR)));
-end
+receiveChannels = vkField.ReceiveChannelSet();
+receiveChannels.Count = uint32(columnCountR);
+receiveChannels.ElementCounts = repmat(uint32(rowCountR), 1, columnCountR);
+receiveChannels.Indices = int32(size(tData, 2) + (1:size(rData, 2)));
+receiveChannels.Apodizations = single(rData(5, :));
+receiveChannels.Delays = single(rData(23, :));
 simulator.ReceiveChannels = receiveChannels;
 
 simulator.Scatters = vkField.ScatterSet();
