@@ -108,8 +108,6 @@ simulate :: proc(
 	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
 	defer if rdoc_ok do rdoc.unload_api(rdoc_lib)
 
-	data = make([]f32, len(scatters) * len(receiveChannels) * len(transmissions), allocator)
-
 	stopwatch: time.Stopwatch
 	time.stopwatch_start(&stopwatch)
 	switch &sim in simulator {
