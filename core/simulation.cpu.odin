@@ -1,10 +1,12 @@
 package vkfield
 
 import "base:intrinsics"
+import "core:log"
 import "core:math/linalg"
 import "core:mem"
 import "core:simd"
 import "core:slice"
+import "core:time"
 import "import:pffft"
 import utility "vkField:utility"
 
@@ -23,6 +25,8 @@ plan_cpu_simulation :: proc(simulator: ^cpuSimulator, settings: ^SimulationSetti
 
 SCATTER_BATCH_SIZE :: 256
 DATALINE_BATCH_SIZE :: 1024
+PROGRESS_LOG_DELAY_THRESHOLD :: 20.0 * time.Second
+PROGRESS_LOG_INTERVAL :: 20.0 * time.Second
 
 simulate_cpu :: proc(
 	simulator: ^cpuSimulator,
@@ -52,6 +56,13 @@ simulate_cpu :: proc(
 	if transmissionCount == 0 || receiveChannelCount == 0 || scatterCount == 0 {
 		return
 	}
+
+	totalDatalineScatters := i64(scatterCount) * i64(transmissionCount) * i64(receiveChannelCount)
+	completedDatalineScatters: i64 = 0
+
+	progressStopwatch: time.Stopwatch
+	time.stopwatch_start(&progressStopwatch)
+	lastProgressLogTime: time.Duration
 
 	batchTxCount: i32 = 1
 	maxBatchRxCount := min(receiveChannelCount, DATALINE_BATCH_SIZE)
@@ -120,9 +131,7 @@ simulate_cpu :: proc(
 					elementMaxSample := i32(linalg.ceil(elementImpulse.rect.w + 0.5))
 
 					sample_aperture_add(
-						transmissionImpulse[(elementMinSample - transmissionSampleRange.minSample):(elementMaxSample +
-							1 -
-							transmissionSampleRange.minSample)],
+						transmissionImpulse[(elementMinSample - transmissionSampleRange.minSample):(elementMaxSample + 1 - transmissionSampleRange.minSample)],
 						elementMinSample,
 						elementImpulse,
 						auto_cast cumulative,
@@ -151,7 +160,9 @@ simulate_cpu :: proc(
 						scatter                    = scatter,
 						transmissionSampleRanges   = transmissionSampleRanges[scatterIndex * int(batchTxCount):(scatterIndex + 1) * int(batchTxCount)],
 						receiveChannelSampleRanges = slice.from_ptr(cast(^SampleRange)receiveChannelSampleRangesMemory, int(batchRxCount)),
-						transmissionImpulses       = transmissionImpulses[scatterIndex * int(batchTxCount) * int(sampleCount):(scatterIndex + 1) * int(batchTxCount) * int(sampleCount)],
+						transmissionImpulses       = transmissionImpulses[scatterIndex * int(
+							batchTxCount,
+						) * int(sampleCount):(scatterIndex + 1) * int(batchTxCount) * int(sampleCount)],
 						receiveChannelImpulses     = slice.from_ptr(cast(^f32)receiveChannelImpulsesMemory, int(batchRxCount) * int(sampleCount)),
 					}
 
@@ -245,6 +256,28 @@ simulate_cpu :: proc(
 					)
 				}
 				mem.arena_free_all(&scatterArena)
+
+				completedDatalineScatters += i64(scatterBatchCount) * i64(batchTxCount) * i64(batchRxCount)
+				elapsedDuration := time.stopwatch_duration(progressStopwatch)
+				if elapsedDuration >= PROGRESS_LOG_DELAY_THRESHOLD {
+					if lastProgressLogTime == 0 || elapsedDuration - lastProgressLogTime >= PROGRESS_LOG_INTERVAL {
+						lastProgressLogTime = elapsedDuration
+						fraction := f64(completedDatalineScatters) / f64(totalDatalineScatters)
+						percentage := fraction * 100.0
+						if fraction > 0 {
+							estimatedTotalDuration := time.Duration(f64(elapsedDuration) / fraction)
+							estimatedRemainingDuration := max(estimatedTotalDuration - elapsedDuration, 0)
+							log.infof(
+								"Simulation progress: %.1f%%, estimated completion in %v (elapsed: %v)",
+								percentage,
+								estimatedRemainingDuration,
+								elapsedDuration,
+							)
+						} else {
+							log.infof("Simulation progress: %.1f%% (elapsed: %.1fs)", percentage, elapsedDuration)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -415,9 +448,7 @@ scatter_batch_memory_size :: proc(sampleCount, transmissionCount, receiveChannel
 	receiveChannelMetadataSize := maxRx * size_of(SampleRange)
 	receiveChannelImpulseSize := maxRx * int(sampleCount) * size_of(f32)
 
-	scatterDataSize :=
-		arena_allocation_size(receiveChannelMetadataSize, align_of(SampleRange)) +
-		arena_allocation_size(receiveChannelImpulseSize, 16)
+	scatterDataSize := arena_allocation_size(receiveChannelMetadataSize, align_of(SampleRange)) + arena_allocation_size(receiveChannelImpulseSize, 16)
 	batchCollectionSize := 2 * arena_allocation_size(batchSize * size_of(CpuScatterData), align_of(CpuScatterData))
 	return batchCollectionSize + batchSize * scatterDataSize
 
