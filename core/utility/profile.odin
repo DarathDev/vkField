@@ -1,3 +1,4 @@
+#+no-instrumentation
 package vkField_utility
 
 import "base:runtime"
@@ -25,20 +26,43 @@ when PROF_MODE != .None {
 	prof_allocator: mem.Allocator
 }
 
-when PROF_MODE == .All_Funcs {
+when PROF_MODE == .Custom {
+	spall_full: uint
+}
+
+when PROF_MODE != .None {
 
 	@(instrumentation_enter)
 	spall_enter :: proc "contextless" (proc_address, call_site_return_address: rawptr, loc: runtime.Source_Code_Location) {
 		if spall_buffer.data == nil do return
+		when PROF_MODE == .Custom {
+			if spall_full == 0 do return
+		}
 		spall._buffer_begin(&spall_ctx, &spall_buffer, "", "", loc)
 	}
 
 	@(instrumentation_exit)
 	spall_exit :: proc "contextless" (proc_address, call_site_return_address: rawptr, loc: runtime.Source_Code_Location) {
 		if spall_buffer.data == nil do return
+		when PROF_MODE == .Custom {
+			if spall_full == 0 do return
+		}
 		spall._buffer_end(&spall_ctx, &spall_buffer)
 	}
 
+}
+
+@(deferred_none = prof_full_end)
+prof_full :: proc() {
+	when PROF_MODE == .Custom {
+		spall_full += 1
+	}
+}
+
+prof_full_end :: proc() {
+	when PROF_MODE == .Custom {
+		spall_full -= 1
+	}
 }
 
 // Call once at the very start of the main thread
