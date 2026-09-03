@@ -1,5 +1,6 @@
 package vkField_vulkan
 
+import "base:intrinsics"
 import "base:runtime"
 import "core:dynlib"
 import "core:fmt"
@@ -135,6 +136,7 @@ name :: proc {
 	name_swapchain,
 	name_surface,
 	name_device_memory,
+	name_sampler,
 	name_buffer,
 	name_image,
 	name_buffer_view,
@@ -167,6 +169,10 @@ name_surface :: proc(device: Device, surface: vk.SurfaceKHR, name: string) -> vk
 
 name_device_memory :: proc(device: Device, deviceMemory: vk.DeviceMemory, name: string) -> vk.Result {
 	return name_object(device, cast(u64)deviceMemory, .DEVICE_MEMORY, name)
+}
+
+name_sampler :: proc(device: Device, sampler: vk.Sampler, name: string) -> vk.Result {
+	return name_object(device, cast(u64)sampler, .SAMPLER, name)
 }
 
 name_buffer :: proc(device: Device, buffer: vk.Buffer, name: string) -> vk.Result {
@@ -380,7 +386,21 @@ get_buffer_address :: proc(device: Device, buffer: Buffer) -> vk.DeviceAddress {
 get_all_shader_stages :: proc(device: Device) -> (stageFlags: vk.ShaderStageFlags) {
 	stageFlags = {.VERTEX, .FRAGMENT, .COMPUTE}
 	if .MeshShader in device.enabledCapabilities {
-		stageFlags |= {.TASK_EXT, .MESH_EXT}
+		stageFlags |= {.MESH_EXT}
+	}
+	if .TaskShader in device.enabledCapabilities {
+		stageFlags |= {.TASK_EXT}
+	}
+	return
+}
+
+get_all_pipeline_shader_stages :: proc(device: Device) -> (stageFlags: vk.PipelineStageFlags2) {
+	stageFlags = {.VERTEX_INPUT, .FRAGMENT_SHADER, .COMPUTE_SHADER}
+	if .MeshShader in device.enabledCapabilities {
+		stageFlags |= {.MESH_SHADER_EXT}
+	}
+	if .TaskShader in device.enabledCapabilities {
+		stageFlags |= {.TASK_SHADER_EXT}
 	}
 	return
 }
@@ -416,7 +436,46 @@ get_image_mapped_data :: proc(image: Image) -> []byte {
 	return (cast([^]byte)image.memory.mappedData)[image.offset:][:image.size]
 }
 
-cmd_push_constants :: proc(commandBuffer: vk.CommandBuffer, layout: vk.PipelineLayout, stages: vk.ShaderStageFlags, data: $T) {
+get_timeline_value :: proc(device: Device, semaphore: TimelineSemaphore, loc := #caller_location) -> (value: u64, bool := true) {
+	vkField_util.is_ok(vkField_util.check(vk.GetSemaphoreCounterValue(device.device, auto_cast semaphore, &value), loc = loc)) or_return
+	assert(value != ~{})
+	return
+}
+
+make_dependency_info :: proc(
+	memoryBarriers: []vk.MemoryBarrier2 = {},
+	bufferBarriers: []vk.BufferMemoryBarrier2 = {},
+	imageBarriers: []vk.ImageMemoryBarrier2 = {},
+) -> vk.DependencyInfo {
+	for &barrier in memoryBarriers do barrier.sType = .MEMORY_BARRIER_2
+	for &barrier in bufferBarriers do barrier.sType = .BUFFER_MEMORY_BARRIER_2
+	for &barrier in imageBarriers do barrier.sType = .IMAGE_MEMORY_BARRIER_2
+	return {
+		sType = .DEPENDENCY_INFO,
+		memoryBarrierCount = u32(len(memoryBarriers)),
+		pMemoryBarriers = raw_data(memoryBarriers),
+		bufferMemoryBarrierCount = u32(len(bufferBarriers)),
+		pBufferMemoryBarriers = raw_data(bufferBarriers),
+		imageMemoryBarrierCount = u32(len(imageBarriers)),
+		pImageMemoryBarriers = raw_data(imageBarriers),
+	}
+}
+
+cmd_push_constants :: proc {
+	cmd_push_constants_struct,
+	cmd_push_constants_bytes,
+}
+
+cmd_push_constants_struct :: proc(
+	commandBuffer: CommandBuffer,
+	layout: vk.PipelineLayout,
+	stages: vk.ShaderStageFlags,
+	data: $T,
+) where intrinsics.type_is_struct(T) {
 	data := data
-	vk.CmdPushConstants(commandBuffer, layout, stages, 0, size_of(T), &data)
+	vk.CmdPushConstants(commandBuffer.commandBuffer, layout, stages, 0, size_of(T), &data)
+}
+
+cmd_push_constants_bytes :: proc(commandBuffer: CommandBuffer, layout: vk.PipelineLayout, stages: vk.ShaderStageFlags, data: []byte) {
+	vk.CmdPushConstants(commandBuffer.commandBuffer, layout, stages, 0, u32(len(data)), raw_data(data))
 }

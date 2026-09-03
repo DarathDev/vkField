@@ -5,6 +5,7 @@ import "base:runtime"
 import "core:fmt"
 import "core:log"
 import "core:math/bits"
+import "core:slice"
 import "core:strings"
 import vk "vendor:vulkan"
 import vkField_util "vkField:utility"
@@ -17,6 +18,7 @@ assert :: vkField_util.assert
 check :: vkField_util.check
 
 VK_VALIDATION_LAYER_NAME :: "VK_LAYER_KHRONOS_validation"
+VK_SHADER_OBJECT_LAYER_NAME :: "VK_LAYER_KHRONOS_shader_object"
 
 PRESENT_SUBCAPABILITIES: InstanceCapabilities : {.PresentWin32, .PresentMetal, .PresentXcb, .PresentXLib, .PresentWayland}
 
@@ -28,6 +30,10 @@ DEVICE_FEATURE_EXTENSIONS: [DeviceCapability][]cstring : #partial{
 	.FifoLatestReady = {vk.EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME},
 	.ShaderObject = {vk.EXT_SHADER_OBJECT_EXTENSION_NAME},
 	.ExternalMemoryHost = {vk.EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME},
+	.SubgroupRotate = {vk.KHR_SHADER_SUBGROUP_ROTATE_EXTENSION_NAME},
+	.DynamicLocalRead = {vk.KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME},
+	.Robustness2 = {vk.EXT_ROBUSTNESS_2_EXTENSION_NAME},
+	.Barycentric = {vk.KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME},
 }
 
 deduce_instance_capabilities :: proc(layers: []vk.LayerProperties, extensions: []vk.ExtensionProperties) -> (capabilities: InstanceCapabilities) {
@@ -35,6 +41,8 @@ deduce_instance_capabilities :: proc(layers: []vk.LayerProperties, extensions: [
 		switch (byte_arr_str(&layer.layerName)) {
 		case VK_VALIDATION_LAYER_NAME:
 			capabilities |= {.Validation}
+		case VK_SHADER_OBJECT_LAYER_NAME:
+			capabilities |= {.ShaderObject}
 		}
 	}
 	for &extension in extensions {
@@ -70,6 +78,7 @@ make_instance_flags :: proc(capabilities: InstanceCapabilities) -> (flags: vk.In
 make_instance_layer_names :: proc(capabilities: InstanceCapabilities, allocator := context.allocator) -> (layers: []cstring) {
 	dLayers := make([dynamic]cstring, allocator)
 	if .Validation in capabilities { append(&dLayers, VK_VALIDATION_LAYER_NAME) }
+	if .ShaderObject in capabilities { append(&dLayers, VK_SHADER_OBJECT_LAYER_NAME) }
 	shrink(&dLayers); layers = dLayers[:]
 	return
 }
@@ -106,6 +115,7 @@ deduce_device_capabilities :: proc(features2: vk.PhysicalDeviceFeatures2, extens
 	if !features2.features.shaderFloat64 { capabilities -= {.ShaderFloat64} }
 	if !features2.features.shaderInt64 { capabilities -= {.ShaderInt64} }
 	if !features2.features.shaderInt16 { capabilities -= {.ShaderInt16} }
+	if !features2.features.robustBufferAccess { capabilities -= {.Robustness2} }
 	pNext: ^vk.BaseInStructure = auto_cast features2.pNext
 	for pNext != nil {
 		#partial switch pNext.sType {
@@ -136,6 +146,13 @@ deduce_device_capabilities :: proc(features2: vk.PhysicalDeviceFeatures2, extens
 			if !vulkan13Features.synchronization2 { capabilities -= {.Synchronization2} }
 			if !vulkan13Features.dynamicRendering { capabilities -= {.DynamicRendering} }
 			if !vulkan13Features.maintenance4 { capabilities -= {.Maintenance4} }
+		case .PHYSICAL_DEVICE_SHADER_SUBGROUP_ROTATE_FEATURES_KHR:
+			subgroupRotateFeatures := ((cast(^vk.PhysicalDeviceShaderSubgroupRotateFeatures)pNext)^)
+			if !subgroupRotateFeatures.shaderSubgroupRotate { capabilities -= {.SubgroupRotate} }
+			if !subgroupRotateFeatures.shaderSubgroupRotateClustered { capabilities -= {.SubgroupRotate} }
+		case .PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR:
+			dynamicLocalReadFeatures := ((cast(^vk.PhysicalDeviceDynamicRenderingLocalReadFeaturesKHR)pNext)^)
+			if !dynamicLocalReadFeatures.dynamicRenderingLocalRead { capabilities -= {.DynamicLocalRead} }
 		case .PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT:
 			atomicFloatFeatures := ((cast(^vk.PhysicalDeviceShaderAtomicFloatFeaturesEXT)pNext)^)
 			if !atomicFloatFeatures.shaderBufferFloat32AtomicAdd { capabilities -= {.AtomicAddFloat32Buffer} }
@@ -151,6 +168,15 @@ deduce_device_capabilities :: proc(features2: vk.PhysicalDeviceFeatures2, extens
 		case .PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT:
 			meshShader := ((cast(^vk.PhysicalDeviceMeshShaderFeaturesEXT)pNext)^)
 			if !meshShader.meshShader { capabilities -= {.MeshShader} }
+			if !meshShader.taskShader { capabilities -= {.TaskShader} }
+		case .PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT:
+			robustness2 := ((cast(^vk.PhysicalDeviceRobustness2FeaturesEXT)pNext)^)
+			if !robustness2.robustBufferAccess2 { capabilities -= {.Robustness2} }
+			if !robustness2.robustImageAccess2 { capabilities -= {.Robustness2} }
+			if !robustness2.nullDescriptor { capabilities -= {.Robustness2} }
+		case .PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR:
+			barycentric := ((cast(^vk.PhysicalDeviceFragmentShaderBarycentricFeaturesKHR)pNext)^)
+			if !barycentric.fragmentShaderBarycentric { capabilities -= {.Barycentric} }
 		}
 		pNext = auto_cast pNext.pNext
 	}
@@ -174,6 +200,11 @@ deduce_device_capabilities :: proc(features2: vk.PhysicalDeviceFeatures2, extens
 	return
 }
 
+regularize_device_capabilities :: proc(capabilities: ^DeviceCapabilities) {
+	if .TaskShader in capabilities { capabilities^ |= {.MeshShader} }
+	if .MeshShader not_in capabilities { capabilities^ &~= {.TaskShader} }
+}
+
 make_device_features :: proc(
 	capabilities: DeviceCapabilities,
 	allocator := context.allocator,
@@ -181,6 +212,8 @@ make_device_features :: proc(
 ) -> (
 	features2: vk.PhysicalDeviceFeatures2,
 ) {
+	capabilities := capabilities
+	regularize_device_capabilities(&capabilities)
 	features2 = {
 		sType = .PHYSICAL_DEVICE_FEATURES_2,
 		features = {
@@ -198,6 +231,7 @@ make_device_features :: proc(
 			shaderFloat64 = .ShaderFloat64 in capabilities,
 			shaderInt64 = .ShaderInt64 in capabilities,
 			shaderInt16 = .ShaderInt16 in capabilities,
+			robustBufferAccess = .Robustness2 in capabilities,
 		},
 	}
 
@@ -240,14 +274,38 @@ make_device_features :: proc(
 	}
 	vk12Features.pNext = vk13Features
 
-	atomicFloatFeatures := new(vk.PhysicalDeviceShaderAtomicFloatFeaturesEXT, allocator, loc)
-	atomicFloatFeatures^ = {
-		sType                        = .PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT,
-		shaderBufferFloat32AtomicAdd = .AtomicAddFloat32Buffer in capabilities,
-	}
-	vk13Features.pNext = atomicFloatFeatures
+	pNext: ^vk.BaseInStructure = auto_cast vk13Features
 
-	pNext: ^vk.BaseInStructure = auto_cast atomicFloatFeatures
+	if .SubgroupRotate in capabilities {
+		subgroupRotateFeatures := new(vk.PhysicalDeviceShaderSubgroupRotateFeaturesKHR, allocator, loc)
+		subgroupRotateFeatures^ = {
+			sType                         = .PHYSICAL_DEVICE_SHADER_SUBGROUP_ROTATE_FEATURES_KHR,
+			shaderSubgroupRotate          = .SubgroupRotate in capabilities,
+			shaderSubgroupRotateClustered = .SubgroupRotate in capabilities,
+		}
+		pNext.pNext = auto_cast subgroupRotateFeatures
+		pNext = auto_cast subgroupRotateFeatures
+	}
+
+	if .DynamicLocalRead in capabilities {
+		dynamicLocalReadFeatures := new(vk.PhysicalDeviceDynamicRenderingLocalReadFeaturesKHR, allocator, loc)
+		dynamicLocalReadFeatures^ = {
+			sType                     = .PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR,
+			dynamicRenderingLocalRead = .DynamicLocalRead in capabilities,
+		}
+		pNext.pNext = auto_cast dynamicLocalReadFeatures
+		pNext = auto_cast dynamicLocalReadFeatures
+	}
+
+	if .AtomicAddFloat32Buffer in capabilities {
+		atomicFloatFeatures := new(vk.PhysicalDeviceShaderAtomicFloatFeaturesEXT, allocator, loc)
+		atomicFloatFeatures^ = {
+			sType                        = .PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT,
+			shaderBufferFloat32AtomicAdd = .AtomicAddFloat32Buffer in capabilities,
+		}
+		pNext.pNext = auto_cast atomicFloatFeatures
+		pNext = auto_cast atomicFloatFeatures
+	}
 
 	if .SwapchainMaintenance in capabilities {
 		swapchainMaintenance := new(vk.PhysicalDeviceSwapchainMaintenance1FeaturesEXT, allocator, loc)
@@ -284,9 +342,32 @@ make_device_features :: proc(
 		meshShader^ = {
 			sType      = .PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
 			meshShader = .MeshShader in capabilities,
+			taskShader = .TaskShader in capabilities,
 		}
 		pNext.pNext = auto_cast meshShader
 		pNext = auto_cast meshShader
+	}
+
+	if .Robustness2 in capabilities {
+		robustness2 := new(vk.PhysicalDeviceRobustness2FeaturesEXT, allocator, loc)
+		robustness2^ = {
+			sType               = .PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+			robustBufferAccess2 = .Robustness2 in capabilities,
+			robustImageAccess2  = .Robustness2 in capabilities,
+			nullDescriptor      = .Robustness2 in capabilities,
+		}
+		pNext.pNext = auto_cast robustness2
+		pNext = auto_cast robustness2
+	}
+
+	if .Barycentric in capabilities {
+		barycentric := new(vk.PhysicalDeviceFragmentShaderBarycentricFeaturesKHR, allocator, loc)
+		barycentric^ = {
+			sType                     = .PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR,
+			fragmentShaderBarycentric = .Barycentric in capabilities,
+		}
+		pNext.pNext = auto_cast barycentric
+		pNext = auto_cast barycentric
 	}
 	return
 }
@@ -349,15 +430,11 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 		}
 
 		if criteria.graphics {
-			hasGraphics: bool
-			for family in device.queueFamilies {
-				if .GRAPHICS in family.queueFlags {
-					hasGraphics = true
-					break
-				}
-			}
+			canDraw := slice.any_of_proc(device.queueFamilies, proc(family: QueueFamily) -> bool {
+				return .Graphics in family.properties
+			})
 
-			if !hasGraphics {
+			if !canDraw {
 				log.infof("vulkan: device %q does not have a queue family that supports graphics", name)
 				return 0
 			}
@@ -369,15 +446,11 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 				return 0
 			}
 
-			hasPresent: bool
-			for _, index in device.queueFamilies {
-				if CheckPresentSupport(device.physicalDevice, index) {
-					hasPresent = true
-					break
-				}
-			}
+			canPresent := slice.any_of_proc(device.queueFamilies, proc(family: QueueFamily) -> bool {
+				return .Present in family.properties
+			})
 
-			if !hasPresent {
+			if !canPresent {
 				log.infof("vulkan: device %q does not have a queue family that supports presenting", name)
 				return 0
 			}
@@ -442,64 +515,30 @@ query_swapchain_support :: proc(
 	return
 }
 
-get_compute_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties) -> u32 {
-	computeQueue: u32
-	for family, index in families {
-		if .COMPUTE in family.queueFlags {
-			if .GRAPHICS not_in family.queueFlags {
-				return u32(index)
-			}
-			computeQueue = u32(index)
+find_best_queue_family :: proc(queueFamilies: []QueueFamily, request: QueueRequest) -> (familyIndex: u32, count: u32) {
+	minScore: u8 = bits.U8_MAX
+	for family, index in queueFamilies {
+		if !(family.properties > request.requiredProperties) do continue
+		if family.queueCount == 0 do continue
+		typeScore :=
+			transmute(u8)intrinsics.count_ones(request.preferredProperties - family.properties) +
+			transmute(u8)intrinsics.count_ones(request.unpreferredProperties & family.properties)
+		if typeScore < minScore {
+			familyIndex = auto_cast index
+			minScore = typeScore
+			count = min(family.queueCount, request.count)
 		}
-	}
-	return computeQueue
-}
-
-get_transfer_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties, checkPresent: bool) -> u32 {
-	transferQueue: u32
-	for family, index in families {
-		if .TRANSFER in family.queueFlags {
-			if .GRAPHICS not_in family.queueFlags && .COMPUTE not_in family.queueFlags && (!checkPresent || !CheckPresentSupport(device, index)) {
-				return u32(index)
-			}
-			transferQueue = u32(index)
-		}
-	}
-	return transferQueue
-}
-
-get_headless_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties) -> u32 {
-	headlessQueue: u32
-	for family, index in families {
-		if .GRAPHICS in family.queueFlags {
-			if .COMPUTE not_in family.queueFlags && !CheckPresentSupport(device, index) {
-				return u32(index)
-			}
-			headlessQueue = u32(index)
-		}
-	}
-	return headlessQueue
-}
-
-get_present_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties) -> (queueIndex: Maybe(u32)) {
-	for family, index in families {
-		if CheckPresentSupport(device, index) {
-			queueIndex = u32(index)
-			if .COMPUTE not_in family.queueFlags {
-				return
-			}
-		}
+		if minScore == 0 do return
 	}
 	return
 }
 
-get_multi_queue :: proc(device: vk.PhysicalDevice, families: []vk.QueueFamilyProperties) -> (queueIndex: Maybe(u32), result: vk.Result) {
-	for family, index in families {
-		if .GRAPHICS in family.queueFlags && .COMPUTE in family.queueFlags && CheckPresentSupport(device, index) {
-			queueIndex = u32(index)
-			return
-		}
-	}
+get_family_properties_from_flags :: proc(flags: vk.QueueFlags) -> (properties: QueueProperties) {
+	if .COMPUTE in flags { properties |= {.Compute} }
+	if .TRANSFER in flags { properties |= {.Transfer} }
+	if .GRAPHICS in flags { properties |= {.Graphics} }
+	if .VIDEO_DECODE_KHR in flags { properties |= {.VideoDecode} }
+	if .VIDEO_ENCODE_KHR in flags { properties |= {.VideoEncode} }
 	return
 }
 
@@ -723,16 +762,17 @@ dynamic_gpu_arena_allocate :: proc(
 	if len(arena.blocks) < cap(arena.blocks) {
 		for mt in arena.memoryTypes {
 			if bits.bitfield_extract(validMemoryTypes, auto_cast mt, 1) != 1 do continue
-			arena.currentBlockSize = cast(vk.DeviceSize)min(
-				cast(f32)arena.currentBlockSize * DYNAMIC_GPU_ARENA_GROW_RATE,
-				DYNAMIC_GPU_ARENA_MAX_ALLOCATION_SIZE,
-			)
 			label: string
 			if len(arena.label) > 0 {
 				label = fmt.tprintf("%s Block #%d", arena.label, len(arena.blocks))
 			}
 			memory = allocate_memory(arena.device, mt, arena.currentBlockSize, label) or_continue
+			arena.currentBlockSize = cast(vk.DeviceSize)min(
+				cast(f32)arena.currentBlockSize * DYNAMIC_GPU_ARENA_GROW_RATE,
+				DYNAMIC_GPU_ARENA_MAX_ALLOCATION_SIZE,
+			)
 			append(&arena.blocks, memory)
+			append(&arena.offsets, size)
 			return
 		}
 	}
@@ -851,29 +891,68 @@ read_from_buffer :: proc(buffer: Buffer, data: []byte, regions: []vk.BufferCopy2
 	}
 }
 
-cmd_transition :: proc(commandBuffer: vk.CommandBuffer, transition: vk.ImageMemoryBarrier2) {
+cmd_begin :: proc(commandBuffer: CommandBuffer, oneTime := true) -> vk.Result {
+	beginInfo: vk.CommandBufferBeginInfo = {
+		sType = .COMMAND_BUFFER_BEGIN_INFO,
+		flags = oneTime ? {.ONE_TIME_SUBMIT} : {},
+	}
+	return vk.BeginCommandBuffer(commandBuffer.commandBuffer, &beginInfo)
+}
+
+cmd_end :: proc(commandBuffer: CommandBuffer) -> vk.Result {
+	return vk.EndCommandBuffer(commandBuffer.commandBuffer)
+}
+
+SemaphoreBarrier :: struct {
+	semaphore: Semaphore,
+	value:     u64,
+	stageMask: vk.PipelineStageFlags2,
+}
+
+queue_submit :: proc(queue: Queue, commandBuffers: []CommandBuffer, waits, signals: []SemaphoreBarrier, fence: vk.Fence = {}) -> vk.Result {
+	queue := queue; context.user_ptr = &queue
+	submitInfo: vk.SubmitInfo2 = {
+		sType                    = .SUBMIT_INFO_2,
+		commandBufferInfoCount   = auto_cast len(commandBuffers),
+		pCommandBufferInfos      = raw_data(slice.mapper(commandBuffers, commandBufferMapper, context.temp_allocator)),
+		waitSemaphoreInfoCount   = auto_cast len(waits),
+		pWaitSemaphoreInfos      = raw_data(slice.mapper(waits, semaphoreMapper, context.temp_allocator)),
+		signalSemaphoreInfoCount = auto_cast len(signals),
+		pSignalSemaphoreInfos    = raw_data(slice.mapper(signals, semaphoreMapper, context.temp_allocator)),
+	}
+	return vk.QueueSubmit2(queue.queue, 1, &submitInfo, fence)
+
+	commandBufferCheck :: proc(commandBuffer: CommandBuffer, queue: Queue) -> bool {
+		return commandBuffer.queueFamilyIndex == queue.familyIndex
+	}
+	commandBufferMapper :: proc(commandBuffer: CommandBuffer) -> vk.CommandBufferSubmitInfo {
+		assert(commandBuffer.queueFamilyIndex == (cast(^Queue)context.user_ptr).queueIndex)
+		return {sType = .COMMAND_BUFFER_SUBMIT_INFO, commandBuffer = commandBuffer.commandBuffer}
+	}
+	semaphoreMapper :: proc(barrier: SemaphoreBarrier) -> vk.SemaphoreSubmitInfo {
+		#no_type_assert {
+			return {
+				sType = .SEMAPHORE_SUBMIT_INFO,
+				semaphore = auto_cast barrier.semaphore.(TimelineSemaphore),
+				value = barrier.value,
+				stageMask = barrier.stageMask,
+			}
+		}
+	}
+}
+
+cmd_transition :: proc(commandBuffer: CommandBuffer, transition: vk.ImageMemoryBarrier2) {
 	cmd_pipeline_barrier(commandBuffer, imageBarriers = {transition})
 }
 
 cmd_pipeline_barrier :: proc(
-	commandBuffer: vk.CommandBuffer,
+	commandBuffer: CommandBuffer,
 	memoryBarriers: []vk.MemoryBarrier2 = {},
 	bufferBarriers: []vk.BufferMemoryBarrier2 = {},
 	imageBarriers: []vk.ImageMemoryBarrier2 = {},
 ) {
-	for &barrier in memoryBarriers do barrier.sType = .MEMORY_BARRIER_2
-	for &barrier in bufferBarriers do barrier.sType = .BUFFER_MEMORY_BARRIER_2
-	for &barrier in imageBarriers do barrier.sType = .IMAGE_MEMORY_BARRIER_2
-	dependencyInfo: vk.DependencyInfo = {
-		sType                    = .DEPENDENCY_INFO,
-		memoryBarrierCount       = u32(len(memoryBarriers)),
-		pMemoryBarriers          = raw_data(memoryBarriers),
-		bufferMemoryBarrierCount = u32(len(bufferBarriers)),
-		pBufferMemoryBarriers    = raw_data(bufferBarriers),
-		imageMemoryBarrierCount  = u32(len(imageBarriers)),
-		pImageMemoryBarriers     = raw_data(imageBarriers),
-	}
-	vk.CmdPipelineBarrier2(commandBuffer, &dependencyInfo)
+	dependencyInfo := make_dependency_info(memoryBarriers, bufferBarriers, imageBarriers)
+	vk.CmdPipelineBarrier2(commandBuffer.commandBuffer, &dependencyInfo)
 }
 
 cmd_upload :: proc {
@@ -881,7 +960,7 @@ cmd_upload :: proc {
 	cmd_upload_to_image,
 }
 
-cmd_upload_to_buffer :: proc(commandBuffer: vk.CommandBuffer, data: []byte, buffer: Buffer, stagingBuffer: Buffer = {}, regions: []vk.BufferCopy2 = {}) {
+cmd_upload_to_buffer :: proc(commandBuffer: CommandBuffer, data: []byte, buffer: Buffer, stagingBuffer: Buffer = {}, regions: []vk.BufferCopy2 = {}) {
 	regions := regions
 	if len(regions) == 0 {
 		regions = {{sType = .BUFFER_COPY_2, size = min(vk.DeviceSize(len(data)), buffer.size)}}
@@ -906,11 +985,11 @@ cmd_upload_to_buffer :: proc(commandBuffer: vk.CommandBuffer, data: []byte, buff
 			regionCount = u32(len(regions)),
 			pRegions    = raw_data(regions),
 		}
-		vk.CmdCopyBuffer2(commandBuffer, &copyInfo)
+		vk.CmdCopyBuffer2(commandBuffer.commandBuffer, &copyInfo)
 	}
 }
 
-cmd_upload_to_image :: proc(commandBuffer: vk.CommandBuffer, data: []byte, image: Image, stagingBuffer: Buffer) {
+cmd_upload_to_image :: proc(commandBuffer: CommandBuffer, data: []byte, image: Image, stagingBuffer: Buffer) {
 	assert(image.size == vk.DeviceSize(len(data)))
 	assert(.HOST_VISIBLE in stagingBuffer.memory.properties && .HOST_COHERENT in stagingBuffer.memory.properties)
 	assume(.HOST_CACHED not_in stagingBuffer.memory.properties)
@@ -931,7 +1010,7 @@ cmd_upload_to_image :: proc(commandBuffer: vk.CommandBuffer, data: []byte, image
 		pRegions       = &regionInfo,
 	}
 
-	vk.CmdCopyBufferToImage2(commandBuffer, &copyInfo)
+	vk.CmdCopyBufferToImage2(commandBuffer.commandBuffer, &copyInfo)
 }
 
 cmd_download :: proc {
@@ -939,7 +1018,7 @@ cmd_download :: proc {
 	cmd_download_from_image,
 }
 
-cmd_download_from_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer, readbackBuffer: Buffer, regions: []vk.BufferCopy2 = {}) {
+cmd_download_from_buffer :: proc(commandBuffer: CommandBuffer, buffer, readbackBuffer: Buffer, regions: []vk.BufferCopy2 = {}) {
 	assert(is_mapped(readbackBuffer))
 	assert(.HOST_VISIBLE in readbackBuffer.memory.properties && .HOST_COHERENT in readbackBuffer.memory.properties)
 	assume(.HOST_CACHED in readbackBuffer.memory.properties)
@@ -956,10 +1035,10 @@ cmd_download_from_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer, readba
 		regionCount = u32(len(regions)),
 		pRegions    = raw_data(regions),
 	}
-	vk.CmdCopyBuffer2(commandBuffer, &copyInfo)
+	vk.CmdCopyBuffer2(commandBuffer.commandBuffer, &copyInfo)
 }
 
-cmd_download_from_image :: proc(commandBuffer: vk.CommandBuffer, image: Image, readbackBuffer: Buffer) {
+cmd_download_from_image :: proc(commandBuffer: CommandBuffer, image: Image, readbackBuffer: Buffer) {
 	assert(is_mapped(readbackBuffer))
 	assert(.HOST_VISIBLE in readbackBuffer.memory.properties && .HOST_COHERENT in readbackBuffer.memory.properties)
 	assume(.HOST_CACHED in readbackBuffer.memory.properties)
@@ -979,17 +1058,17 @@ cmd_download_from_image :: proc(commandBuffer: vk.CommandBuffer, image: Image, r
 		pRegions       = &regionInfo,
 	}
 
-	vk.CmdCopyImageToBuffer2(commandBuffer, &copyInfo)
+	vk.CmdCopyImageToBuffer2(commandBuffer.commandBuffer, &copyInfo)
 }
 
-cmd_populate_mip :: proc(commandBuffer: vk.CommandBuffer, image: Image) {
+cmd_populate_mip :: proc(commandBuffer: CommandBuffer, image: Image) {
 	unimplemented()
 }
 
-cmd_clear_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer: Buffer) {
+cmd_clear_buffer :: proc(commandBuffer: CommandBuffer, buffer: Buffer) {
 	cmd_fill_buffer(commandBuffer, buffer, 0)
 }
 
-cmd_fill_buffer :: proc(commandBuffer: vk.CommandBuffer, buffer: Buffer, value: u32) {
-	vk.CmdFillBuffer(commandBuffer, buffer.buffer, buffer.offset, buffer.size, value)
+cmd_fill_buffer :: proc(commandBuffer: CommandBuffer, buffer: Buffer, value: u32) {
+	vk.CmdFillBuffer(commandBuffer.commandBuffer, buffer.buffer, buffer.offset, buffer.size, value)
 }

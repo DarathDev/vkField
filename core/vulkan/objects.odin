@@ -46,6 +46,7 @@ InstanceCapability :: enum {
 	DeviceAddressBindingReport,
 	DebugUtils,
 	Portability,
+	ShaderObject, // TODO: Bundle ShaderObjectLayer with application
 }
 
 InstanceCapabilities :: bit_set[InstanceCapability]
@@ -258,17 +259,24 @@ DeviceCapability :: enum {
 	Synchronization2,
 	DynamicRendering,
 	Maintenance4,
+	// Vulkan 1.4 Features
+	SubgroupRotate,
+	DynamicLocalRead,
 	// Mesh Shaders
+	TaskShader,
 	MeshShader,
 	// Swapchain Maintenance
 	SwapchainMaintenance,
 	// Shader Object
 	ShaderObject,
+	// Barycentric
+	Barycentric,
 	// Extensions
 	AtomicAddFloat32Buffer,
 	Swapchain,
 	FifoLatestReady,
 	ExternalMemoryHost,
+	Robustness2,
 }
 
 DeviceCapabilities :: bit_set[DeviceCapability]
@@ -278,24 +286,24 @@ PhysicalDevice :: struct {
 	physicalDevice:   vk.PhysicalDevice,
 	properties:       vk.PhysicalDeviceProperties,
 	capabilities:     DeviceCapabilities,
-	queueFamilies:    []vk.QueueFamilyProperties,
+	queueFamilies:    []QueueFamily,
 	memoryProperties: vk.PhysicalDeviceMemoryProperties,
 	memoryHeaps:      [dynamic; vk.MAX_MEMORY_TYPES]vk.MemoryHeap,
 	memoryTypes:      [dynamic; vk.MAX_MEMORY_HEAPS]vk.MemoryType,
 }
 
 @(require_results)
-get_physical_devices :: proc(instance: vk.Instance, allocator := context.allocator) -> (devices: #soa[]PhysicalDevice, result: vk.Result) {
+get_physical_devices :: proc(instance: Instance, allocator := context.allocator) -> (devices: #soa[]PhysicalDevice, result: vk.Result) {
 
 	deviceCount: u32
-	check(vk.EnumeratePhysicalDevices(instance, &deviceCount, nil)) or_return
+	check(vk.EnumeratePhysicalDevices(instance.instance, &deviceCount, nil)) or_return
 	devicesOk: mem.Allocator_Error
 	devices, devicesOk = make(#soa[]PhysicalDevice, deviceCount, allocator)
 	if devicesOk != .None {
 		result = vk.Result.ERROR_OUT_OF_HOST_MEMORY
 		return
 	}
-	check(vk.EnumeratePhysicalDevices(instance, &deviceCount, devices.physicalDevice)) or_return
+	check(vk.EnumeratePhysicalDevices(instance.instance, &deviceCount, devices.physicalDevice)) or_return
 
 	features := make_device_features(~{}, context.temp_allocator)
 
@@ -304,10 +312,20 @@ get_physical_devices :: proc(instance: vk.Instance, allocator := context.allocat
 		device.name = strings.clone_from_cstring_bounded(cast(cstring)&device.properties.deviceName[0], vk.MAX_PHYSICAL_DEVICE_NAME_SIZE, allocator)
 		queueFamilyCount: u32
 		vk.GetPhysicalDeviceQueueFamilyProperties(device.physicalDevice, &queueFamilyCount, nil)
-		device.queueFamilies = make([]vk.QueueFamilyProperties, queueFamilyCount, allocator)
-		vk.GetPhysicalDeviceQueueFamilyProperties(device.physicalDevice, &queueFamilyCount, raw_data(device.queueFamilies))
-		extensionCount: u32
+		queueFamiliesProperties := make([]vk.QueueFamilyProperties, queueFamilyCount, allocator)
+		vk.GetPhysicalDeviceQueueFamilyProperties(device.physicalDevice, &queueFamilyCount, raw_data(queueFamiliesProperties))
+		device.queueFamilies = make([]QueueFamily, queueFamilyCount, allocator)
+		for familyIndex in 0 ..< len(queueFamiliesProperties) {
+			device.queueFamilies[familyIndex].queueCount = queueFamiliesProperties[familyIndex].queueCount
+			device.queueFamilies[familyIndex].properties = get_family_properties_from_flags(queueFamiliesProperties[familyIndex].queueFlags)
+		}
+		if .Present in instance.enabledCapabilities {
+			for &support, familyIndex in device.queueFamilies {
+				if CheckPresentSupport(device.physicalDevice, familyIndex) { support.properties |= {.Present} }
+			}
+		}
 
+		extensionCount: u32
 		vk.GetPhysicalDeviceFeatures2(device.physicalDevice, &features)
 		check(vk.EnumerateDeviceExtensionProperties(device.physicalDevice, nil, &extensionCount, nil)) or_return
 		extensions := make([]vk.ExtensionProperties, extensionCount, context.temp_allocator)
@@ -340,14 +358,40 @@ free_physical_devices :: proc(devices: ^#soa[]PhysicalDevice, allocator := conte
 Device :: struct {
 	physicalDevice:       PhysicalDevice,
 	device:               vk.Device,
-	multiQueueIndex:      u32,
-	computeQueueIndex:    u32,
-	transferQueueIndex:   u32,
-	headlessQueueIndex:   u32,
-	presentQueueIndex:    u32,
-	queues:               map[u32]vk.Queue,
 	enabledCapabilities:  DeviceCapabilities,
 	instanceCapabilities: InstanceCapabilities,
+}
+
+QueueProperty :: enum {
+	Compute,
+	Transfer,
+	Graphics,
+	Present,
+	VideoDecode,
+	VideoEncode,
+}
+
+QueueProperties :: bit_set[QueueProperty]
+
+QueueFamily :: struct {
+	queueCount: u32,
+	properties: QueueProperties,
+}
+
+QueueRequest :: struct {
+	count:                 u32,
+	priority:              f32,
+	requiredProperties:    QueueProperties,
+	preferredProperties:   QueueProperties,
+	unpreferredProperties: QueueProperties,
+}
+
+Queue :: struct {
+	queue:       vk.Queue,
+	properties:  QueueProperties,
+	priority:    f32,
+	familyIndex: u32,
+	queueIndex:  u32,
 }
 
 @(require_results)
@@ -355,10 +399,12 @@ create_device :: proc(
 	instance: Instance,
 	physicalDevice: PhysicalDevice,
 	criteria: DeviceCriteria,
+	queueRequests: []QueueRequest,
 	label := "",
 	allocator := context.allocator,
 ) -> (
 	device: Device,
+	queues: [][]Queue,
 	result: vk.Result,
 ) {
 	checkLabel(label)
@@ -366,80 +412,59 @@ create_device :: proc(
 
 	defer check(result != .SUCCESS || device.device != {})
 
-	queueIndices := make(map[u32]u32, context.temp_allocator)
+	queueFamilies := slice.clone(physicalDevice.queueFamilies, context.temp_allocator)
 
-	computeQueueIndex: u32
-	computeQueueIndex = get_compute_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies)
-	queueIndices[computeQueueIndex] = 1
-	device.computeQueueIndex = computeQueueIndex
-
-	transferQueueIndex: u32
-	transferQueueIndex = get_transfer_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies, .Present in instance.enabledCapabilities)
-	queueIndices[transferQueueIndex] = 1
-	device.transferQueueIndex = transferQueueIndex
-
-	headlessQueueIndex: Maybe(u32)
-	if criteria.graphics {
-		headlessQueueIndex = get_headless_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies)
-		queueIndices[headlessQueueIndex.(u32)] = 1
-		device.headlessQueueIndex = headlessQueueIndex.(u32)
-	}
-
-	presentQueueIndex: Maybe(u32)
-	if criteria.present {
-		assert(.Present in instance.enabledCapabilities)
-		presentQueueIndex = get_present_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies)
-		queueIndices[presentQueueIndex.(u32)] = 1
-		device.presentQueueIndex = presentQueueIndex.(u32)
-	}
-
-	multiQueueIndex: Maybe(u32)
-	if criteria.graphics && criteria.present {
-		multiQueueIndex = assert(get_multi_queue(physicalDevice.physicalDevice, physicalDevice.queueFamilies))
-		queueIndices[multiQueueIndex.(u32)] = 1
-		device.multiQueueIndex = multiQueueIndex.(u32)
-	}
-
-	queueCreateInfos := make([]vk.DeviceQueueCreateInfo, len(queueIndices), context.temp_allocator)
-	totalQueueCount: u32
-	for _, queueCount in queueIndices {
-		totalQueueCount += queueCount
-	}
-
-	queuePriorities := make([]f32, totalQueueCount, context.temp_allocator)
+	queues = make([][]Queue, len(queueRequests), allocator)
+	currentQueueIndex := make([]u32, len(queueFamilies), context.temp_allocator)
+	queuePriorities := make([][dynamic]f32, len(queueFamilies), context.temp_allocator)
 	for &priority in queuePriorities {
-		priority = 1
+		priority = make([dynamic]f32, context.temp_allocator)
+	}
+	totalQueueCount: u32
+	for request, index in queueRequests {
+		queues[index] = make([]Queue, request.count, allocator)
+		for requestCount := 0; auto_cast requestCount < request.count; {
+			bestFamily, count := find_best_queue_family(queueFamilies, request)
+			if count == 0 do return {}, {}, .ERROR_TOO_MANY_OBJECTS
+			for &queue, queueIndex in queues[index][requestCount:][:count] {
+				queue = Queue {
+					familyIndex = bestFamily,
+					priority    = request.priority,
+					properties  = queueFamilies[bestFamily].properties,
+					queueIndex  = auto_cast queueIndex + currentQueueIndex[bestFamily],
+				}
+				append(&queuePriorities[bestFamily], request.priority)
+			}
+			requestCount += auto_cast count
+			currentQueueIndex[bestFamily] += count
+		}
+		totalQueueCount += request.count
 	}
 
-	createCount := 0
-	priorityCount := 0
-	for queueIndex, queueCount in queueIndices {
-		queueCreateInfos[createCount] = vk.DeviceQueueCreateInfo {
-			sType            = .DEVICE_QUEUE_CREATE_INFO,
-			pNext            = nil,
-			queueFamilyIndex = queueIndex,
-			queueCount       = queueCount,
-			pQueuePriorities = &queuePriorities[priorityCount],
-		}
-		createCount += 1
-		priorityCount += int(queueCount)
+	queueCreateInfos := make([dynamic]vk.DeviceQueueCreateInfo, context.temp_allocator)
+	for count, familyIndex in currentQueueIndex {
+		if count == 0 do continue
+		append(
+			&queueCreateInfos,
+			vk.DeviceQueueCreateInfo {
+				sType = .DEVICE_QUEUE_CREATE_INFO,
+				pNext = nil,
+				queueFamilyIndex = auto_cast familyIndex,
+				queueCount = count,
+				pQueuePriorities = raw_data(queuePriorities[familyIndex]),
+			},
+		)
 	}
 
 	device.enabledCapabilities = criteria.requiredCapabilities + (criteria.optionalCapabilities & physicalDevice.capabilities)
 	enabledExtensions := make([dynamic]cstring, context.temp_allocator)
 	add_capability_extensions(&enabledExtensions, device.enabledCapabilities)
-	ppEnabledLayers := make([dynamic]cstring, context.temp_allocator)
-	if .Validation in instance.enabledCapabilities {
-		append(&ppEnabledLayers, VK_VALIDATION_LAYER_NAME)
-	}
 
 	deviceFeatures := make_device_features(device.enabledCapabilities, context.temp_allocator)
 
 	deviceCreateInfo: vk.DeviceCreateInfo = {
 		sType                   = .DEVICE_CREATE_INFO,
 		pNext                   = &deviceFeatures,
-		enabledLayerCount       = u32(len(ppEnabledLayers)),
-		ppEnabledLayerNames     = raw_data(ppEnabledLayers),
 		enabledExtensionCount   = u32(len(enabledExtensions)),
 		ppEnabledExtensionNames = raw_data(enabledExtensions),
 		queueCreateInfoCount    = u32(len(queueCreateInfos)),
@@ -450,18 +475,16 @@ create_device :: proc(
 	name(device, label)
 	device.physicalDevice = physicalDevice
 
-	device.queues = make(map[u32]vk.Queue, allocator)
-	for queueIndex, _ in queueIndices {
-		queue: vk.Queue
-		vk.GetDeviceQueue(device.device, queueIndex, 0, &queue)
-		device.queues[queueIndex] = queue
+	for request in queues {
+		for &queue in request {
+			vk.GetDeviceQueue(device.device, queue.familyIndex, queue.queueIndex, &queue.queue)
+		}
 	}
 	device.instanceCapabilities = instance.enabledCapabilities
 	return
 }
 
 destroy_device :: proc(device: ^Device) {
-	delete(device.queues)
 	vk.DestroyDevice(device.device, nil)
 }
 
@@ -685,9 +708,13 @@ destroy_fence :: proc(device: Device, fence: vk.Fence) {
 /* ----- Semaphore ----- */
 /* --------------------- */
 
-TimelineSemaphore :: distinct vk.Semaphore
+Semaphore :: union {
+	BinarySemaphore,
+	TimelineSemaphore,
+}
 
 BinarySemaphore :: distinct vk.Semaphore
+TimelineSemaphore :: distinct vk.Semaphore
 
 create_binary_semaphore :: proc(device: Device, label := "") -> (semaphore: BinarySemaphore, result: vk.Result) {
 	checkLabel(label)
@@ -777,11 +804,17 @@ CommandPool :: struct {
 	commandBuffers:      [dynamic]vk.CommandBuffer,
 	usedCommandBuffers:  [dynamic]vk.CommandBuffer,
 	resetCommandBuffers: bool,
+	queueFamilyIndex:    u32,
+}
+
+CommandBuffer :: struct {
+	commandBuffer:    vk.CommandBuffer,
+	queueFamilyIndex: u32,
 }
 
 create_command_pool :: proc(
 	device: Device,
-	queueIndex: u32,
+	queue: Queue,
 	resetCommandBuffers := false,
 	label := "",
 	allocator := context.allocator,
@@ -792,7 +825,7 @@ create_command_pool :: proc(
 	checkLabel(label)
 	createInfo: vk.CommandPoolCreateInfo = {
 		sType            = .COMMAND_POOL_CREATE_INFO,
-		queueFamilyIndex = queueIndex,
+		queueFamilyIndex = queue.familyIndex,
 		flags            = resetCommandBuffers ? {.RESET_COMMAND_BUFFER} : {},
 	}
 	check(vk.CreateCommandPool(device.device, &createInfo, nil, &commandPool.commandPool)) or_return
@@ -802,15 +835,52 @@ create_command_pool :: proc(
 	commandPool.commandBuffers = make([dynamic]vk.CommandBuffer, allocator)
 	commandPool.usedCommandBuffers = make([dynamic]vk.CommandBuffer, allocator)
 	commandPool.resetCommandBuffers = .RESET_COMMAND_BUFFER in createInfo.flags
+	commandPool.queueFamilyIndex = queue.familyIndex
 	return
 }
 
-get_command_buffer :: proc(device: Device, commandPool: ^CommandPool) -> (commandBuffer: vk.CommandBuffer, result: vk.Result) {
-	result = get_command_buffers(device, commandPool, slice.from_ptr(&commandBuffer, 1))
+get_command_buffer :: proc(device: Device, commandPool: ^CommandPool, label := "") -> (commandBuffer: CommandBuffer, result: vk.Result) {
+	checkLabel(label)
+	cBuffer: vk.CommandBuffer
+	make_command_buffers(device, commandPool, slice.from_ptr(&cBuffer, 1)) or_return
+	commandBuffer = {
+		commandBuffer    = cBuffer,
+		queueFamilyIndex = commandPool.queueFamilyIndex,
+	}
+	if len(label) > 0 {
+		name(device, cBuffer, label)
+	}
 	return
 }
 
-get_command_buffers :: proc(device: Device, commandPool: ^CommandPool, commandBuffers: []vk.CommandBuffer) -> (result: vk.Result) {
+get_command_buffers :: proc(
+	device: Device,
+	commandPool: ^CommandPool,
+	count: int,
+	label := "",
+	allocator := context.allocator,
+) -> (
+	commandBuffers: []CommandBuffer,
+	result: vk.Result,
+) {
+	checkLabel(label)
+	cBuffers := make([]vk.CommandBuffer, count, context.temp_allocator)
+	make_command_buffers(device, commandPool, cBuffers) or_return
+	commandBuffers = make([]CommandBuffer, count, allocator)
+	for &commandBuffer, index in commandBuffers {
+		commandBuffer = {
+			commandBuffer    = cBuffers[index],
+			queueFamilyIndex = commandPool.queueFamilyIndex,
+		}
+		if len(label) > 0 {
+			name(device, cBuffers[index], fmt.tprintf("%s (%d)", label, index))
+		}
+	}
+	return
+}
+
+@(private = "file")
+make_command_buffers :: proc(device: Device, commandPool: ^CommandPool, commandBuffers: []vk.CommandBuffer) -> (result: vk.Result) {
 	count := len(commandBuffers)
 	available := len(commandPool.commandBuffers)
 	extra := available - count
@@ -848,12 +918,12 @@ reset_command_pool :: proc(device: Device, commandPool: ^CommandPool) -> (result
 	return
 }
 
-reset_command_buffer :: proc(device: Device, commandPool: ^CommandPool, commandBuffer: vk.CommandBuffer) {
+reset_command_buffer :: proc(device: Device, commandPool: ^CommandPool, commandBuffer: CommandBuffer) {
 	check(commandPool.resetCommandBuffers)
-	index := assert(slice.linear_search(commandPool.usedCommandBuffers[:], commandBuffer))
-	check(vk.ResetCommandBuffer(commandBuffer, {}))
+	index := assert(slice.linear_search(commandPool.usedCommandBuffers[:], commandBuffer.commandBuffer))
+	check(vk.ResetCommandBuffer(commandBuffer.commandBuffer, {}))
 	unordered_remove(&commandPool.usedCommandBuffers, index)
-	append(&commandPool.commandBuffers, commandBuffer)
+	append(&commandPool.commandBuffers, commandBuffer.commandBuffer)
 	return
 }
 
@@ -1017,15 +1087,15 @@ update_descriptor_sets :: proc(device: Device, writes: []vk.WriteDescriptorSet =
 
 @(rodata)
 SHADER_KIND_STAGES: [ShaderKind][]vk.ShaderStageFlag = {
-	.Raster  = {.VERTEX, .FRAGMENT},
-	.Mesh    = {.TASK_EXT, .MESH_EXT, .FRAGMENT},
-	.Compute = {.COMPUTE},
+	.Dispatch = {.COMPUTE},
+	.Raster   = {.VERTEX, .FRAGMENT},
+	.Mesh     = {.TASK_EXT, .MESH_EXT, .FRAGMENT},
 }
 
 ShaderKind :: enum {
+	Dispatch,
 	Raster,
 	Mesh,
-	Compute,
 }
 
 ShaderKinds :: bit_set[ShaderKind]
@@ -1036,34 +1106,48 @@ ShaderEntryPoint :: struct {
 }
 
 ShaderInfo :: struct {
-	kind:        ShaderKind,
-	code:        []byte,
-	entryPoints: []ShaderEntryPoint,
+	code:               []byte,
+	entryPoints:        []ShaderEntryPoint,
+	specializationInfo: []vk.SpecializationInfo,
 }
 
-create_shader_module :: proc(device: Device, code: []byte, label := "") -> (module: vk.ShaderModule, result: vk.Result) {
-	checkLabel(label)
-	moduleInfo: vk.ShaderModuleCreateInfo = {
-		sType    = .SHADER_MODULE_CREATE_INFO,
-		flags    = {},
-		codeSize = len(code),
-		pCode    = cast(^u32)raw_data(code),
+create_specialization_info :: proc(
+	specializationConstants: $T,
+	allocator := context.temp_allocator,
+	loc := #caller_location,
+) -> vk.SpecializationInfo where intrinsics.type_is_struct(T) {
+	specializationMap := make([]vk.SpecializationMapEntry, intrinsics.type_struct_field_count(T), allocator, loc)
+	specializationOffsets := reflect.struct_field_offsets(T)
+	specializationTypes := reflect.struct_field_types(T)
+	for &entry, index in specializationMap {
+		entry = {
+			constantID = auto_cast index,
+			offset     = auto_cast specializationOffsets[index],
+			size       = reflect.size_of_typeid(specializationTypes[index].id),
+		}
 	}
-	vk.CreateShaderModule(device.device, &moduleInfo, nil, &module) or_return
-	if len(label) > 0 {
-		name(device, module, label)
+	specConstants := new(T, allocator, loc)
+	specConstants^ = specializationConstants
+
+	return {
+		mapEntryCount = u32(len(specializationMap)),
+		pMapEntries = raw_data(specializationMap),
+		dataSize = size_of(specializationConstants),
+		pData = specConstants,
 	}
-	return
-}
-destroy_shader_module :: proc(device: Device, module: vk.ShaderModule) {
-	vk.DestroyShaderModule(device.device, module, nil)
 }
 
-create_shader_object :: proc(
+free_specialization_info :: proc(info: vk.SpecializationInfo, allocator := context.allocator) {
+	free(info.pMapEntries, allocator)
+	free(info.pData, allocator)
+}
+
+create_shaders :: proc(
 	device: Device,
 	info: ShaderInfo,
 	setLayouts: []vk.DescriptorSetLayout = {},
 	pushConstantRanges: []vk.PushConstantRange = {},
+	link := true,
 	label := "",
 	allocator := context.allocator,
 	loc := #caller_location,
@@ -1075,19 +1159,7 @@ create_shader_object :: proc(
 	checkLabel(label)
 	if len(info.code) == 0 do return
 
-	desiredStages := SHADER_KIND_STAGES[info.kind]
-	selectedEntryPoints := make([dynamic]ShaderEntryPoint, context.temp_allocator)
-
-	for stage in desiredStages {
-		for entryPoint in info.entryPoints {
-			if entryPoint.stage == stage {
-				append(&selectedEntryPoints, entryPoint)
-				break
-			}
-		}
-	}
-
-	shaderCount := len(selectedEntryPoints)
+	shaderCount := len(info.entryPoints)
 	if shaderCount == 0 do return
 
 	// Ensure code begin and end are aligned to 4 bytes
@@ -1102,15 +1174,15 @@ create_shader_object :: proc(
 	shaders, _ = make([]vk.ShaderEXT, shaderCount, allocator, loc)
 	stages, _ = make([]vk.ShaderStageFlags, shaderCount, allocator, loc)
 
-	for entryPoint, index in selectedEntryPoints {
+	for entryPoint, index in info.entryPoints {
 		stages[index] = {entryPoint.stage}
 	}
 
-	for entryPoint, index in selectedEntryPoints {
+	for entryPoint, index in info.entryPoints {
 		name := strings.clone_to_cstring(entryPoint.name, context.temp_allocator)
 		shaderCreateInfos[index] = {
 			sType                  = .SHADER_CREATE_INFO_EXT,
-			flags                  = (len(selectedEntryPoints) > 1) ? {.LINK_STAGE} : {},
+			flags                  = link && len(info.entryPoints) > 1 ? {.LINK_STAGE} : {},
 			stage                  = stages[index],
 			nextStage              = {},
 			codeType               = .SPIRV,
@@ -1121,61 +1193,47 @@ create_shader_object :: proc(
 			pSetLayouts            = raw_data(setLayouts),
 			pushConstantRangeCount = u32(len(pushConstantRanges)),
 			pPushConstantRanges    = raw_data(pushConstantRanges),
+			pSpecializationInfo    = len(info.specializationInfo) == 0 ? nil : len(info.specializationInfo) == 1 ? &info.specializationInfo[0] : &info.specializationInfo[index],
 		}
 		if entryPoint.stage == .MESH_EXT && slice.contains(stages, vk.ShaderStageFlags{.TASK_EXT}) {
 			shaderCreateInfos[index].flags |= {.NO_TASK_SHADER}
 		}
-		for nextIndex := index + 1; nextIndex < len(stages); nextIndex += 1 {
-			shaderCreateInfos[index].nextStage |= stages[nextIndex]
+
+		nextStages: []vk.ShaderStageFlag
+		#partial switch entryPoint.stage {
+		case .VERTEX:
+			nextStages = {.GEOMETRY, .TESSELLATION_CONTROL, .FRAGMENT}
+		case .TESSELLATION_CONTROL:
+			nextStages = {.TESSELLATION_EVALUATION}
+		case .TESSELLATION_EVALUATION:
+			nextStages = {.GEOMETRY, .FRAGMENT}
+		case .GEOMETRY:
+			nextStages = {.FRAGMENT}
+		case .TASK_EXT:
+			nextStages = {.MESH_EXT}
+		case .MESH_EXT:
+			nextStages = {.FRAGMENT}
+		}
+		for nextStage in nextStages {
+			if slice.contains(stages, vk.ShaderStageFlags{nextStage}) {
+				shaderCreateInfos[index].nextStage = {nextStage}
+				break
+			}
 		}
 	}
 
 	check(vk.CreateShadersEXT(device.device, u32(shaderCount), raw_data(shaderCreateInfos), nil, raw_data(shaders))) or_return
 	if len(label) > 0 {
-		for shader, i in shaders {
-			shaderLabel := len(shaders) > 1 ? fmt.tprintf("%s_%d", label, i) : label
-			name(device, shader, shaderLabel)
+		for s, i in shaders {
+			shaderLabel := len(shaders) > 1 ? fmt.tprintf("%s (%v)", label, stages[i]) : label
+			name(device, s, shaderLabel)
 		}
 	}
 	return
 }
 
-destroy_shader_object :: proc(device: Device, shader: vk.ShaderEXT) {
+destroy_shader :: proc(device: Device, shader: vk.ShaderEXT) {
 	vk.DestroyShaderEXT(device.device, shader, nil)
-}
-
-/* --------------------- */
-/* ----- Pipelines ----- */
-/* --------------------- */
-
-create_pipeline_layout :: proc(
-	device: Device,
-	descriptorSetLayouts: []vk.DescriptorSetLayout = {},
-	pushConstantRanges: []vk.PushConstantRange = {},
-	label := "",
-) -> (
-	layout: vk.PipelineLayout,
-	result: vk.Result,
-) {
-	checkLabel(label)
-	createInfo: vk.PipelineLayoutCreateInfo = {
-		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
-		flags                  = {},
-		setLayoutCount         = u32(len(descriptorSetLayouts)),
-		pSetLayouts            = raw_data(descriptorSetLayouts),
-		pushConstantRangeCount = u32(len(pushConstantRanges)),
-		pPushConstantRanges    = raw_data(pushConstantRanges),
-	}
-
-	check(vk.CreatePipelineLayout(device.device, &createInfo, nil, &layout)) or_return
-	if len(label) > 0 {
-		name(device, layout, label)
-	}
-	return
-}
-
-destroy_pipeline_layout :: proc(device: Device, layout: vk.PipelineLayout) {
-	vk.DestroyPipelineLayout(device.device, layout, nil)
 }
 
 GraphicsTechnique :: struct {
@@ -1207,257 +1265,34 @@ BlendOperation :: struct {
 	operation:         vk.BlendOp,
 }
 
-create_graphics_pipeline :: proc(
+create_pipeline_layout :: proc(
 	device: Device,
-	shaderModule: vk.ShaderModule,
-	layout: vk.PipelineLayout,
-	technique: GraphicsTechnique,
+	descriptorSetLayouts: []vk.DescriptorSetLayout = {},
+	pushConstantRanges: []vk.PushConstantRange = {},
 	label := "",
 ) -> (
-	pipeline: vk.Pipeline,
-	ok: vk.Result,
+	layout: vk.PipelineLayout,
+	result: vk.Result,
 ) {
 	checkLabel(label)
-	technique := technique
-	create_graphics_pipelines(device, shaderModule, layout, slice.from_ptr(&technique, 1), slice.from_ptr(&pipeline, 1), label) or_return
-	return
-}
-
-create_graphics_pipelines :: proc(
-	device: Device,
-	shaderModule: vk.ShaderModule,
-	layout: vk.PipelineLayout,
-	techniques: []GraphicsTechnique,
-	pipelines: []vk.Pipeline,
-	label := "",
-) -> (
-	ok: vk.Result,
-) {
-	checkLabel(label)
-	pipelineCount := len(techniques)
-	makePipelineInfo :: #force_inline proc($T: typeid, count: int, loc := #caller_location) -> (array: []T, result: vk.Result) {
-		arrayOk: mem.Allocator_Error
-		if array, arrayOk = make([]T, count, context.temp_allocator); arrayOk != .None {
-			result = .ERROR_OUT_OF_HOST_MEMORY
-		}
-		return
+	createInfo: vk.PipelineLayoutCreateInfo = {
+		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
+		flags                  = {},
+		setLayoutCount         = u32(len(descriptorSetLayouts)),
+		pSetLayouts            = raw_data(descriptorSetLayouts),
+		pushConstantRangeCount = u32(len(pushConstantRanges)),
+		pPushConstantRanges    = raw_data(pushConstantRanges),
 	}
 
-	pipelineInfos := makePipelineInfo(vk.GraphicsPipelineCreateInfo, pipelineCount) or_return
-
-	vertexInputState: vk.PipelineVertexInputStateCreateInfo = {
-		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-	}
-	inputAssemblyStates := makePipelineInfo(vk.PipelineInputAssemblyStateCreateInfo, pipelineCount) or_return
-	tesselationState: vk.PipelineTessellationStateCreateInfo = {
-		sType = .PIPELINE_TESSELLATION_STATE_CREATE_INFO,
-	}
-	viewportStates := makePipelineInfo(vk.PipelineViewportStateCreateInfo, pipelineCount) or_return
-	rasterizationStates := makePipelineInfo(vk.PipelineRasterizationStateCreateInfo, pipelineCount) or_return
-	multisampleStates := makePipelineInfo(vk.PipelineMultisampleStateCreateInfo, pipelineCount) or_return
-	depthStencilStates := makePipelineInfo(vk.PipelineDepthStencilStateCreateInfo, pipelineCount) or_return
-	colorBlendStates := makePipelineInfo(vk.PipelineColorBlendStateCreateInfo, pipelineCount) or_return
-	colorBlendAttachmentStates := make([dynamic]vk.PipelineColorBlendAttachmentState, context.temp_allocator)
-	dynamicStates := makePipelineInfo(vk.PipelineDynamicStateCreateInfo, pipelineCount) or_return
-
-	dynamics: []vk.DynamicState = {
-		// Viewport
-		.VIEWPORT,
-		.SCISSOR,
-		.VIEWPORT_WITH_COUNT,
-		.SCISSOR_WITH_COUNT,
-		// Input Assembly
-		.PRIMITIVE_TOPOLOGY,
-		.PRIMITIVE_RESTART_ENABLE,
-		// Rasterizer
-		.RASTERIZER_DISCARD_ENABLE,
-		.CULL_MODE,
-		.FRONT_FACE,
-		.LINE_WIDTH,
-		.POLYGON_MODE_EXT,
-		// Depth & Stencil
-		.DEPTH_TEST_ENABLE,
-		.DEPTH_WRITE_ENABLE,
-		.DEPTH_COMPARE_OP,
-		.DEPTH_BOUNDS_TEST_ENABLE,
-		.DEPTH_BOUNDS,
-		.STENCIL_TEST_ENABLE,
-		.STENCIL_WRITE_MASK,
-		.STENCIL_OP,
-		.STENCIL_COMPARE_MASK,
-		.STENCIL_REFERENCE,
-		// Blend
-		.BLEND_CONSTANTS,
-	}
-
-	for i in 0 ..< pipelineCount {
-		shaderStages := make([dynamic]vk.PipelineShaderStageCreateInfo, context.temp_allocator)
-		for entryPoint in techniques[i].shaderInfo.entryPoints {
-			name := strings.clone_to_cstring(entryPoint.name, context.temp_allocator)
-			stageInfo: vk.PipelineShaderStageCreateInfo = {
-				sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-				stage  = {entryPoint.stage},
-				module = shaderModule,
-				pName  = name,
-			}
-			append(&shaderStages, stageInfo)
-		}
-		inputAssemblyStates[i] = {
-			sType                  = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-			topology               = techniques[i].topology,
-			primitiveRestartEnable = false,
-		}
-		viewportStates[i] = {
-			sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-			viewportCount = 1, // TODO: Query Max Viewport Count
-			scissorCount  = 1, // TODO: Query Max Scissor Count
-		}
-		rasterizationStates[i] = {
-			sType                   = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-			depthClampEnable        = true,
-			rasterizerDiscardEnable = true,
-			polygonMode             = techniques[i].polygonMode,
-			cullMode                = techniques[i].cullMode,
-			frontFace               = techniques[i].frontFace,
-			lineWidth               = techniques[i].lineWidth,
-		}
-		multisampleStates[i] = {
-			sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-			rasterizationSamples = techniques[i].multisample,
-		}
-		depthStencilStates[i] = {
-			sType           = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-			depthTestEnable = false,
-		}
-		colorBlendLogicOp, colorBlendLogicOpOk := techniques[i].blendOptions.logicOperation.?
-		cbColorOp, cbColorOpOk := techniques[i].blendOptions.colorOperation.?
-		cbAlphaOp, cbAlphaOpOk := techniques[i].blendOptions.alphaOperation.?
-		cbAttachmentIndex := append(
-			&colorBlendAttachmentStates,
-			vk.PipelineColorBlendAttachmentState {
-				colorWriteMask = techniques[i].blendOptions.writeMask,
-				blendEnable = b32(cbColorOpOk || cbAlphaOpOk),
-				colorBlendOp = cbColorOp.operation,
-				srcColorBlendFactor = cbColorOp.sourceFactor,
-				dstColorBlendFactor = cbColorOp.destinationFactor,
-				alphaBlendOp = cbAlphaOp.operation,
-				srcAlphaBlendFactor = cbAlphaOp.sourceFactor,
-				dstAlphaBlendFactor = cbAlphaOp.destinationFactor,
-			},
-		)
-		colorBlendStates[i] = {
-			sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-			logicOpEnable   = b32(colorBlendLogicOpOk),
-			logicOp         = colorBlendLogicOp,
-			attachmentCount = 1,
-			pAttachments    = &colorBlendAttachmentStates[cbAttachmentIndex],
-		}
-		dynamicStates[i] = {
-			sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-			dynamicStateCount = u32(len(dynamics)),
-			pDynamicStates    = raw_data(dynamics),
-		}
-		pipelineInfos[i] = {
-			sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
-			flags               = {},
-			layout              = layout,
-			stageCount          = u32(len(shaderStages)),
-			pStages             = raw_data(shaderStages),
-			pVertexInputState   = &vertexInputState,
-			pInputAssemblyState = &inputAssemblyStates[i],
-			pTessellationState  = &tesselationState,
-			pViewportState      = &viewportStates[i],
-			pRasterizationState = &rasterizationStates[i],
-			pMultisampleState   = &multisampleStates[i],
-			pDepthStencilState  = &depthStencilStates[i],
-			pColorBlendState    = &colorBlendStates[i],
-		}
-	}
-
-	check(vk.CreateGraphicsPipelines(device.device, {}, u32(pipelineCount), raw_data(pipelineInfos), nil, raw_data(pipelines))) or_return
+	check(vk.CreatePipelineLayout(device.device, &createInfo, nil, &layout)) or_return
 	if len(label) > 0 {
-		for pipeline, i in pipelines {
-			pipelineLabel := len(pipelines) > 1 ? fmt.tprintf("%s_%d", label, i) : label
-			name(device, pipeline, pipelineLabel)
-		}
+		name(device, layout, label)
 	}
 	return
 }
 
-ComputePipeline :: struct(T: typeid) {
-	pipeline:                vk.Pipeline,
-	shaderModule:            vk.ShaderModule,
-	specializationConstants: T,
-}
-
-create_compute_pipeline :: proc(
-	device: Device,
-	shaderInfo: ShaderInfo,
-	layout: vk.PipelineLayout,
-	specializationConstants: $T,
-	label := "",
-) -> (
-	pipeline: ComputePipeline(T),
-	ok: vk.Result,
-) where intrinsics.type_is_struct(T) {
-	checkLabel(label)
-
-	assert(len(shaderInfo.entryPoints) == 1)
-	pipeline.shaderModule = create_shader_module(device, shaderInfo.code, label) or_return
-
-	pipeline.specializationConstants = specializationConstants
-	specializationInfo: vk.SpecializationInfo
-	specializationMap := make([]vk.SpecializationMapEntry, intrinsics.type_struct_field_count(T))
-	defer delete(specializationMap)
-	if size_of(specializationConstants) > 0 {
-		specializationOffsets := reflect.struct_field_offsets(T)
-		specializationTypes := reflect.struct_field_types(T)
-		for &entry, index in specializationMap {
-			entry = {
-				constantID = auto_cast index,
-				offset     = auto_cast specializationOffsets[index],
-				size       = reflect.size_of_typeid(specializationTypes[index].id),
-			}
-		}
-
-		specializationInfo = {
-			mapEntryCount = u32(len(specializationMap)),
-			pMapEntries   = raw_data(specializationMap),
-			dataSize      = size_of(specializationConstants),
-			pData         = &pipeline.specializationConstants,
-		}
-	}
-
-	stageCreateInfo: vk.PipelineShaderStageCreateInfo = {
-		sType               = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-		flags               = {},
-		stage               = {.COMPUTE},
-		module              = pipeline.shaderModule,
-		pSpecializationInfo = &specializationInfo,
-		pName               = strings.clone_to_cstring(shaderInfo.entryPoints[0].name, context.temp_allocator),
-	}
-
-	createInfo: vk.ComputePipelineCreateInfo = {
-		sType  = .COMPUTE_PIPELINE_CREATE_INFO,
-		flags  = {},
-		layout = layout,
-		stage  = stageCreateInfo,
-	}
-
-	check(vk.CreateComputePipelines(device.device, {}, 1, &createInfo, nil, &pipeline.pipeline)) or_return
-	if len(label) > 0 {
-		name(device, pipeline.pipeline, label)
-	}
-	return
-}
-
-destroy_pipeline :: proc(device: Device, pipeline: vk.Pipeline) {
-	vk.DestroyPipeline(device.device, pipeline, nil)
-}
-
-destroy_compute_pipeline :: proc(device: Device, pipeline: ComputePipeline($T)) {
-	destroy_shader_module(device, pipeline.shaderModule)
-	destroy_pipeline(device, pipeline.pipeline)
+destroy_pipeline_layout :: proc(device: Device, layout: vk.PipelineLayout) {
+	vk.DestroyPipelineLayout(device.device, layout, nil)
 }
 
 /* ------------------ */
@@ -1647,6 +1482,35 @@ destroy_buffer_view :: proc(device: Device, view: BufferView) {
 /* ----- Image ----- */
 /* ----------------- */
 
+create_sampler :: proc(
+	device: Device,
+	magFilter, minFilter: vk.Filter,
+	mipMapMode: vk.SamplerMipmapMode,
+	addressMode: [3]vk.SamplerAddressMode,
+	unnormalizedCoordinates: b32,
+	label := "",
+) -> (
+	sampler: vk.Sampler,
+	result: vk.Result,
+) {
+	checkLabel(label)
+	samplerCreateInfo: vk.SamplerCreateInfo = {
+		sType                   = .SAMPLER_CREATE_INFO,
+		magFilter               = magFilter,
+		minFilter               = minFilter,
+		mipmapMode              = mipMapMode,
+		addressModeU            = addressMode.x,
+		addressModeV            = addressMode.y,
+		addressModeW            = addressMode.z,
+		unnormalizedCoordinates = unnormalizedCoordinates,
+	}
+	check(vk.CreateSampler(device.device, &samplerCreateInfo, nil, &sampler)) or_return
+	if len(label) > 0 {
+		name(device, sampler, label)
+	}
+	return
+}
+
 Image :: struct {
 	image:             vk.Image,
 	type:              vk.ImageType,
@@ -1700,7 +1564,7 @@ create_image :: proc(
 		queueFamilyIndexCount = auto_cast len(queueFamilyIndices),
 		pQueueFamilyIndices   = raw_data(queueFamilyIndices),
 	}
-	vk.CreateImage(device.device, &imageInfo, nil, &image.image) or_return
+	check(vk.CreateImage(device.device, &imageInfo, nil, &image.image)) or_return
 	image.format, image.extent, image.size, image.usage, image.type, image.sharingMode, image.arrayLayers, image.mipLevels, image.samples, image.tiling =
 		format,
 		extent,
