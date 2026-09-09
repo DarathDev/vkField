@@ -319,7 +319,6 @@ convolve_time_domain :: proc(sampleCount, transmissionCount, receiveChannelCount
 
 				for scatterIndex: i32 = 0; scatterIndex < auto_cast len(scatters); scatterIndex += 1 {
 					scatterData := scatters[scatterIndex]
-					scatter := scatterData.scatter
 					transmissionSampleRange := scatterData.transmissionSampleRanges[transmissionIndex]
 					transmissionSampleCount := sample_range_sample_count(transmissionSampleRange)
 					receiveChannelSampleRange := scatterData.receiveChannelSampleRanges[receiveChannelIndex]
@@ -353,7 +352,7 @@ convolve_time_domain :: proc(sampleCount, transmissionCount, receiveChannelCount
 						#no_bounds_check rSamples := simd.masked_load(cast(^SIMD_F32)raw_data(receiveChannelImpulse[kr0:]), SIMD_F32(0), krMask)
 						scatterSum += tSamples * rSamples
 					}
-					sum += simd.select(SIMD_U32(scatterMask), scatterSum * SIMD_F32(scatter.amplitude), SIMD_F32(0))
+					sum += simd.select(SIMD_U32(scatterMask), scatterSum, SIMD_F32(0))
 				}
 
 				#no_bounds_check dataPtr := cast(^SIMD_F32)raw_data(receiveDataLine[baseSample:])
@@ -383,7 +382,6 @@ convolve_frequency_domain :: proc(sampleCount, transmissionCount, receiveChannel
 			#no_bounds_check receiveDataLine := data[(receiveChannelIndex + (transmissionIndex * receiveChannelCount)) * auto_cast sampleCount:][:sampleCount]
 			for scatterData in scatters {
 				utility.prof_scoped("Scatterer")
-				scatter := scatterData.scatter
 				transmissionSampleRange := scatterData.transmissionSampleRanges[transmissionIndex]
 				transmissionSampleCount := sample_range_sample_count(transmissionSampleRange)
 				receiveChannelSampleRange := scatterData.receiveChannelSampleRanges[receiveChannelIndex]
@@ -411,7 +409,7 @@ convolve_frequency_domain :: proc(sampleCount, transmissionCount, receiveChannel
 					raw_data(transmissionFourier),
 					raw_data(receiveChannelFourier),
 					raw_data(convolutionData),
-					scatter.amplitude / f32(fftCount),
+					1.0 / f32(fftCount),
 				)
 				pffft.transform(pffftSession, raw_data(convolutionData), raw_data(convolutionData), raw_data(transmissionFourier), .BACKWARD)
 				pffft.destroy_setup(pffftSession)
@@ -474,7 +472,8 @@ get_spatial_impulse_response :: proc(
 	dt := 1 / samplingFrequency
 
 	powerDenominator := impulseResponse.rect.w - impulseResponse.rect.x <= 1 ? dt : dt2
-	impulseResponse.scale = element.apodization * element.size.x * element.size.y / (2 * linalg.PI * distance * powerDenominator)
+	impulseResponse.scale =
+		linalg.sqrt(scatter.amplitude) * element.apodization * element.size.x * element.size.y / (2 * linalg.PI * distance * powerDenominator)
 	return
 }
 
