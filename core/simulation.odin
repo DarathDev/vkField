@@ -1,12 +1,10 @@
 package vkfield
 
-import rdoc "../utils/renderdoc"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
-import "core:os"
-import "core:path/filepath"
 import "core:time"
+import rdoc "import:renderdoc"
 import utility "vkField:utility"
 
 @(private = "file")
@@ -104,23 +102,23 @@ simulate :: proc(
 		assert(settings.gpuSettings.backend == .Vulkan, "Only the Vulkan GPU backend is implemented")
 	}
 
-	rdoc_lib, rdoc_api, rdoc_ok := rdoc.load_api()
-	if rdoc_ok do log.infof("loaded renderdoc %v", rdoc_api)
-	defer if rdoc_ok do rdoc.unload_api(rdoc_lib)
+	rdocLib, rdocApi, rdoc_ok := rdoc.load_api()
+	if rdoc_ok do log.infof("loaded renderdoc %v", rdocApi)
+	defer if rdoc_ok do rdoc.unload_api(rdocLib)
 
 	stopwatch: time.Stopwatch
 	time.stopwatch_start(&stopwatch)
 	switch &sim in simulator {
 	case vkSimulator:
 		if rdoc_ok {
-			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(sim.instance.instance)
-			rdoc.StartFrameCapture(rdoc_api, devicePointer, nil)
-			// assert(rdoc.IsFrameCapturing(rdoc_api))
+			devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
+			rdoc.start_frame_capture(rdocApi, devicePointer, nil)
+			assert(rdoc.is_frame_capturing(rdocApi))
 		}
 		defer if rdoc_ok {
-			devicePointer := rdoc.DEVICEPOINTER_FROM_VKINSTANCE(sim.instance.instance)
-			rdoc.EndFrameCapture(rdoc_api, devicePointer, nil)
-			// LaunchOrShowRenderdocUI(rdoc_api)
+			devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
+			rdoc.end_frame_capture(rdocApi, devicePointer, nil)
+			LaunchOrShowRenderdocUI(rdocApi)
 		}
 
 		data = is_ok(check(vkSimulate(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
@@ -222,39 +220,20 @@ findDistanceLimits :: proc(
 	return
 }
 
-initRenderDoc :: proc() {
+LaunchOrShowRenderdocUI :: proc(rdoc_api: rdoc.Api) {
+	num_captures, num_ok := rdoc.get_num_captures(rdoc_api)
+	if !num_ok || num_captures == 0 do return
+	latest_capture_index := num_captures - 1
 
-	// uncomment if you want to disable default behaviour of renderdoc capture keys
-	// rdoc.SetCaptureKeys(rdoc_api, nil, 0)
-}
-
-LaunchOrShowRenderdocUI :: proc(rdoc_api: rawptr) {
-	latest_capture_index := rdoc.GetNumCaptures(rdoc_api) - 1
-
-	if latest_capture_index < 0 {
-		return
-	}
-
-	timestamp: u64
-	capture_file_path := make([]u8, 512, context.temp_allocator)
-	defer delete(capture_file_path, context.temp_allocator)
-	capture_file_path_len: u32
-
-	if rdoc.GetCapture(rdoc_api, latest_capture_index, auto_cast raw_data(capture_file_path), &capture_file_path_len, &timestamp) != 0 {
-		assert(capture_file_path_len < 512, "too long capture path!!")
-		current_directory := assume(os.get_working_directory(context.temp_allocator))
-		abs_capture_path := assume(filepath.join([]string{current_directory, transmute(string)capture_file_path}, context.temp_allocator))
-
-		log.infof("loading latest capture: %v", abs_capture_path)
-
-		if rdoc.IsTargetControlConnected(rdoc_api) {
-			rdoc.ShowReplayUI(rdoc_api)
-		} else {
-			pid := rdoc.LaunchReplayUI(rdoc_api, 1, auto_cast raw_data(abs_capture_path))
-			if pid == 0 {
-				log.error("couldn't launch Renderdoc UI")
-				return
-			}
+	abs_capture_path, timestamp, cap_ok := rdoc.get_capture_info(rdoc_api, latest_capture_index, context.temp_allocator)
+	if cap_ok {
+		log.infof("loading latest capture (%v): %v", timestamp, abs_capture_path)
+		pid, ok := rdoc.launch_or_show_replay_ui(rdoc_api, abs_capture_path)
+		if !ok {
+			log.error("couldn't launch or show Renderdoc UI")
+			return
+		}
+		if pid != 0 {
 			log.infof("launched Renderdoc UI pid(%v)", pid)
 		}
 	} else {
