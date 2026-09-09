@@ -31,6 +31,9 @@ run_cmd :: proc(cmd: []string, working_dir: string = "", broadcast := true) -> (
 	process := is_ok(check(os.process_start(processDesc))) or_return
 	state := is_ok(check(os.process_wait(process))) or_return
 	exit_code = state.exit_code
+	if exit_code != 0 {
+		build_log(os.stderr, .Error, fmt.tprintf("Command exited with code %d: %s", exit_code, strings.join(cmd, " ")))
+	}
 	return
 }
 
@@ -572,7 +575,7 @@ compile_shader_slangc :: proc(shader: SlangShaderFile, extraDefines: []CliDefine
 
 	append(&slangCmd, ..cli_defines_to_args(extraDefines))
 
-	confirm(run_cmd(slangCmd[:])) or_return
+	confirm((confirm(run_cmd(slangCmd[:])) or_return) == 0) or_return
 	return
 }
 
