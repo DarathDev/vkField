@@ -255,6 +255,7 @@ DeviceCapability :: enum {
 	VariableDescriptorCount,
 	TimelineSemaphore,
 	BufferDeviceAddress,
+	ScalarBlockLayout,
 	// Vulkan 1.3 Features
 	Synchronization2,
 	DynamicRendering,
@@ -312,7 +313,7 @@ get_physical_devices :: proc(instance: Instance, allocator := context.allocator)
 		device.name = strings.clone_from_cstring_bounded(cast(cstring)&device.properties.deviceName[0], vk.MAX_PHYSICAL_DEVICE_NAME_SIZE, allocator)
 		queueFamilyCount: u32
 		vk.GetPhysicalDeviceQueueFamilyProperties(device.physicalDevice, &queueFamilyCount, nil)
-		queueFamiliesProperties := make([]vk.QueueFamilyProperties, queueFamilyCount, allocator)
+		queueFamiliesProperties := make([]vk.QueueFamilyProperties, queueFamilyCount, context.temp_allocator)
 		vk.GetPhysicalDeviceQueueFamilyProperties(device.physicalDevice, &queueFamilyCount, raw_data(queueFamiliesProperties))
 		device.queueFamilies = make([]QueueFamily, queueFamilyCount, allocator)
 		for familyIndex in 0 ..< len(queueFamiliesProperties) {
@@ -1116,16 +1117,8 @@ create_specialization_info :: proc(
 	allocator := context.temp_allocator,
 	loc := #caller_location,
 ) -> vk.SpecializationInfo where intrinsics.type_is_struct(T) {
-	specializationMap := make([]vk.SpecializationMapEntry, intrinsics.type_struct_field_count(T), allocator, loc)
-	specializationOffsets := reflect.struct_field_offsets(T)
-	specializationTypes := reflect.struct_field_types(T)
-	for &entry, index in specializationMap {
-		entry = {
-			constantID = auto_cast index,
-			offset     = auto_cast specializationOffsets[index],
-			size       = reflect.size_of_typeid(specializationTypes[index].id),
-		}
-	}
+	specializationMap := make([dynamic]vk.SpecializationMapEntry, allocator, loc)
+	append_specialization_entries(&specializationMap, type_info_of(T), 0)
 	specConstants := new(T, allocator, loc)
 	specConstants^ = specializationConstants
 
@@ -1137,11 +1130,40 @@ create_specialization_info :: proc(
 	}
 }
 
+append_specialization_entries :: proc(entries: ^[dynamic]vk.SpecializationMapEntry, typeInfo: ^reflect.Type_Info, baseOffset: uintptr) {
+	typeInfoBase := runtime.type_info_base(typeInfo)
+	#partial switch structInfo in typeInfoBase.variant {
+	case runtime.Type_Info_Struct:
+		for index in 0 ..< int(structInfo.field_count) {
+			fieldType := structInfo.types[index]
+			fieldOffset := baseOffset + structInfo.offsets[index]
+			fieldTypeBase := runtime.type_info_base(fieldType)
+			#partial switch fieldStructInfo in fieldTypeBase.variant {
+			case runtime.Type_Info_Struct:
+				if structInfo.usings[index] {
+					append_specialization_entries(entries, fieldType, fieldOffset)
+					continue
+				}
+			}
+			assert(is_vulkan_specialization_constant_type(fieldTypeBase))
+			append(entries, vk.SpecializationMapEntry{constantID = u32(len(entries^)), offset = u32(fieldOffset), size = fieldTypeBase.size})
+		}
+	}
+}
+
+is_vulkan_specialization_constant_type :: proc(typeInfo: ^reflect.Type_Info) -> bool {
+	_, isInteger := typeInfo.variant.(runtime.Type_Info_Integer)
+	_, isFloat := typeInfo.variant.(runtime.Type_Info_Float)
+	_, isBoolean := typeInfo.variant.(runtime.Type_Info_Boolean)
+	return isInteger || isFloat || isBoolean
+}
+
 free_specialization_info :: proc(info: vk.SpecializationInfo, allocator := context.allocator) {
 	free(info.pMapEntries, allocator)
 	free(info.pData, allocator)
 }
 
+@(require_results)
 create_shaders :: proc(
 	device: Device,
 	info: ShaderInfo,

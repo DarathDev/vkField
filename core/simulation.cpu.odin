@@ -424,16 +424,6 @@ convolve_frequency_domain :: proc(sampleCount, transmissionCount, receiveChannel
 	}
 }
 
-ImpulseResponse :: struct {
-	rect:  [4]f32,
-	scale: f32,
-}
-
-SampleRange :: struct {
-	minSample: i32,
-	maxSample: i32,
-}
-
 CpuScatterData :: struct {
 	scatter:                    Scatter,
 	transmissionSampleRanges:   []SampleRange,
@@ -605,12 +595,4 @@ sample_aperture_cumulative :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SI
 	}
 
 	return value
-}
-
-sample_range_from_impulse :: #force_no_inline proc(impulse: ImpulseResponse) -> SampleRange {
-	return impulse.scale == 0 ? {0, 0} : {i32(linalg.floor(impulse.rect.x - 0.5)), i32(linalg.ceil(impulse.rect.w + 0.5))}
-}
-
-sample_range_sample_count :: #force_inline proc(range: SampleRange) -> i32 {
-	return range.maxSample - range.minSample + 1
 }

@@ -81,6 +81,21 @@ TransmissionElement :: struct {
 
 ReceiveChannelElement :: distinct TransmissionElement
 
+DistanceRange :: struct {
+	minDistance: f32,
+	maxDistance: f32,
+}
+
+SampleRange :: struct {
+	minSample: i32,
+	maxSample: i32,
+}
+
+ImpulseResponse :: struct {
+	rect:  [4]f32,
+	scale: f32,
+}
+
 simulate :: proc(
 	simulator: ^Simulator,
 	settings: ^SimulationSettings,
@@ -159,15 +174,22 @@ plan_simulation :: proc(
 		}
 	}
 
-	minDistance, maxDistance := findDistanceLimits(transmissions, receiveChannels, elements, scatters)
-	settings.startTime = minDistance / settings.speedOfSound
-	settings.sampleCount = i32(math.ceil(((maxDistance - minDistance) / settings.speedOfSound) * settings.samplingFrequency))
+	distanceRange, transmitDistanceRange, receiveDistanceRange := findDistanceLimits(transmissions, receiveChannels, elements, scatters)
+	settings.startTime = distanceRange.minDistance / settings.speedOfSound
+	sampleRange := distance_range_to_sample_range(distanceRange, settings.speedOfSound, settings.samplingFrequency, settings.startTime)
+	settings.sampleCount = sample_range_sample_count(sampleRange)
 	sampleCountPadding :: 6
 	settings.sampleCount += sampleCountPadding
 	settings.startTime -= sampleCountPadding / 4 / settings.samplingFrequency
 
+	transmitSampleRange := distance_range_to_sample_range(transmitDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
+	receiveSampleRange := distance_range_to_sample_range(receiveDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
+	apertureSampleCount := max(sample_range_sample_count(transmitSampleRange), sample_range_sample_count(receiveSampleRange)) + 1
+
 	switch &sim in simulator {
 	case vkSimulator:
+		sim.info.apertureSampleCount = auto_cast apertureSampleCount
+		sim.info.scattererBatchSize = 256
 		is_ok(check(plan_vulkan_simulator(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
 	case cpuSimulator:
 		check(plan_cpu_simulation(&sim, settings)) or_return
@@ -181,13 +203,16 @@ findDistanceLimits :: proc(
 	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
 ) -> (
-	minDistance: f32,
-	maxDistance: f32,
+	distanceRange, transmitDistanceRange, receiveDistanceRange: DistanceRange,
 ) {
 	utility.prof_scoped(#procedure)
-	defer assert(maxDistance - minDistance >= 0)
+	defer assert(distanceRange.maxDistance - distanceRange.minDistance >= 0)
+	defer assert(transmitDistanceRange.maxDistance - transmitDistanceRange.minDistance >= 0)
+	defer assert(receiveDistanceRange.maxDistance - receiveDistanceRange.minDistance >= 0)
 	// Any distance range greater than 10m is likely an error, and furthermore would require an unreasonable amount of memory
-	defer assert(maxDistance - minDistance < 10)
+	defer assert(distanceRange.maxDistance - distanceRange.minDistance < 10)
+	defer assert(transmitDistanceRange.maxDistance - transmitDistanceRange.minDistance < 10)
+	defer assert(receiveDistanceRange.maxDistance - receiveDistanceRange.minDistance < 10)
 
 	minTransmitDistance, maxTransmitDistance: f32 = math.INF_F32, 0
 	minReceiveDistance, maxReceiveDistance: f32 = math.INF_F32, 0
@@ -214,9 +239,9 @@ findDistanceLimits :: proc(
 		}
 	}
 
-	minDistance = minTransmitDistance + minReceiveDistance
-	maxDistance = maxTransmitDistance + maxReceiveDistance
-	minDistance = min(minDistance, maxDistance)
+	transmitDistanceRange = {minTransmitDistance, maxTransmitDistance}
+	receiveDistanceRange = {minReceiveDistance, maxReceiveDistance}
+	distanceRange = {minTransmitDistance + minReceiveDistance, maxTransmitDistance + maxReceiveDistance}
 	return
 }
 
@@ -239,4 +264,19 @@ LaunchOrShowRenderdocUI :: proc(rdoc_api: rdoc.Api) {
 	} else {
 		log.warnf("no valid capture exists to load")
 	}
+}
+
+sample_range_sample_count :: proc(range: SampleRange) -> i32 {
+	return range.maxSample - range.minSample + 1
+}
+
+distance_range_to_sample_range :: proc(range: DistanceRange, speedOfSound, samplingFrequency, startTime: f32) -> SampleRange {
+	return {
+		cast(i32)math.floor(((range.minDistance / speedOfSound) - startTime) * samplingFrequency),
+		cast(i32)math.ceil(((range.maxDistance / speedOfSound) - startTime) * samplingFrequency),
+	}
+}
+
+sample_range_from_impulse :: #force_no_inline proc(impulse: ImpulseResponse) -> SampleRange {
+	return impulse.scale == 0 ? {0, 0} : {i32(linalg.floor(impulse.rect.x - 0.5)), i32(linalg.ceil(impulse.rect.w + 0.5))}
 }

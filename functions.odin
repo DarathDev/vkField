@@ -562,6 +562,9 @@ compile_shader_slangc :: proc(shader: SlangShaderFile, extraDefines: []CliDefine
 		append(&slangCmd, "-capability", capability)
 	}
 
+	// NOTE: buffer pointers/push constants rely on scalar (not std430) alignment
+	append(&slangCmd, "-fvk-use-scalar-layout")
+
 	// NOTE: debug symbols
 	append(&slangCmd, "-g3")
 

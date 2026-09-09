@@ -141,6 +141,7 @@ deduce_device_capabilities :: proc(features2: vk.PhysicalDeviceFeatures2, extens
 			if !vulkan12Features.timelineSemaphore { capabilities -= {.TimelineSemaphore} }
 			if !vulkan12Features.bufferDeviceAddress { capabilities -= {.BufferDeviceAddress} }
 			if !vulkan12Features.descriptorBindingVariableDescriptorCount { capabilities -= {.VariableDescriptorCount} }
+			if !vulkan12Features.scalarBlockLayout { capabilities -= {.ScalarBlockLayout} }
 		case .PHYSICAL_DEVICE_VULKAN_1_3_FEATURES:
 			vulkan13Features := ((cast(^vk.PhysicalDeviceVulkan13Features)pNext)^)
 			if !vulkan13Features.synchronization2 { capabilities -= {.Synchronization2} }
@@ -262,6 +263,7 @@ make_device_features :: proc(
 		descriptorBindingVariableDescriptorCount           = .VariableDescriptorCount in capabilities,
 		timelineSemaphore                                  = .TimelineSemaphore in capabilities,
 		bufferDeviceAddress                                = .BufferDeviceAddress in capabilities,
+		scalarBlockLayout                                  = .ScalarBlockLayout in capabilities,
 	}
 	vk11Features.pNext = vk12Features
 

@@ -27,8 +27,10 @@ MAX_FRAMES_IN_FLIGHT :: 2
 
 DISPATCH_TIMEOUT :: 1000 * time.Second
 
-SHADER_PULSE_ECHO_COMP :: #load("shaders/pulseEcho.spv")
-SHADER_PACK_SIR_COMP :: #load("shaders/packSpatialImpulseResponse.spv")
+SHADER_COMPUTE_CALCULATE_APERTURE :: #load("shaders/calculateAperture.spv")
+SHADER_COMPUTE_MEASURE_APERTURE :: #load("shaders/measureAperture.spv")
+SHADER_COMPUTE_COALESCE_APERTURE :: #load("shaders/coalesceAperture.spv")
+SHADER_COMPUTE_PULSE_ECHO_CONVOLVE :: #load("shaders/pulseEchoConvolution.spv")
 
 @(private = "file")
 debugLogger: log.Logger
@@ -44,6 +46,7 @@ when ODIN_OS != .Darwin {
 }
 
 vkSimulator :: struct {
+	info:                vkSimulationInfo,
 	instance:            vkField_vk.Instance,
 	debugUserData:       ^vkField_vk.DebugUserData,
 	debugMessenger:      vkField_vk.DebugMessenger,
@@ -56,57 +59,100 @@ vkSimulator :: struct {
 	computeFence:        vk.Fence,
 }
 
+vkSimulationInfo :: struct {
+	apertureSampleCount: u32,
+	scattererBatchSize:  u32,
+}
+
 vkSimulationResources :: union {
 	vkPulseEchoSimulationResources,
 }
 
 vkPulseEchoSimulationResources :: struct {
-	packSirShader:   vk.ShaderEXT,
-	packSirSpec:     vkPackSirSpecConstants,
-	pulseEchoShader: vk.ShaderEXT,
-	pulseEchoSpec:   vkPulseEchoSpecConstants,
-	elementsBuffer:  vkStagableBuffer,
-	scattersBuffer:  vkStagableBuffer,
-	responseBuffer:  vkStagableBuffer,
-	sirBuffer:       vkField_vk.Buffer,
+	dataBuffer:        vkStagableBuffer,
+	dataBufferHeader:  vkDataBufferHeader,
+	responseBuffer:    vkStagableBuffer,
+	calcAperShader:    vk.ShaderEXT,
+	measAperShaderTx:  vk.ShaderEXT,
+	measAperShaderRcv: vk.ShaderEXT,
+	coalAperShaderTx:  vk.ShaderEXT,
+	coalAperShaderRcv: vk.ShaderEXT,
+	pulseConvShader:   vk.ShaderEXT,
+	calcAperSpec:      vkCalcAperSpecConstants,
+	measAperSpecTx:    vkMeasAperSpecConstants,
+	measAperSpecRcv:   vkMeasAperSpecConstants,
+	coalAperSpecTx:    vkCoalAperSpecConstants,
+	coalAperSpecRcv:   vkCoalAperSpecConstants,
+	pulseConvSpec:     vkPulseConvSpecConstants,
 }
 
-vkPackSirPushConstants :: struct {
-	elements:                vk.DeviceAddress,
-	scatters:                vk.DeviceAddress,
-	spatialImpulseResponses: vk.DeviceAddress,
-	scatterBatchOffset:      u32,
-	receiveBatchOffset:      u32,
+vkGeneralSpecContants :: struct {
+	ResponseSampleCount: u32,
+	ElementCount:        u32,
+	ScattererCount:      u32,
+	ScattererBatchCount: u32,
+	TransmissionCount:   u32,
+	ReceiveChannelCount: u32,
+	ApertureSampleCount: u32,
+	SamplingFrequency:   f32,
+	SpeedOfSound:        f32,
+	StartTime:           f32,
 }
 
-vkPackSirSpecConstants :: struct {
-	WorkgroupSizeX:    u32,
-	WorkgroupSizeY:    u32,
-	WorkgroupSizeZ:    u32,
-	TransmitCount:     u32,
-	ReceiveCount:      u32,
-	ScatterCount:      u32,
-	ReceiveBatchCount: u32,
-	ScatterBatchCount: u32,
-	Cumulative:        u32,
-	StartTime:         f32,
-	SamplingFrequency: f32,
-	SpeedOfSound:      f32,
+vkCalcAperSpecConstants :: struct {
+	using general:          vkGeneralSpecContants,
+	ElementWorkgroupSize:   u32,
+	ScattererWorkgroupSize: u32,
 }
 
-vkPulseEchoPushConstants :: struct {
-	spatialImpulseResponses: vk.DeviceAddress,
-	response:                vk.DeviceAddress,
-	receiveBatchOffset:      u32,
+vkCoalesceSpecConstants :: struct {
+	using general:         vkGeneralSpecContants,
+	CoalesceTransmissions: b32,
+	Cumulative:            b32,
 }
 
-vkPulseEchoSpecConstants :: struct {
-	WorkgroupSizeX:    u32,
-	SampleCount:       u32,
-	TransmitCount:     u32,
-	ReceiveBatchCount: u32,
-	ScatterBatchCount: u32,
-	Cumulative:        u32,
+vkMeasAperSpecConstants :: struct {
+	using coalese:           vkCoalesceSpecConstants,
+	ElementSetWorkgroupSize: u32,
+	ScattererWorkgroupSize:  u32,
+}
+
+vkCoalAperSpecConstants :: struct {
+	using coalese:           vkCoalesceSpecConstants,
+	SampleWorkgroupSize:     u32,
+	ElementSetWorkgroupSize: u32,
+	ScattererWorkgroupSize:  u32,
+}
+
+vkPulseConvSpecConstants :: struct {
+	using general:       vkGeneralSpecContants,
+	SampleWorkgroupSize: u32,
+}
+
+vkCalcAperPushData :: struct {
+	elementPositions:      vk.DeviceAddress,
+	apertureResponseRects: vk.DeviceAddress,
+	elementOffset:         u32,
+	scattererOffset:       u32,
+}
+
+vkCoalescePushData :: struct {
+	apertureResponseRects:     vk.DeviceAddress,
+	transmissionInfos:         vk.DeviceAddress,
+	transmissionResponses:     vk.DeviceAddress,
+	transmissionElementCounts: vk.DeviceAddress,
+	elementSetMembers:         vk.DeviceAddress,
+	elementSetOffset:          u32,
+	scattererOffset:           u32,
+}
+
+vkPulseConvPushData :: struct {
+	transmissionInfos:     vk.DeviceAddress,
+	transmissionResponses: vk.DeviceAddress,
+	response:              vk.DeviceAddress,
+	transmissionIndex:     u32,
+	receiveChannelIndex:   u32,
+	scattererOffset:       u32,
 }
 
 vkStagableBuffer :: struct {
@@ -114,11 +160,34 @@ vkStagableBuffer :: struct {
 	staging: Maybe(vkField_vk.Buffer),
 }
 
+vkDataBufferHeader :: struct {
+	elementPositions:            u32,
+	elementNormals:              u32,
+	elementSizes:                u32,
+	elementApodizations:         u32,
+	elementDelays:               u32,
+	scatterers:                  u32,
+	apertureResponseRects:       u32,
+	apertureResponseScales:      u32,
+	transmissionInfos:           u32,
+	receiveChannelInfos:         u32,
+	transmissionResponses:       u32,
+	receiveChannelResponses:     u32,
+	transmissionElementCounts:   u32,
+	transmissionBaseOffsets:     u32,
+	receiveChannelElementCounts: u32,
+	receiveChannelBaseOffsets:   u32,
+	elementSetMembers:           u32,
+	totalSize:                   u32,
+}
+
 create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
+
 	instanceCapabilities: vkField_vk.InstanceCapabilities = {}
 	if settings.gpuSettings.enableDriverDebugMessages do instanceCapabilities = {.Validation, .DebugUtils}
+
 	simulator.instance = confirm(
 		vkField_vk.create_instance(
 			{appName = "vkField", vulkanVersion = vk.API_VERSION_1_3, optionalCapabilities = instanceCapabilities},
@@ -131,7 +200,14 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 	}
 
 	simulator.physicalDevices = vkField_vk.get_physical_devices(simulator.instance) or_return
-	requiredCapabilities: vkField_vk.DeviceCapabilities = {.Synchronization2, .Maintenance4, .BufferDeviceAddress, .ShaderObject}
+	requiredCapabilities: vkField_vk.DeviceCapabilities = {
+		.Synchronization2,
+		.Maintenance4,
+		.BufferDeviceAddress,
+		.ShaderObject,
+		.ScalarBlockLayout,
+		.ShaderInt64,
+	}
 	physicalDevice, physicalDeviceAvailable := vkField_vk.pick_physical_device(
 		simulator.instance.instance,
 		simulator.physicalDevices,
@@ -144,12 +220,13 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 			simulator.instance,
 			physicalDevice,
 			{requiredCapabilities = requiredCapabilities},
-			{{requiredProperties = {.Compute}, count = 1}},
+			{{requiredProperties = {.Compute, .Transfer}, count = 1}},
 			"Main Device",
+			context.temp_allocator,
 		),
 	) or_return
 
-	pushConstantSize := max(size_of(vkPulseEchoPushConstants), size_of(vkPackSirPushConstants))
+	pushConstantSize := max(size_of(vkCalcAperPushData), size_of(vkCoalescePushData), size_of(vkPulseConvPushData))
 	simulator.pipelineLayout = check(
 		vkField_vk.create_pipeline_layout(simulator.device, {}, {{stageFlags = {.COMPUTE}, size = auto_cast pushConstantSize, offset = 0}}),
 	) or_return
@@ -191,105 +268,153 @@ plan_vulkan_simulator :: proc(
 ) {
 	destroy_vulkan_simulator_resources(simulator)
 
+	dataBuffer, dataBufferHeader := vkBuildDataBuffer(simulator, settings, transmissions, receiveChannels, elements, scatters, context.temp_allocator)
+
 	device := simulator.device
 
-	assert(len(transmissions) <= 1, "The Vulkan backend currently supports at most one transmission")
-	transmitCount := len(transmissions[0].elements)
-	receiveCount: int = 0
-	for receiveChannel in receiveChannels {
-		receiveCount += len(receiveChannel.elements)
-	}
-	scatterCount := len(scatters)
-
-	elementTotalSize := vkElementBufferSize(transmitCount, receiveCount)
-
-	elementsBuffer := check(prepare_stream(device, elementTotalSize)) or_return
-	scattersBuffer := check(prepare_stream(device, size_of(Scatter) * auto_cast scatterCount)) or_return
-	responseBuffer := check(prepare_readback(device, auto_cast (receiveCount * int(settings.sampleCount)) * size_of(f32))) or_return
-
-	packSirWorkGroupSize: [3]u32 : {4, 4, 4}
-
-	sirBufferSize :: 32 * runtime.Megabyte
-	sirPerScatterSize :: size_of([4]f32) + size_of(f32) // Size of Spatial Impulse Response Rectangle Control Points + Scaling Factor
-	scatterBatchCount := u32(scatterCount)
-	receiveBatchCount := u32(receiveCount)
-	sirTotalSize := u32(sirPerScatterSize * scatterBatchCount * (receiveBatchCount + u32(transmitCount)))
-
-	// Batch Receives to reduce temp buffer size
-	if sirTotalSize > sirBufferSize {
-		maxReceiveBatchCount := min(u32(receiveCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.y * packSirWorkGroupSize.y)
-		receiveBatchCount = clamp((sirBufferSize / (sirPerScatterSize * scatterBatchCount)) - u32(transmitCount), 1, maxReceiveBatchCount)
-		sirTotalSize = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(transmitCount)))
-	}
-
-	// Batch Scatters to reduce temp buffer size
-	if sirTotalSize > sirBufferSize {
-		maxScatterBatchCount := min(u32(scatterCount), device.physicalDevice.properties.limits.maxComputeWorkGroupCount.x * packSirWorkGroupSize.x)
-		scatterBatchCount = clamp(sirBufferSize / (sirPerScatterSize * (receiveBatchCount + u32(transmitCount))), 1, maxScatterBatchCount)
-		sirTotalSize = u32(size_of([4]f32) * scatterBatchCount * (receiveBatchCount + u32(transmitCount)))
-	}
-
-	assert(sirTotalSize <= sirBufferSize)
-	sirBuffer := check(device_buffer(device, auto_cast sirTotalSize)) or_return
-
-	// NOTE(rnp): specialize shaders
-	workGroupSize: [3]u32 = {4, 4, 4}
-	assert(workGroupSize.x * workGroupSize.y * workGroupSize.z <= simulator.device.physicalDevice.properties.limits.maxComputeWorkGroupInvocations)
-	packSirSpec: vkPackSirSpecConstants = {
-		WorkgroupSizeX    = workGroupSize.x,
-		WorkgroupSizeY    = workGroupSize.y,
-		WorkgroupSizeZ    = workGroupSize.z,
-		TransmitCount     = u32(transmitCount),
-		ReceiveCount      = u32(receiveCount),
-		ScatterCount      = u32(scatterCount),
-		ReceiveBatchCount = u32(receiveBatchCount),
-		ScatterBatchCount = u32(scatterBatchCount),
-		Cumulative        = settings.cumulative ? 1 : 0,
-		StartTime         = settings.startTime,
-		SamplingFrequency = settings.samplingFrequency,
-		SpeedOfSound      = settings.speedOfSound,
-	}
-	sirSpecInfo := vkField_vk.create_specialization_info(packSirSpec)
-	pulseEchoWorkGroup: u32 = 64
-	assert(pulseEchoWorkGroup * 1 * 1 <= simulator.device.physicalDevice.properties.limits.maxComputeWorkGroupInvocations)
-	// TODO(rnp): subgroup size
-	pulseEchoSpec: vkPulseEchoSpecConstants = {
-		WorkgroupSizeX    = 64,
-		SampleCount       = u32(settings.sampleCount),
-		TransmitCount     = u32(transmitCount),
-		ReceiveBatchCount = u32(receiveBatchCount),
-		ScatterBatchCount = u32(scatterBatchCount),
-		Cumulative        = settings.cumulative ? 1 : 0,
-	}
-	pulseEchoSpecInfo := vkField_vk.create_specialization_info(pulseEchoSpec)
-	packSirShader, sirStage := vkField_vk.create_shaders(
-		simulator.device,
-		{code = SHADER_PACK_SIR_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}, specializationInfo = {sirSpecInfo}},
-		{},
-		{{stageFlags = {.COMPUTE}, size = size_of(vkPackSirPushConstants), offset = 0}},
-		false,
-		"Pack Spatial Impulse Response",
+	vkDataBuffer := check(prepare_stream(device, auto_cast len(dataBuffer))) or_return
+	responseBuffer := check(
+		prepare_readback(device, auto_cast (len(transmissions) * len(receiveChannels) * int(settings.sampleCount)) * size_of(f32)),
 	) or_return
-	assert(sirStage[0] == {.COMPUTE})
-	pulseEchoShader, pulseEchoStage := vkField_vk.create_shaders(
-		simulator.device,
-		{code = SHADER_PULSE_ECHO_COMP, entryPoints = {{name = "main", stage = .COMPUTE}}, specializationInfo = {pulseEchoSpecInfo}},
+
+	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
+	defer vkField_vk.reset_command_buffer(device, &simulator.computeCommandPool, commandBuffer)
+	vkField_vk.cmd_begin(commandBuffer, true) or_return
+	vkField_vk.cmd_upload(commandBuffer, dataBuffer, vkDataBuffer.main, vkDataBuffer.staging.? or_else {})
+	vkField_vk.cmd_end(commandBuffer) or_return
+
+	vkField_vk.queue_submit(simulator.queue, {commandBuffer}, {}, {}, simulator.computeFence) or_return
+	check(vk.WaitForFences(device.device, 1, &simulator.computeFence, true, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
+	vk.ResetFences(device.device, 1, &simulator.computeFence) or_return
+
+	generalSpec: vkGeneralSpecContants = {
+		ResponseSampleCount = auto_cast settings.sampleCount,
+		ElementCount        = auto_cast len(elements),
+		ScattererCount      = auto_cast len(scatters),
+		ScattererBatchCount = auto_cast simulator.info.scattererBatchSize,
+		TransmissionCount   = auto_cast len(transmissions),
+		ReceiveChannelCount = auto_cast len(receiveChannels),
+		ApertureSampleCount = auto_cast simulator.info.apertureSampleCount,
+		SamplingFrequency   = settings.samplingFrequency,
+		SpeedOfSound        = settings.speedOfSound,
+		StartTime           = settings.startTime,
+	}
+
+	maxComputeWorkgroupInvocations := simulator.device.physicalDevice.properties.limits.maxComputeWorkGroupInvocations
+
+	calcAperSpec: vkCalcAperSpecConstants = {
+		general                = generalSpec,
+		ElementWorkgroupSize   = 64,
+		ScattererWorkgroupSize = 1,
+	}
+	assert(calcAperSpec.ElementWorkgroupSize * calcAperSpec.ScattererWorkgroupSize <= maxComputeWorkgroupInvocations)
+
+	coalesceSpecTx: vkCoalesceSpecConstants = {
+		general               = generalSpec,
+		CoalesceTransmissions = true,
+		Cumulative            = settings.cumulative,
+	}
+
+	measAperWorkgroupSize: [2]u32 = {64, 1}
+	assert(measAperWorkgroupSize.x * measAperWorkgroupSize.y <= maxComputeWorkgroupInvocations)
+
+	measAperSpecTx: vkMeasAperSpecConstants = {
+		coalese                 = coalesceSpecTx,
+		ElementSetWorkgroupSize = measAperWorkgroupSize.x,
+		ScattererWorkgroupSize  = measAperWorkgroupSize.y,
+	}
+	measAperSpecRcv := measAperSpecTx
+	measAperSpecRcv.CoalesceTransmissions = false
+
+	coalAperWorkgroupSize: [3]u32 = {64, 1, 1}
+	assert(coalAperWorkgroupSize.x * coalAperWorkgroupSize.y * coalAperWorkgroupSize.z <= maxComputeWorkgroupInvocations)
+	coalAperSpecTx: vkCoalAperSpecConstants = {
+		coalese                 = coalesceSpecTx,
+		SampleWorkgroupSize     = coalAperWorkgroupSize.x,
+		ElementSetWorkgroupSize = coalAperWorkgroupSize.y,
+		ScattererWorkgroupSize  = coalAperWorkgroupSize.z,
+	}
+	coalAperSpecRcv := coalAperSpecTx
+	coalAperSpecRcv.CoalesceTransmissions = false
+
+	pulseConvSpec: vkPulseConvSpecConstants = {
+		general             = generalSpec,
+		SampleWorkgroupSize = 64,
+	}
+	assert(pulseConvSpec.SampleWorkgroupSize <= maxComputeWorkgroupInvocations)
+
+	calcAperShaders, _ := vkField_vk.create_shaders(
+		device,
+		{
+			code = SHADER_COMPUTE_CALCULATE_APERTURE,
+			entryPoints = {{name = "main", stage = .COMPUTE}},
+			specializationInfo = {vkField_vk.create_specialization_info(calcAperSpec)},
+		},
 		{},
-		{{stageFlags = {.COMPUTE}, size = size_of(vkPackSirPushConstants), offset = 0}},
+		{{stageFlags = {.COMPUTE}, size = size_of(vkCoalescePushData)}},
 		false,
-		"Pulse Echo",
+		"Calculate Aperture",
+		context.temp_allocator,
 	) or_return
-	assert(pulseEchoStage[0] == {.COMPUTE})
+
+	measAperShaders, _ := vkField_vk.create_shaders(
+		device,
+		{
+			code = SHADER_COMPUTE_MEASURE_APERTURE,
+			entryPoints = {{name = "main", stage = .COMPUTE}, {name = "main", stage = .COMPUTE}},
+			specializationInfo = {vkField_vk.create_specialization_info(measAperSpecTx), vkField_vk.create_specialization_info(measAperSpecRcv)},
+		},
+		{},
+		{{stageFlags = {.COMPUTE}, size = size_of(vkCoalescePushData)}},
+		false,
+		"Measure Aperture",
+		context.temp_allocator,
+	) or_return
+
+	coalAperShaders, _ := vkField_vk.create_shaders(
+		device,
+		{
+			code = SHADER_COMPUTE_COALESCE_APERTURE,
+			entryPoints = {{name = "main", stage = .COMPUTE}, {name = "main", stage = .COMPUTE}},
+			specializationInfo = {vkField_vk.create_specialization_info(coalAperSpecTx), vkField_vk.create_specialization_info(coalAperSpecRcv)},
+		},
+		{},
+		{{stageFlags = {.COMPUTE}, size = size_of(vkCoalescePushData)}},
+		false,
+		"Coalesce Aperture",
+		context.temp_allocator,
+	) or_return
+
+	pulseConvShaders, _ := vkField_vk.create_shaders(
+		device,
+		{
+			code = SHADER_COMPUTE_PULSE_ECHO_CONVOLVE,
+			entryPoints = {{name = "main", stage = .COMPUTE}},
+			specializationInfo = {vkField_vk.create_specialization_info(pulseConvSpec)},
+		},
+		{},
+		{{stageFlags = {.COMPUTE}, size = size_of(vkPulseConvPushData)}},
+		false,
+		"Pulse Echo Convolution",
+		context.temp_allocator,
+	) or_return
 
 	simulator.simulationResources = vkPulseEchoSimulationResources {
-		elementsBuffer  = elementsBuffer,
-		scattersBuffer  = scattersBuffer,
-		responseBuffer  = responseBuffer,
-		sirBuffer       = sirBuffer,
-		packSirShader   = packSirShader[0],
-		pulseEchoShader = pulseEchoShader[0],
-		packSirSpec     = packSirSpec,
-		pulseEchoSpec   = pulseEchoSpec,
+		dataBuffer        = vkDataBuffer,
+		dataBufferHeader  = dataBufferHeader,
+		responseBuffer    = responseBuffer,
+		calcAperShader    = calcAperShaders[0],
+		measAperShaderTx  = measAperShaders[0],
+		measAperShaderRcv = measAperShaders[1],
+		coalAperShaderTx  = coalAperShaders[0],
+		coalAperShaderRcv = coalAperShaders[1],
+		pulseConvShader   = pulseConvShaders[0],
+		calcAperSpec      = calcAperSpec,
+		measAperSpecTx    = measAperSpecTx,
+		measAperSpecRcv   = measAperSpecRcv,
+		coalAperSpecTx    = coalAperSpecTx,
+		coalAperSpecRcv   = coalAperSpecRcv,
+		pulseConvSpec     = pulseConvSpec,
 	}
 	return
 }
@@ -299,12 +424,14 @@ destroy_vulkan_simulator_resources :: proc(simulator: ^vkSimulator) {
 
 	switch resources in simulator.simulationResources {
 	case vkPulseEchoSimulationResources:
-		vkField_vk.destroy_shader(device, resources.pulseEchoShader)
-		vkField_vk.destroy_shader(device, resources.packSirShader)
-		release_staged_buffer(device, resources.elementsBuffer)
-		release_staged_buffer(device, resources.scattersBuffer)
+		vkField_vk.destroy_shader(device, resources.calcAperShader)
+		vkField_vk.destroy_shader(device, resources.measAperShaderTx)
+		vkField_vk.destroy_shader(device, resources.measAperShaderRcv)
+		vkField_vk.destroy_shader(device, resources.coalAperShaderTx)
+		vkField_vk.destroy_shader(device, resources.coalAperShaderRcv)
+		vkField_vk.destroy_shader(device, resources.pulseConvShader)
+		release_staged_buffer(device, resources.dataBuffer)
 		release_staged_buffer(device, resources.responseBuffer)
-		vkField_vk.release_buffer(device, resources.sirBuffer)
 		simulator.simulationResources = {}
 	}
 
@@ -333,34 +460,6 @@ vkSimulate :: proc(
 
 	device := simulator.device
 
-	assert(len(transmissions) <= 1, "The Vulkan backend currently supports at most one transmission")
-	transmitCount := len(transmissions[0].elements)
-	receiveCount: int = 0
-	for receiveChannel in receiveChannels {
-		receiveCount += len(receiveChannel.elements)
-	}
-
-	scatterCount := len(scatters)
-
-	transmitElements := make(#soa[]RectangularElement, transmitCount, allocator)
-	defer delete(transmitElements)
-	receiveElements := make(#soa[]RectangularElement, receiveCount, allocator)
-	defer delete(receiveElements)
-	if len(transmissions) > 0 {
-		for transmissionIndex in 0 ..< len(transmissions[0].elements) {
-			transmitElements[transmissionIndex] = elements[transmissions[0].elements[transmissionIndex].index]
-		}
-	}
-	receiveOffset := 0
-	for receiveChannel in receiveChannels {
-		for receiveElement in receiveChannel.elements {
-			receiveElements[receiveOffset] = elements[receiveElement.index]
-			receiveOffset += 1
-		}
-	}
-
-	elementsPacked := vkPackElementBuffer(transmitElements, receiveElements)
-	defer delete(elementsPacked)
 	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
 
 	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
@@ -368,8 +467,6 @@ vkSimulate :: proc(
 
 	vkField_vk.cmd_begin(commandBuffer, true) or_return
 
-	vkField_vk.cmd_upload(commandBuffer, elementsPacked, resources.elementsBuffer.main, resources.elementsBuffer.staging.? or_else {})
-	vkField_vk.cmd_upload(commandBuffer, slice.to_bytes(scatters), resources.scattersBuffer.main, resources.scattersBuffer.staging.? or_else {})
 	vkField_vk.cmd_clear_buffer(commandBuffer, resources.responseBuffer.main)
 
 	vkField_vk.cmd_pipeline_barrier(
@@ -377,27 +474,11 @@ vkSimulate :: proc(
 		{},
 		{
 			{
-				buffer = resources.elementsBuffer.main.buffer,
-				size = resources.elementsBuffer.main.size,
-				srcStageMask = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ},
-			},
-			{
-				buffer = resources.scattersBuffer.main.buffer,
-				size = resources.scattersBuffer.main.size,
-				srcStageMask = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE},
-				dstStageMask = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ},
-			},
-			{
 				buffer = resources.responseBuffer.main.buffer,
 				size = resources.responseBuffer.main.size,
 				offset = 0,
-				srcStageMask = {.TRANSFER, .HOST},
-				srcAccessMask = {.TRANSFER_WRITE, .HOST_WRITE},
+				srcStageMask = {.TRANSFER},
+				srcAccessMask = {.TRANSFER_WRITE},
 				dstStageMask = {.COMPUTE_SHADER},
 				dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
 			},
@@ -405,94 +486,147 @@ vkSimulate :: proc(
 		{},
 	)
 
-	sirSpecConstants := resources.packSirSpec
-	pulseEchoConstants := resources.pulseEchoSpec
-	for receiveOffset: u32 = 0; receiveOffset < u32(receiveCount); receiveOffset += u32(sirSpecConstants.ReceiveBatchCount) {
-		for scatterOffset: u32 = 0; scatterOffset < u32(scatterCount); scatterOffset += u32(sirSpecConstants.ScatterBatchCount) {
-			vkField_vk.cmd_pipeline_barrier(
-				commandBuffer,
-				{},
+	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
+
+	scatterBatchSize := simulator.info.scattererBatchSize
+	dataBufferAddress := vkField_vk.get_buffer_address(device, resources.dataBuffer.main)
+	header := resources.dataBufferHeader
+	for scatterOffset := 0; scatterOffset < len(scatters); scatterOffset += auto_cast scatterBatchSize {
+		vkField_vk.cmd_push_constants(
+			commandBuffer,
+			simulator.pipelineLayout,
+			shaderStage,
+			vkCalcAperPushData {
+				elementPositions      = dataBufferAddress + auto_cast header.elementPositions,
+				apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+				elementOffset         = 0,
+				scattererOffset       = auto_cast scatterOffset,
+			},
+		)
+
+		vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.calcAperShader)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(len(elements)) / f32(resources.calcAperSpec.ElementWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.calcAperSpec.ScattererWorkgroupSize))),
+			1,
+		)
+
+		vkField_vk.cmd_pipeline_barrier(
+			commandBuffer,
+			{},
+			{
 				{
-					{
-						buffer = resources.sirBuffer.buffer,
-						size = resources.sirBuffer.size,
-						offset = 0,
-						srcStageMask = {.COMPUTE_SHADER},
-						srcAccessMask = {.SHADER_READ},
-						dstStageMask = {.COMPUTE_SHADER},
-						dstAccessMask = {.SHADER_WRITE},
-					},
+					buffer = resources.dataBuffer.main.buffer,
+					size = resources.dataBuffer.main.size,
+					offset = 0,
+					srcStageMask = {.COMPUTE_SHADER},
+					srcAccessMask = {.SHADER_WRITE},
+					dstStageMask = {.COMPUTE_SHADER},
+					dstAccessMask = {.SHADER_READ},
 				},
-				{},
-			)
+			},
+			{},
+		)
 
-			computeStage: vk.ShaderStageFlags = {.COMPUTE}
-			vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &computeStage, &resources.packSirShader)
+		vkField_vk.cmd_push_constants(
+			commandBuffer,
+			simulator.pipelineLayout,
+			shaderStage,
+			vkCoalescePushData {
+				apertureResponseRects     = dataBufferAddress + auto_cast header.apertureResponseRects,
+				transmissionInfos         = dataBufferAddress + auto_cast header.transmissionInfos,
+				transmissionResponses     = dataBufferAddress + auto_cast header.transmissionResponses,
+				transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+				elementSetMembers         = dataBufferAddress + auto_cast header.elementSetMembers,
+				elementSetOffset          = 0,
+				scattererOffset           = auto_cast scatterOffset,
+			},
+		)
 
-			vkField_vk.cmd_push_constants(
-				commandBuffer,
-				simulator.pipelineLayout,
-				{.COMPUTE},
-				vkPackSirPushConstants {
-					elements = vkField_vk.get_buffer_address(device, resources.elementsBuffer.main),
-					scatters = vkField_vk.get_buffer_address(device, resources.scattersBuffer.main),
-					spatialImpulseResponses = vkField_vk.get_buffer_address(device, resources.sirBuffer),
-					scatterBatchOffset = scatterOffset,
-					receiveBatchOffset = receiveOffset,
-				},
-			)
+		vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.measAperShaderTx)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(len(transmissions)) / f32(resources.measAperSpecTx.ElementSetWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecTx.ScattererWorkgroupSize))),
+			1,
+		)
+		vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.measAperShaderRcv)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(len(receiveChannels)) / f32(resources.measAperSpecRcv.ElementSetWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecRcv.ScattererWorkgroupSize))),
+			1,
+		)
 
-			vk.CmdDispatch(
-				commandBuffer.commandBuffer,
-				u32(math.ceil(f32(sirSpecConstants.ScatterBatchCount) / f32(sirSpecConstants.WorkgroupSizeX))),
-				u32(math.ceil(f32(sirSpecConstants.ReceiveBatchCount) / f32(sirSpecConstants.WorkgroupSizeY))),
-				u32(math.ceil(f32(sirSpecConstants.TransmitCount) / f32(sirSpecConstants.WorkgroupSizeZ))),
-			)
-
-			vkField_vk.cmd_pipeline_barrier(
-				commandBuffer,
-				{},
+		vkField_vk.cmd_pipeline_barrier(
+			commandBuffer,
+			{},
+			{
 				{
-					{
-						buffer = resources.sirBuffer.buffer,
-						size = resources.sirBuffer.size,
-						offset = 0,
-						srcStageMask = {.COMPUTE_SHADER},
-						srcAccessMask = {.SHADER_WRITE},
-						dstStageMask = {.COMPUTE_SHADER},
-						dstAccessMask = {.SHADER_READ},
-					},
-					{
-						buffer = resources.responseBuffer.main.buffer,
-						size = resources.responseBuffer.main.size,
-						offset = 0,
-						srcStageMask = {.COMPUTE_SHADER},
-						srcAccessMask = {.SHADER_WRITE},
-						dstStageMask = {.COMPUTE_SHADER},
-						dstAccessMask = {.SHADER_READ},
-					},
+					buffer = resources.dataBuffer.main.buffer,
+					size = resources.dataBuffer.main.size,
+					offset = 0,
+					srcStageMask = {.COMPUTE_SHADER},
+					srcAccessMask = {.SHADER_WRITE},
+					dstStageMask = {.COMPUTE_SHADER},
+					dstAccessMask = {.SHADER_READ},
 				},
-				{},
-			)
+			},
+			{},
+		)
 
-			vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &computeStage, &resources.pulseEchoShader)
-			vkField_vk.cmd_push_constants(
-				commandBuffer,
-				simulator.pipelineLayout,
-				{.COMPUTE},
-				vkPulseEchoPushConstants {
-					spatialImpulseResponses = vkField_vk.get_buffer_address(device, resources.sirBuffer),
-					response = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
-					receiveBatchOffset = receiveOffset,
+		vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.coalAperShaderTx)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(simulator.info.apertureSampleCount) / f32(resources.coalAperSpecTx.SampleWorkgroupSize))),
+			u32(math.ceil(f32(len(transmissions)) / f32(resources.coalAperSpecTx.ElementSetWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.coalAperSpecTx.ScattererWorkgroupSize))),
+		)
+		vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.coalAperShaderRcv)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(simulator.info.apertureSampleCount) / f32(resources.coalAperSpecTx.SampleWorkgroupSize))),
+			u32(math.ceil(f32(len(receiveChannels)) / f32(resources.coalAperSpecRcv.ElementSetWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.coalAperSpecRcv.ScattererWorkgroupSize))),
+		)
+
+		vkField_vk.cmd_pipeline_barrier(
+			commandBuffer,
+			{},
+			{
+				{
+					buffer = resources.dataBuffer.main.buffer,
+					size = resources.dataBuffer.main.size,
+					offset = 0,
+					srcStageMask = {.COMPUTE_SHADER},
+					srcAccessMask = {.SHADER_WRITE},
+					dstStageMask = {.COMPUTE_SHADER},
+					dstAccessMask = {.SHADER_READ},
 				},
-			)
+			},
+			{},
+		)
 
-			vk.CmdDispatch(
-				commandBuffer.commandBuffer,
-				u32(math.ceil(f32(pulseEchoConstants.SampleCount) / f32(pulseEchoConstants.WorkgroupSizeX))),
-				pulseEchoConstants.ReceiveBatchCount,
-				1,
-			)
+		vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.pulseConvShader)
+		for transmissionIndex in 0 ..< len(transmissions) {
+			for receiveChannelIndex in 0 ..< len(receiveChannels) {
+				vkField_vk.cmd_push_constants(
+					commandBuffer,
+					simulator.pipelineLayout,
+					shaderStage,
+					vkPulseConvPushData {
+						transmissionInfos     = dataBufferAddress + auto_cast header.transmissionInfos,
+						transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+						response              = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
+						transmissionIndex     = auto_cast transmissionIndex,
+						receiveChannelIndex   = auto_cast receiveChannelIndex,
+						scattererOffset       = auto_cast scatterOffset,
+					},
+				)
+
+				vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil(f32(settings.sampleCount) / f32(resources.pulseConvSpec.SampleWorkgroupSize))), 1, 1)
+			}
 		}
 	}
 
@@ -676,4 +810,139 @@ vkElementBufferSize :: proc(transmitCount, receiveCount: int) -> vk.DeviceSize {
 	elementTotalSize += size_of(f32) // Delays
 	elementTotalSize *= auto_cast (transmitCount + receiveCount)
 	return elementTotalSize
+}
+
+calculate_vk_data_buffer_offsets :: proc(
+	elementCount, scattererCount, transmissionCount, receiveChannelCount, apertureSampleCount: u32,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+) -> (
+	header: vkDataBufferHeader,
+) {
+	header.totalSize = size_of(vkDataBufferHeader)
+	header.elementPositions = header.totalSize
+	header.totalSize += elementCount * size_of([3]f32)
+	header.elementNormals = header.totalSize
+	header.totalSize += elementCount * size_of([3]f32)
+	header.elementSizes = header.totalSize
+	header.totalSize += elementCount * size_of([2]f32)
+	header.elementApodizations = header.totalSize
+	header.totalSize += elementCount * size_of(f32)
+	header.elementDelays = header.totalSize
+	header.totalSize += elementCount * size_of(f32)
+	header.scatterers = header.totalSize
+	header.totalSize += scattererCount * size_of(Scatter)
+	header.apertureResponseRects = header.totalSize
+	header.totalSize += elementCount * scattererCount * size_of([4]f32)
+	header.apertureResponseScales = header.totalSize
+	header.totalSize += elementCount * scattererCount * size_of(f32)
+	header.transmissionInfos = header.totalSize
+	header.totalSize += transmissionCount * scattererCount * size_of(SampleRange)
+	header.receiveChannelInfos = header.totalSize
+	header.totalSize += receiveChannelCount * scattererCount * size_of(SampleRange)
+	header.transmissionResponses = header.totalSize
+	header.totalSize += transmissionCount * scattererCount * apertureSampleCount * size_of(f32)
+	header.receiveChannelResponses = header.totalSize
+	header.totalSize += receiveChannelCount * scattererCount * apertureSampleCount * size_of(f32)
+	header.transmissionElementCounts = header.totalSize
+	header.totalSize += transmissionCount * size_of(u32)
+	header.transmissionBaseOffsets = header.totalSize
+	header.totalSize += transmissionCount * size_of(u32)
+	header.receiveChannelElementCounts = header.totalSize
+	header.totalSize += receiveChannelCount * size_of(u32)
+	header.receiveChannelBaseOffsets = header.totalSize
+	header.totalSize += receiveChannelCount * size_of(u32)
+
+	memberCount: u32 = 0
+	for transmission in transmissions do memberCount += auto_cast len(transmission.elements)
+	for receiveChannel in receiveChannels do memberCount += auto_cast len(receiveChannel.elements)
+	header.elementSetMembers = header.totalSize
+	header.totalSize += memberCount * 3 * size_of(u32)
+	return
+}
+
+vkBuildDataBuffer :: proc(
+	simulator: ^vkSimulator,
+	settings: SimulationSettings,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
+	scatterers: []Scatter,
+	allocator := context.allocator,
+) -> (
+	dataBuffer: []byte,
+	header: vkDataBufferHeader,
+) {
+	elementCount: u32 = auto_cast len(elements)
+	scattererCount := simulator.info.scattererBatchSize
+	transmissionCount: u32 = auto_cast len(transmissions)
+	receiveChannelCount: u32 = auto_cast len(receiveChannels)
+	apertureSampleCount: u32 = simulator.info.apertureSampleCount
+
+	header = calculate_vk_data_buffer_offsets(
+		elementCount,
+		scattererCount,
+		transmissionCount,
+		receiveChannelCount,
+		apertureSampleCount,
+		transmissions,
+		receiveChannels,
+	)
+	dataBuffer = make([]byte, header.totalSize, allocator)
+
+	(cast(^vkDataBufferHeader)raw_data(dataBuffer))^ = header
+
+	copy(slice.from_ptr(cast(^[3]f32)raw_data(dataBuffer[header.elementPositions:]), len(elements)), slice.from_ptr(elements.position, len(elements)))
+	copy(slice.from_ptr(cast(^[3]f32)raw_data(dataBuffer[header.elementNormals:]), len(elements)), slice.from_ptr(elements.normal, len(elements)))
+	copy(slice.from_ptr(cast(^[2]f32)raw_data(dataBuffer[header.elementSizes:]), len(elements)), slice.from_ptr(elements.size, len(elements)))
+	copy(slice.from_ptr(cast(^f32)raw_data(dataBuffer[header.elementApodizations:]), len(elements)), slice.from_ptr(elements.apodization, len(elements)))
+	copy(slice.from_ptr(cast(^f32)raw_data(dataBuffer[header.elementDelays:]), len(elements)), slice.from_ptr(elements.delay, len(elements)))
+	copy(slice.from_ptr(cast(^Scatter)raw_data(dataBuffer[header.scatterers:]), len(scatterers)), scatterers)
+	memberSetBaseOffset: u32 = 0
+
+	transmissionsElementCounts := slice.from_ptr(cast(^u32)raw_data(dataBuffer[header.transmissionElementCounts:]), auto_cast transmissionCount)
+	transmissionsBaseOffsets := slice.from_ptr(cast(^u32)raw_data(dataBuffer[header.transmissionBaseOffsets:]), auto_cast transmissionCount)
+
+	totalWordCount := int((header.totalSize - header.elementSetMembers) / size_of(u32))
+	elementSetMemberWords := slice.from_ptr(cast(^u32)raw_data(dataBuffer[header.elementSetMembers:]), totalWordCount)
+	wordIndex := 0
+
+	for transmission, index in transmissions {
+		memberCount := len(transmission.elements)
+		transmissionsElementCounts[index] = auto_cast memberCount
+		transmissionsBaseOffsets[index] = memberSetBaseOffset
+
+		copy(slice.reinterpret([]i32, elementSetMemberWords[wordIndex:]), slice.from_ptr(transmission.elements.index, memberCount))
+		wordIndex += memberCount
+
+		copy(slice.reinterpret([]f32, elementSetMemberWords[wordIndex:]), slice.from_ptr(transmission.elements.apodization, memberCount))
+		wordIndex += memberCount
+
+		copy(slice.reinterpret([]f32, elementSetMemberWords[wordIndex:]), slice.from_ptr(transmission.elements.delay, memberCount))
+		wordIndex += memberCount
+
+		memberSetBaseOffset += auto_cast (3 * memberCount)
+	}
+
+	receiveChannelsElementCounts := slice.from_ptr(cast(^u32)raw_data(dataBuffer[header.receiveChannelElementCounts:]), auto_cast receiveChannelCount)
+	receiveChannelsBaseOffsets := slice.from_ptr(cast(^u32)raw_data(dataBuffer[header.receiveChannelBaseOffsets:]), auto_cast receiveChannelCount)
+
+	for receiveChannel, index in receiveChannels {
+		memberCount := len(receiveChannel.elements)
+		receiveChannelsElementCounts[index] = auto_cast memberCount
+		receiveChannelsBaseOffsets[index] = memberSetBaseOffset
+
+		copy(slice.reinterpret([]i32, elementSetMemberWords[wordIndex:]), slice.from_ptr(receiveChannel.elements.index, memberCount))
+		wordIndex += memberCount
+
+		copy(slice.reinterpret([]f32, elementSetMemberWords[wordIndex:]), slice.from_ptr(receiveChannel.elements.apodization, memberCount))
+		wordIndex += memberCount
+
+		copy(slice.reinterpret([]f32, elementSetMemberWords[wordIndex:]), slice.from_ptr(receiveChannel.elements.delay, memberCount))
+		wordIndex += memberCount
+
+		memberSetBaseOffset += auto_cast (3 * memberCount)
+	}
+
+	return
 }

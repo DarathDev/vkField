@@ -1,6 +1,8 @@
 package vkField_utility
 
 import "base:intrinsics"
+import "core:mem"
+import "core:slice"
 
 VERBOSE :: #config(VERBOSE, true)
 
