@@ -1,7 +1,7 @@
 package vkfield_scripts
 
-import "core:fmt"
 import "core:log"
+import "core:math"
 import "core:math/rand"
 import "core:slice"
 import "core:testing"
@@ -11,29 +11,61 @@ import utility "vkField:utility"
 check :: utility.check
 is_ok :: utility.is_ok
 
-SIMULATOR_TYPE :: #config(TEST_SIMULATOR_TYPE, "CPU")
 CUMULATIVE :: bool(#config(TEST_CUMULATIVE, true))
 
-create_simulator :: proc(settings: vkField.SimulationSettings) -> (simulator: vkField.Simulator, ok: bool) {
-	switch SIMULATOR_TYPE {
-	case "CPU":
-		cpuSimulator, cpuOk := vkField.create_cpu_simulator()
-		return cpuSimulator, cpuOk
-	case "VULKAN", "VK", "GPU":
-		vkSimulator, vkOk := vkField.create_vulkan_simulator(settings)
-		return vkSimulator, vkOk == .SUCCESS
-	case:
-		panic(fmt.tprintf("Unsupported simulator type %q", SIMULATOR_TYPE))
-	}
-}
+OUTPUT_ABSOLUTE_TOLERANCE :: 1e-3
+OUTPUT_RELATIVE_TOLERANCE :: 5e-2
 
-destroy_simulator :: proc(simulator: ^vkField.Simulator) {
-	switch &sim in simulator^ {
-	case vkField.cpuSimulator:
-		vkField.destroy_cpu_simulator(&sim)
-	case vkField.vkSimulator:
-		vkField.destroy_vulkan_simulator(&sim)
+compare_simulators :: proc(
+	settings: vkField.SimulationSettings,
+	transmissions: []vkField.Transmission,
+	receiveChannels: []vkField.ReceiveChannel,
+	elements: #soa[]vkField.RectangularElement,
+	scatters: []vkField.Scatter,
+) -> (
+	ok := true,
+) {
+	cpuSettings := settings
+	gpuSettings := settings
+
+	cpuSimulator, cpuOk := vkField.create_cpu_simulator()
+	if !cpuOk do return false
+	defer vkField.destroy_cpu_simulator(&cpuSimulator)
+
+	gpuSimulator, gpuResult := vkField.create_vulkan_simulator(gpuSettings)
+	if gpuResult != .SUCCESS do return false
+
+	cpuSim: vkField.Simulator = cpuSimulator
+	gpuSim: vkField.Simulator = gpuSimulator
+	defer vkField.destroy_vulkan_simulator(&gpuSim.(vkField.vkSimulator))
+
+	if !vkField.plan_simulation(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters) do return false
+	if !vkField.plan_simulation(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters) do return false
+
+	cpuData, cpuSimulationOk := vkField.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters)
+	if !cpuSimulationOk do return false
+	defer delete(cpuData)
+	gpuData, gpuSimulationOk := vkField.simulate(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters)
+	if !gpuSimulationOk do return false
+	defer delete(gpuData)
+
+	if len(cpuData) != len(gpuData) {
+		log.errorf("CPU/GPU output length mismatch: %d != %d", len(cpuData), len(gpuData))
+		return false
 	}
+
+	for i in 0 ..< len(cpuData) {
+		cpuValue := cpuData[i]
+		gpuValue := gpuData[i]
+		difference := math.abs(cpuValue - gpuValue)
+		tolerance := OUTPUT_ABSOLUTE_TOLERANCE + OUTPUT_RELATIVE_TOLERANCE * max(math.abs(cpuValue), math.abs(gpuValue))
+		if difference > tolerance {
+			log.errorf("CPU/GPU output mismatch at %d: %e != %e (difference %e, tolerance %e)", i, cpuValue, gpuValue, difference, tolerance)
+			return false
+		}
+	}
+
+	return true
 }
 
 oneRectSimulation :: proc() -> (ok := true) {
@@ -49,9 +81,6 @@ oneRectSimulation :: proc() -> (ok := true) {
 		cpuSettings = {threadCount = 1},
 		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
 	}
-
-	simulator := create_simulator(settings) or_return
-	defer destroy_simulator(&simulator)
 
 	transmitElement: vkField.RectangularElement = {
 		position    = {0, 0, 0},
@@ -104,20 +133,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 	}
 	scatters := slice.from_ptr(&scatter, 1)
 
-	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
-
-	data: []f32
-	data, ok = vkField.simulate(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
-	defer delete(data)
-	fmt.println(data)
-	nonZeroData: bool
-	for datum in data {
-		if datum != 0 {
-			nonZeroData = true
-			break
-		}
-	}
-	return nonZeroData
+	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters)
 }
 
 linearArraySimulation :: proc() -> (ok := true) {
@@ -141,9 +157,6 @@ linearArraySimulation :: proc() -> (ok := true) {
 		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
 	}
 
-	simulator := create_simulator(settings) or_return
-	defer destroy_simulator(&simulator)
-
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch, elementWidth, 0)
 	defer delete(elements)
 	transmissions := make_full_aperture_transmissions(columnCount * rowCount)
@@ -155,11 +168,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {10e-3, 100e-3})
 	defer delete(scatters)
 
-	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
-	data: []f32
-	data, ok = vkField.simulate(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
-	defer delete(data)
-	return
+	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters)
 }
 
 matrixArraySimulation :: proc() -> (ok := true) {
@@ -168,8 +177,8 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	utility.prof_thread_init()
 	utility.prof_scoped(#procedure)
 
-	scatterCount :: 128
-	rowCount :: 32
+	scatterCount :: 1024
+	rowCount :: 128
 	columnCount :: 128
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
@@ -183,9 +192,6 @@ matrixArraySimulation :: proc() -> (ok := true) {
 		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
 	}
 
-	simulator := create_simulator(settings) or_return
-	defer destroy_simulator(&simulator)
-
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
 	defer delete(elements)
 	transmissions := make_full_aperture_transmissions(columnCount * rowCount)
@@ -197,11 +203,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {0, 100e-3})
 	defer delete(scatters)
 
-	vkField.plan_simulation(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
-	data: []f32
-	data, ok = vkField.simulate(&simulator, &settings, transmissions, receiveChannels, elements, scatters)
-	defer delete(data)
-	return
+	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters)
 }
 
 @(test)
