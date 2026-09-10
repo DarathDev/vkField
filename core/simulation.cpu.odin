@@ -12,7 +12,14 @@ import utility "vkField:utility"
 
 assert :: utility.assert
 
-cpuSimulator :: struct {}
+cpuSimulator :: struct {
+	info: cpuSimulationInfo,
+}
+
+cpuSimulationInfo :: struct {
+	apertureSampleCount: u32,
+	scattererBatchSize:  u32,
+}
 
 create_cpu_simulator :: proc() -> (simulator: cpuSimulator, ok := true) { return }
 destroy_cpu_simulator :: proc(simulator: ^cpuSimulator) { return }
@@ -62,14 +69,15 @@ simulate_cpu :: proc(
 
 	batchTxCount: i32 = 1
 	maxBatchRxCount := min(receiveChannelCount, DATALINE_BATCH_SIZE)
+	batchSize := simulator.info.scattererBatchSize > 0 ? i32(simulator.info.scattererBatchSize) : SCATTER_BATCH_SIZE
 
 	utility.prof_begin("Allocate")
 	data = make_aligned([]f32, sampleCount * receiveChannelCount * transmissionCount, 16)
-	elementImpulses := make([]ImpulseResponse, int(min(SCATTER_BATCH_SIZE, scatterCount)) * len(elements), context.allocator)
-	transmissionSampleRanges := make([]SampleRange, int(min(SCATTER_BATCH_SIZE, scatterCount)) * int(batchTxCount), context.allocator)
-	transmissionImpulses := make_aligned([]f32, int(min(SCATTER_BATCH_SIZE, scatterCount)) * int(batchTxCount) * int(sampleCount), 16, context.allocator)
+	elementImpulses := make([]ImpulseResponse, int(min(batchSize, scatterCount)) * len(elements), context.allocator)
+	transmissionSampleRanges := make([]SampleRange, int(min(batchSize, scatterCount)) * int(batchTxCount), context.allocator)
+	transmissionImpulses := make_aligned([]f32, int(min(batchSize, scatterCount)) * int(batchTxCount) * int(sampleCount), 16, context.allocator)
 	scatterBatchMemory := assert(
-		mem.alloc_bytes_non_zeroed(scatter_batch_memory_size(sampleCount, batchTxCount, maxBatchRxCount, scatterCount), align_of(u8), context.allocator),
+		mem.alloc_bytes_non_zeroed(scatter_batch_memory_size(sampleCount, batchTxCount, maxBatchRxCount, scatterCount, batchSize), align_of(u8), context.allocator),
 	)
 	scatterArena: mem.Arena
 	mem.arena_init(&scatterArena, scatterBatchMemory)
@@ -82,8 +90,8 @@ simulate_cpu :: proc(
 
 	// TODO: Choose where to put the scatter scaling
 
-	for scatterBatchStart: i32 = 0; scatterBatchStart < scatterCount; scatterBatchStart += SCATTER_BATCH_SIZE {
-		scatterBatchEnd := min(scatterBatchStart + SCATTER_BATCH_SIZE, scatterCount)
+	for scatterBatchStart: i32 = 0; scatterBatchStart < scatterCount; scatterBatchStart += batchSize {
+		scatterBatchEnd := min(scatterBatchStart + batchSize, scatterCount)
 		scatterBatchCount := scatterBatchEnd - scatterBatchStart
 
 		utility.prof_begin("Element SIR Calculation")
@@ -427,8 +435,8 @@ CpuScatterData :: struct {
 	receiveChannelImpulses:     []f32,
 }
 
-scatter_batch_memory_size :: proc(sampleCount, transmissionCount, receiveChannelCount, scatterCount: i32) -> int {
-	batchSize := int(min(SCATTER_BATCH_SIZE, scatterCount))
+scatter_batch_memory_size :: proc(sampleCount, transmissionCount, receiveChannelCount, scatterCount: i32, scattererBatchSize: i32 = SCATTER_BATCH_SIZE) -> int {
+	batchSize := int(min(scattererBatchSize, scatterCount))
 	maxRx := int(min(DATALINE_BATCH_SIZE, receiveChannelCount))
 	receiveChannelMetadataSize := maxRx * size_of(SampleRange)
 	receiveChannelImpulseSize := maxRx * int(sampleCount) * size_of(f32)

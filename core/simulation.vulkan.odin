@@ -268,6 +268,47 @@ plan_vulkan_simulator :: proc(
 ) {
 	destroy_vulkan_simulator_resources(simulator)
 
+	limits := simulator.device.physicalDevice.properties.limits
+	maxComputeSharedMemorySize := limits.maxComputeSharedMemorySize
+	pulseEchoSharedMemory := 2 * simulator.info.apertureSampleCount * size_of(f32)
+	assert(pulseEchoSharedMemory <= maxComputeSharedMemorySize, "Pulse echo convolution shared memory exceeds device maxComputeSharedMemorySize")
+
+	maxStorageBufferRange := u32(limits.maxStorageBufferRange)
+	maxBufferLimit: u32 = maxStorageBufferRange
+	if settings.gpuSettings.dispatchWorkLimit > 0 {
+		maxBufferLimit = min(maxBufferLimit, u32(settings.gpuSettings.dispatchWorkLimit))
+	}
+
+	elementCount := u32(len(elements))
+	transmissionCount := u32(len(transmissions))
+	receiveChannelCount := u32(len(receiveChannels))
+	apertureSampleCount := simulator.info.apertureSampleCount
+	scatterCount := u32(len(scatters))
+
+	memberCount: u32 = 0
+	for transmission in transmissions do memberCount += auto_cast len(transmission.elements)
+	for receiveChannel in receiveChannels do memberCount += auto_cast len(receiveChannel.elements)
+
+	fixedHeaderBytes :=
+		u32(size_of(vkDataBufferHeader)) +
+		elementCount * u32(size_of([3]f32) * 2 + size_of([2]f32) + size_of(f32) * 2) +
+		(transmissionCount + receiveChannelCount) * u32(size_of(u32) * 2) +
+		memberCount * u32(3 * size_of(u32))
+
+	bytesPerScatterer :=
+		u32(size_of(Scatter)) +
+		elementCount * u32(size_of([4]f32) + size_of(f32)) +
+		(transmissionCount + receiveChannelCount) * u32(size_of(SampleRange)) +
+		(transmissionCount + receiveChannelCount) * apertureSampleCount * u32(size_of(f32))
+
+	targetBatchSize := max(u32(1), min(scatterCount, 256))
+	if fixedHeaderBytes < maxBufferLimit && bytesPerScatterer > 0 {
+		maxBatchFromBuffer := (maxBufferLimit - fixedHeaderBytes) / bytesPerScatterer
+		simulator.info.scattererBatchSize = max(u32(1), min(targetBatchSize, maxBatchFromBuffer))
+	} else {
+		simulator.info.scattererBatchSize = targetBatchSize
+	}
+
 	dataBuffer, dataBufferHeader := vkBuildDataBuffer(simulator, settings, transmissions, receiveChannels, elements, scatters, context.temp_allocator)
 
 	device := simulator.device
@@ -497,10 +538,10 @@ vkSimulate :: proc(
 			simulator.pipelineLayout,
 			shaderStage,
 			vkCalcAperPushData {
-				elementPositions      = dataBufferAddress + auto_cast header.elementPositions,
+				elementPositions = dataBufferAddress + auto_cast header.elementPositions,
 				apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
-				elementOffset         = 0,
-				scattererOffset       = auto_cast scatterOffset,
+				elementOffset = 0,
+				scattererOffset = auto_cast scatterOffset,
 			},
 		)
 
@@ -534,13 +575,13 @@ vkSimulate :: proc(
 			simulator.pipelineLayout,
 			shaderStage,
 			vkCoalescePushData {
-				apertureResponseRects     = dataBufferAddress + auto_cast header.apertureResponseRects,
-				transmissionInfos         = dataBufferAddress + auto_cast header.transmissionInfos,
-				transmissionResponses     = dataBufferAddress + auto_cast header.transmissionResponses,
+				apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+				transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+				transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
 				transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
-				elementSetMembers         = dataBufferAddress + auto_cast header.elementSetMembers,
-				elementSetOffset          = 0,
-				scattererOffset           = auto_cast scatterOffset,
+				elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+				elementSetOffset = 0,
+				scattererOffset = auto_cast scatterOffset,
 			},
 		)
 
@@ -616,12 +657,12 @@ vkSimulate :: proc(
 					simulator.pipelineLayout,
 					shaderStage,
 					vkPulseConvPushData {
-						transmissionInfos     = dataBufferAddress + auto_cast header.transmissionInfos,
+						transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
 						transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-						response              = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
-						transmissionIndex     = auto_cast transmissionIndex,
-						receiveChannelIndex   = auto_cast receiveChannelIndex,
-						scattererOffset       = auto_cast scatterOffset,
+						response = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
+						transmissionIndex = auto_cast transmissionIndex,
+						receiveChannelIndex = auto_cast receiveChannelIndex,
+						scattererOffset = auto_cast scatterOffset,
 					},
 				)
 

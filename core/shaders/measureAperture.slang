@@ -8,9 +8,6 @@ const uint ElementSetWorkgroupSize = 1;
 [vk::constant_id(13)]
 const uint ScattererWorkgroupSize = 64;
 
-groupshared float sampleMin[ElementSetWorkgroupSize * ScattererWorkgroupSize];
-groupshared float sampleMax[ElementSetWorkgroupSize * ScattererWorkgroupSize];
-
 [shader("compute")]
 [numthreads(ElementSetWorkgroupSize, ScattererWorkgroupSize, 1)]
 void main(uint2 GlobalInvocationID: SV_DispatchThreadID) {

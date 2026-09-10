@@ -1,8 +1,10 @@
 package vkfield
 
+import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
+import "core:slice"
 import "core:time"
 import rdoc "import:renderdoc"
 import utility "vkField:utility"
@@ -174,7 +176,10 @@ plan_simulation :: proc(
 		}
 	}
 
-	distanceRange, transmitDistanceRange, receiveDistanceRange := findDistanceLimits(transmissions, receiveChannels, elements, scatters)
+	centroid := calculate_array_centroid(elements)
+	sort_scatters_by_centroid_distance(scatters, centroid)
+
+	distanceRange, _, _ := findDistanceLimits(transmissions, receiveChannels, elements, scatters)
 	settings.startTime = distanceRange.minDistance / settings.speedOfSound
 	sampleRange := distance_range_to_sample_range(distanceRange, settings.speedOfSound, settings.samplingFrequency, settings.startTime)
 	settings.sampleCount = sample_range_sample_count(sampleRange)
@@ -182,23 +187,91 @@ plan_simulation :: proc(
 	settings.sampleCount += sampleCountPadding
 	settings.startTime -= sampleCountPadding / 4 / settings.samplingFrequency
 
-	transmitSampleRange := distance_range_to_sample_range(transmitDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
-	receiveSampleRange := distance_range_to_sample_range(receiveDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
-	apertureSampleCount := max(sample_range_sample_count(transmitSampleRange), sample_range_sample_count(receiveSampleRange)) + 1
-
 	// We are rounding up to the nearest multiple of 32
 	// PFFFT requires this for the CPU simulator, and it avoids some potential warp divergence on the GPU
 	settings.sampleCount = (settings.sampleCount + 31) & ~i32(31)
 
+	apertureSampleCount, scattererBatchSize := plan_scatterer_batching(simulator, settings^, transmissions, receiveChannels, elements, scatters)
+
 	switch &sim in simulator {
 	case vkSimulator:
-		sim.info.apertureSampleCount = auto_cast apertureSampleCount
-		sim.info.scattererBatchSize = 256
+		sim.info.apertureSampleCount = apertureSampleCount
+		sim.info.scattererBatchSize = scattererBatchSize
 		is_ok(check(plan_vulkan_simulator(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
 	case cpuSimulator:
+		sim.info.apertureSampleCount = apertureSampleCount
+		sim.info.scattererBatchSize = scattererBatchSize
 		check(plan_cpu_simulation(&sim, settings)) or_return
 	}
 	return
+}
+
+plan_scatterer_batching :: proc(
+	simulator: ^Simulator,
+	settings: SimulationSettings,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
+	scatters: []Scatter,
+) -> (
+	apertureSampleCount, scattererBatchSize: u32,
+) {
+	maxSharedMemoryAllowed: u32 = 32 * runtime.Kilobyte
+	if sim, isVk := simulator.(vkSimulator); isVk {
+		maxSharedMemoryAllowed = sim.device.physicalDevice.properties.limits.maxComputeSharedMemorySize
+	}
+
+	scatterCount := u32(len(scatters))
+	initialBatchSize: u32 = 256
+	scattererBatchSize = max(u32(1), min(scatterCount, initialBatchSize))
+
+	if scatterCount == 0 do return 0, scattererBatchSize
+
+	for {
+		maxBatchApertureSampleCount: u32 = 0
+		for batchStart: u32 = 0; batchStart < scatterCount; batchStart += scattererBatchSize {
+			batchEnd := min(batchStart + scattererBatchSize, scatterCount)
+			batchScatters := scatters[batchStart:batchEnd]
+
+			_, batchTransmitDistanceRange, batchReceiveDistanceRange := findDistanceLimits(transmissions, receiveChannels, elements, batchScatters)
+
+			batchTransmitSampleRange := distance_range_to_sample_range(batchTransmitDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
+			batchReceiveSampleRange := distance_range_to_sample_range(batchReceiveDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
+
+			batchApertureSampleCount := u32(max(sample_range_sample_count(batchTransmitSampleRange), sample_range_sample_count(batchReceiveSampleRange))) + 1
+			maxBatchApertureSampleCount = max(maxBatchApertureSampleCount, batchApertureSampleCount)
+		}
+
+		sharedMemoryNeeded := 2 * maxBatchApertureSampleCount * u32(size_of(f32))
+		if sharedMemoryNeeded <= maxSharedMemoryAllowed || scattererBatchSize <= 1 {
+			apertureSampleCount = maxBatchApertureSampleCount
+			break
+		}
+
+		scattererBatchSize = max(u32(1), scattererBatchSize / 2)
+	}
+
+	return
+}
+
+calculate_array_centroid :: proc(elements: #soa[]RectangularElement) -> [3]f32 {
+	if len(elements) == 0 do return {0, 0, 0}
+	sum: [3]f32 = {0, 0, 0}
+	for i in 0 ..< len(elements) {
+		sum += elements[i].position
+	}
+	return sum / f32(len(elements))
+}
+
+sort_scatters_by_centroid_distance :: proc(scatters: []Scatter, centroid: [3]f32) {
+	if len(scatters) <= 1 do return
+	c := centroid
+	slice.sort_by_with_data(scatters, proc(a, b: Scatter, user_data: rawptr) -> bool {
+			centroid_ptr := (^[3]f32)(user_data)
+			da := linalg.length2(a.position - centroid_ptr^)
+			db := linalg.length2(b.position - centroid_ptr^)
+			return da < db
+		}, &c)
 }
 
 findDistanceLimits :: proc(
