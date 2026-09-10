@@ -54,6 +54,7 @@ compare_simulators :: proc(
 		return false
 	}
 
+	anyMismatch: uint
 	for i in 0 ..< len(cpuData) {
 		cpuValue := cpuData[i]
 		gpuValue := gpuData[i]
@@ -61,11 +62,14 @@ compare_simulators :: proc(
 		tolerance := OUTPUT_ABSOLUTE_TOLERANCE + OUTPUT_RELATIVE_TOLERANCE * max(math.abs(cpuValue), math.abs(gpuValue))
 		if difference > tolerance {
 			log.errorf("CPU/GPU output mismatch at %d: %e != %e (difference %e, tolerance %e)", i, cpuValue, gpuValue, difference, tolerance)
-			return false
+			anyMismatch += 1
+			if anyMismatch > 10 {
+				break
+			}
 		}
 	}
 
-	return true
+	return anyMismatch == 0
 }
 
 oneRectSimulation :: proc() -> (ok := true) {
