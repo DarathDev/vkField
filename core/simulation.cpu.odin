@@ -233,6 +233,7 @@ simulate_cpu :: proc(
 						maxReceiveChannelSampleCount = max(maxReceiveChannelSampleCount, sample_range_sample_count(receiveChannelSampleRange))
 					}
 					fftCount := pffft.adjust_n(auto_cast (maxTransmissionSampleCount + maxReceiveChannelSampleCount - 1))
+					scatterData.fftCount = auto_cast fftCount
 
 					if fftCount < 128 {
 						append(&timeDomainScatters, scatterData)
@@ -370,9 +371,15 @@ convolve_time_domain :: proc(sampleCount, transmissionCount, receiveChannelCount
 
 convolve_frequency_domain :: proc(sampleCount, transmissionCount, receiveChannelCount: i32, scatters: []CpuScatterData, data: []f32) {
 	utility.prof_scoped(#procedure)
-	transmissionFourier := make_aligned([]f32, sampleCount, 16, context.allocator)
-	receiveChannelFourier := make_aligned([]f32, sampleCount, 16, context.allocator)
-	convolutionData := make_aligned([]f32, sampleCount, 16, context.allocator)
+
+	maxFftCount: i32
+	for scatterData in scatters {
+		maxFftCount = max(maxFftCount, scatterData.fftCount)
+	}
+
+	transmissionFourier := make_aligned([]f32, maxFftCount, 16, context.allocator)
+	receiveChannelFourier := make_aligned([]f32, maxFftCount, 16, context.allocator)
+	convolutionData := make_aligned([]f32, maxFftCount, 16, context.allocator)
 	defer {
 		delete(transmissionFourier)
 		delete(receiveChannelFourier)
@@ -433,6 +440,7 @@ CpuScatterData :: struct {
 	receiveChannelSampleRanges: []SampleRange,
 	transmissionImpulses:       []f32,
 	receiveChannelImpulses:     []f32,
+	fftCount:                   i32,
 }
 
 scatter_batch_memory_size :: proc(sampleCount, transmissionCount, receiveChannelCount, scatterCount: i32, scattererBatchSize: i32 = SCATTER_BATCH_SIZE) -> int {
