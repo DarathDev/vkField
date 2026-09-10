@@ -19,6 +19,9 @@ MESSENGER_BREAKPOINT :: #config(MESSENGER_BREAKPOINT, vkField_util.VKFIELD_IS_DE
 
 FILTER_VALIDATION_MESSAGES: []i32 : {}
 
+// When false, only ERROR/WARNING vulkan messages are logged (suppresses INFO/VERBOSE spam, e.g. during tests).
+LOG_DEBUG_VULKAN_MESSAGES :: false
+
 GLOBAL_MODULE: dynlib.Library
 
 when ODIN_OS == .Darwin {
@@ -95,6 +98,12 @@ byte_arr_str :: proc(arr: ^[$N]byte) -> string {
 	return strings.string_from_null_terminated_ptr(raw_data(arr), N)
 }
 
+// Like log.infof, but suppressed when LOG_DEBUG_VULKAN_MESSAGES is false.
+log_debug_infof :: proc(format: string, args: ..any, loc := #caller_location) {
+	if !LOG_DEBUG_VULKAN_MESSAGES do return
+	log.infof(format, ..args, location = loc)
+}
+
 vk_messenger_callback :: proc "system" (
 	messageSeverity: vk.DebugUtilsMessageSeverityFlagsEXT,
 	messageTypes: vk.DebugUtilsMessageTypeFlagsEXT,
@@ -114,6 +123,8 @@ vk_messenger_callback :: proc "system" (
 	} else {
 		level = .Debug
 	}
+
+	if !LOG_DEBUG_VULKAN_MESSAGES && level != .Error && level != .Warning do return false
 
 	debugUserData: ^DebugUserData = auto_cast pUserData
 	if debugUserData != nil && debugUserData.logger != {} {

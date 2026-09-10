@@ -413,20 +413,20 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 
 	scorePhysicalDevice :: proc(device: ^PhysicalDevice, criteria: DeviceCriteria) -> (score: int) {
 		name := byte_arr_str(&device.properties.deviceName) // Can't I use cString -> string casting?
-		log.infof("vulkan: evaluating device %q", name)
-		defer log.infof("vulkan: device %q scored %v", name, score)
+		log_debug_infof("vulkan: evaluating device %q", name)
+		defer log_debug_infof("vulkan: device %q scored %v", name, score)
 
 		// Check Required Capabilities
 		{
 			if unavailableRequiredCapabilities := criteria.requiredCapabilities - device.capabilities; unavailableRequiredCapabilities != {} {
-				log.infof("vulkan: device %q does not support required capabilities %q", name, unavailableRequiredCapabilities)
+				log_debug_infof("vulkan: device %q does not support required capabilities %q", name, unavailableRequiredCapabilities)
 				return 0
 			}
 
 			optionalCapabilitiesWeight :: 10
 			unavailableOptionalCapabilities := criteria.optionalCapabilities - device.capabilities
 			if unavailableOptionalCapabilities != {} {
-				log.infof("vulkan: device %q does not support optional capabilities %q", name, unavailableOptionalCapabilities)
+				log_debug_infof("vulkan: device %q does not support optional capabilities %q", name, unavailableOptionalCapabilities)
 			}
 			score -= optionalCapabilitiesWeight * int(intrinsics.count_ones(transmute(u64)(unavailableOptionalCapabilities)))
 		}
@@ -437,14 +437,14 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 			})
 
 			if !canDraw {
-				log.infof("vulkan: device %q does not have a queue family that supports graphics", name)
+				log_debug_infof("vulkan: device %q does not have a queue family that supports graphics", name)
 				return 0
 			}
 		}
 
 		if criteria.present {
 			if .Swapchain not_in device.capabilities {
-				log.infof("vulkan: device %q can not present as it does not have swapchain support", name)
+				log_debug_infof("vulkan: device %q can not present as it does not have swapchain support", name)
 				return 0
 			}
 
@@ -453,7 +453,7 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 			})
 
 			if !canPresent {
-				log.infof("vulkan: device %q does not have a queue family that supports presenting", name)
+				log_debug_infof("vulkan: device %q does not have a queue family that supports presenting", name)
 				return 0
 			}
 		}
@@ -468,11 +468,11 @@ pick_physical_device :: proc(instance: vk.Instance, devices: #soa[]PhysicalDevic
 			score += 100_000
 		case .CPU, .OTHER:
 		}
-		log.infof("vulkan: scored %i based on device type %v", score, device.properties.deviceType)
+		log_debug_infof("vulkan: scored %i based on device type %v", score, device.properties.deviceType)
 
 		// Maximum texture size.
 		score += int(device.properties.limits.maxImageDimension2D)
-		log.infof("vulkan: added the max 2D image dimensions (texture size) of %v to the score", device.properties.limits.maxImageDimension2D)
+		log_debug_infof("vulkan: added the max 2D image dimensions (texture size) of %v to the score", device.properties.limits.maxImageDimension2D)
 		return
 	}
 }
