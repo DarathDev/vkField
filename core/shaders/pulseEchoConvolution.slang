@@ -14,11 +14,12 @@ struct PulseEchoSettings {
   uint scattererOffset;
 
   ElementSetInfo *getReceiveChannelInfos() {
-    return (ElementSetInfo*)((uint64_t)transmissionInfos + (uint64_t)(TransmissionCount * ScattererBatchCount) * sizeof(ElementSetInfo));
+    return (ElementSetInfo *)((uint64_t)transmissionInfos + (uint64_t)(TransmissionCount * ScattererBatchCount) * sizeof(ElementSetInfo));
   }
 
   float *getReceiveChannelResponses() {
-    return (float*)((uint64_t)transmissionResponses + (uint64_t)(TransmissionCount * ScattererBatchCount * ApertureSampleCount) * sizeof(float));
+    return (float *)((uint64_t)transmissionResponses +
+                     (uint64_t)(TransmissionCount * ScattererBatchCount * ApertureSampleCount) * sizeof(float));
   }
 };
 
@@ -92,16 +93,13 @@ void main(uint ThreadID: SV_GroupIndex, uint1 LocalInvocationID: SV_GroupThreadI
     GroupMemoryBarrierWithGroupSync();
 
     // Convolution
-    int s = (int)sampleIndex;
-    int minK = max(transmissionInfo.minSample, s - receiveChannelInfo.maxSample);
-    int maxK = min(transmissionInfo.maxSample, s - receiveChannelInfo.minSample);
-    if (minK > maxK)
-      continue;
+    int s = (int)sampleIndex - (transmissionInfo.minSample + receiveChannelInfo.minSample);
+    int nTx = min(transmissionInfo.maxSample - transmissionInfo.minSample + 1, (int)ApertureSampleCount);
+    int nRx = min(receiveChannelInfo.maxSample - receiveChannelInfo.minSample + 1, (int)ApertureSampleCount);
 
-    for (int k = minK; k <= maxK; k++) {
-      int kt = k - transmissionInfo.minSample;
-      int kr = s - k - receiveChannelInfo.minSample;
-      if (kt >= 0 && kt < (int)ApertureSampleCount && kr >= 0 && kr < (int)ApertureSampleCount) {
+    for (int kt = 0; kt < nTx; kt++) {
+      int kr = s - kt;
+      if (kr >= 0 && kr < nRx) {
         sample += transmissionAperture[kt] * receiveChannelAperture[kr];
       }
     }
