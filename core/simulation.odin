@@ -186,6 +186,10 @@ plan_simulation :: proc(
 	receiveSampleRange := distance_range_to_sample_range(receiveDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
 	apertureSampleCount := max(sample_range_sample_count(transmitSampleRange), sample_range_sample_count(receiveSampleRange)) + 1
 
+	// We are rounding up to the nearest multiple of 32
+	// PFFFT requires this for the CPU simulator, and it avoids some potential warp divergence on the GPU
+	settings.sampleCount = (settings.sampleCount + 31) & ~i32(31)
+
 	switch &sim in simulator {
 	case vkSimulator:
 		sim.info.apertureSampleCount = auto_cast apertureSampleCount

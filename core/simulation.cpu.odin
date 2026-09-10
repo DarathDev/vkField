@@ -17,11 +17,7 @@ cpuSimulator :: struct {}
 create_cpu_simulator :: proc() -> (simulator: cpuSimulator, ok := true) { return }
 destroy_cpu_simulator :: proc(simulator: ^cpuSimulator) { return }
 
-plan_cpu_simulation :: proc(simulator: ^cpuSimulator, settings: ^SimulationSettings) -> (ok := true) {
-	// Round up to the nearest multiple of 32
-	settings.sampleCount = (settings.sampleCount + (31)) & ~i32(31)
-	return
-}
+plan_cpu_simulation :: proc(simulator: ^cpuSimulator, settings: ^SimulationSettings) -> (ok := true) { return }
 
 SCATTER_BATCH_SIZE :: 256
 DATALINE_BATCH_SIZE :: 1024
@@ -125,7 +121,7 @@ simulate_cpu :: proc(
 					elementImpulse.rect += element.delay / samplingFrequency
 					elementImpulse.scale *= element.apodization
 
-					if elementImpulse.scale == 0 do return
+					if elementImpulse.scale == 0 do continue
 
 					elementMinSample := i32(linalg.floor(elementImpulse.rect.x - 0.5))
 					elementMaxSample := i32(linalg.ceil(elementImpulse.rect.w + 0.5))
@@ -203,7 +199,7 @@ simulate_cpu :: proc(
 							// Necessary for proper delaying in the cumulative case
 							if cumulative do elementImpulse.rect -= 1
 
-							if elementImpulse.scale == 0 do return
+							if elementImpulse.scale == 0 do continue
 
 							elementMinSample := i32(linalg.floor(elementImpulse.rect.x - 0.5))
 							elementMaxSample := i32(linalg.ceil(elementImpulse.rect.w + 0.5))
@@ -228,7 +224,7 @@ simulate_cpu :: proc(
 					for receiveChannelSampleRange in scatterData.receiveChannelSampleRanges {
 						maxReceiveChannelSampleCount = max(maxReceiveChannelSampleCount, sample_range_sample_count(receiveChannelSampleRange))
 					}
-					fftCount := pffft.adjust_n(auto_cast max(maxTransmissionSampleCount, maxReceiveChannelSampleCount))
+					fftCount := pffft.adjust_n(auto_cast (maxTransmissionSampleCount + maxReceiveChannelSampleCount - 1))
 
 					if fftCount < 128 {
 						append(&timeDomainScatters, scatterData)
@@ -390,7 +386,7 @@ convolve_frequency_domain :: proc(sampleCount, transmissionCount, receiveChannel
 				maxSample := min(transmissionSampleRange.maxSample + receiveChannelSampleRange.maxSample + 1, sampleCount)
 				if minSample >= maxSample do continue
 
-				fftCount := pffft.adjust_n(auto_cast max(transmissionSampleCount, receiveChannelSampleCount))
+				fftCount := pffft.adjust_n(auto_cast (transmissionSampleCount + receiveChannelSampleCount - 1))
 				pffftSession := pffft.new_setup(fftCount, .REAL)
 				assert(pffftSession != nil)
 
@@ -414,8 +410,9 @@ convolve_frequency_domain :: proc(sampleCount, transmissionCount, receiveChannel
 				pffft.transform(pffftSession, raw_data(convolutionData), raw_data(convolutionData), raw_data(transmissionFourier), .BACKWARD)
 				pffft.destroy_setup(pffftSession)
 
+				startSample := transmissionSampleRange.minSample + receiveChannelSampleRange.minSample
 				for sample := minSample; sample < maxSample; sample += 1 {
-					receiveDataLine[sample] += convolutionData[sample - minSample]
+					receiveDataLine[sample] += convolutionData[sample - startSample]
 				}
 			}
 		}
@@ -457,12 +454,22 @@ get_spatial_impulse_response :: proc(
 ) -> (
 	impulseResponse: ImpulseResponse,
 ) {
-	rotationAngle := linalg.quaternion_between_two_vector3(element.normal, [3]f32{0, 0, 1})
+	rotationAngle := linalg.quaternion_between_two_vector3([3]f32{0, 0, 1}, element.normal)
 	rotation := linalg.matrix4_from_quaternion(rotationAngle)
-	transform := rotation * linalg.matrix4_translate(element.position)
+	transform := rotation * linalg.matrix4_translate(-element.position)
 	scatterPosition := linalg.matrix_mul_vector(transform, [4]f32{**scatter.position, 1}).xyz
 	dieProjection := linalg.abs(element.size * scatterPosition.xy)
 	distance := linalg.length(scatterPosition)
+
+	// We do not consider scatterers that are to close to the transducer due
+	// to a singularity in the response
+	DISTANCE_EPSILON :: 1e-4
+	if distance < DISTANCE_EPSILON {
+		impulseResponse.rect = {0, 0, 0, 0}
+		impulseResponse.scale = 0
+		return
+	}
+
 	t0 := distance / speedOfSound
 	dt1 := linalg.min_single(dieProjection) / distance / speedOfSound
 	dt2 := linalg.max_single(dieProjection) / distance / speedOfSound
@@ -471,7 +478,7 @@ get_spatial_impulse_response :: proc(
 	impulseResponse.rect = rectTimes * samplingFrequency
 	dt := 1 / samplingFrequency
 
-	powerDenominator := impulseResponse.rect.w - impulseResponse.rect.x <= 1 ? dt : dt2
+	powerDenominator := (impulseResponse.rect.w - impulseResponse.rect.x) <= 1 ? dt : dt2
 	impulseResponse.scale =
 		linalg.sqrt(scatter.amplitude) * element.apodization * element.size.x * element.size.y / (2 * linalg.PI * distance * powerDenominator)
 	return
@@ -573,7 +580,7 @@ sample_aperture_cumulative :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SI
 
 	qDelta := aperture.w - aperture.x <= 1
 	qRect := !qDelta && (aperture.y - aperture.x <= 1)
-	qTri := !qDelta && (aperture.z - aperture.y <= 1)
+	qTri := !qDelta && !qRect && (aperture.z - aperture.y <= 1)
 	qTrap := !(qDelta | qRect | qTri)
 
 	if qDelta {
@@ -581,15 +588,20 @@ sample_aperture_cumulative :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SI
 	}
 
 	if qRect | qTrap {
-		sRect := (aperture.z - aperture.y) * clamp((nf - aperture.y) / (aperture.z - aperture.y + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
+		dy := aperture.z - aperture.y
+		sRect := dy <= 0 ? SIMD_F32(0) : dy * clamp((nf - aperture.y) / dy, SIMD_F32(0), SIMD_F32(1))
 		value += sRect
 	}
 
 	if qTri | qTrap {
-		sTriLeftSat := clamp((nf - aperture.x) / (aperture.y - aperture.x + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
-		sTriLeft := 0.5 * (aperture.y - aperture.x) * sTriLeftSat * sTriLeftSat
-		sTriRightSat := clamp((aperture.w - nf) / (aperture.w - aperture.z + linalg.F32_EPSILON), SIMD_F32(0), SIMD_F32(1))
-		sTriRight := 0.5 * (aperture.w - aperture.z) * (1 - sTriRightSat * sTriRightSat)
+		dxLeft := aperture.y - aperture.x
+		sTriLeftSat := dxLeft <= 0 ? SIMD_F32(0) : clamp((nf - aperture.x) / dxLeft, SIMD_F32(0), SIMD_F32(1))
+		sTriLeft := 0.5 * dxLeft * sTriLeftSat * sTriLeftSat
+
+		dxRight := aperture.w - aperture.z
+		sTriRightSat := dxRight <= 0 ? SIMD_F32(0) : clamp((aperture.w - nf) / dxRight, SIMD_F32(0), SIMD_F32(1))
+		sTriRight := 0.5 * dxRight * (1 - sTriRightSat * sTriRightSat)
+
 		value += sTriLeft + sTriRight
 	}
 
