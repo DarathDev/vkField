@@ -1,5 +1,6 @@
 package vkfield_scripts
 
+import "core:fmt"
 import "core:log"
 import "core:math"
 import "core:math/rand"
@@ -54,6 +55,7 @@ compare_simulators :: proc(
 		return false
 	}
 
+	mismatchBuilder := strings.builder_make()
 	anyMismatch: uint
 	for i in 0 ..< len(cpuData) {
 		cpuValue := cpuData[i]
@@ -61,12 +63,35 @@ compare_simulators :: proc(
 		difference := math.abs(cpuValue - gpuValue)
 		tolerance := OUTPUT_ABSOLUTE_TOLERANCE + OUTPUT_RELATIVE_TOLERANCE * max(math.abs(cpuValue), math.abs(gpuValue))
 		if difference > tolerance {
-			log.errorf("CPU/GPU output mismatch at %d: %e != %e (difference %e, tolerance %e)", i, cpuValue, gpuValue, difference, tolerance)
+			sampleCount := int(cpuSettings.sampleCount)
+			receiveChannelCount := len(receiveChannels)
+			transmissionCount := len(transmissions)
+			sampleIndex := i % sampleCount + 1
+			datalineIndex := i / sampleCount
+			receiveChannelIndex := datalineIndex % receiveChannelCount + 1
+			transmissionIndex := datalineIndex / receiveChannelCount + 1
+			fmt.sbprintfln(
+				&mismatchBuilder,
+				"CPU/GPU output mismatch at sample %d/%d, transmission %d/%d, receive channel %d/%d: %e != %e (difference %e, tolerance %e)",
+				sampleIndex,
+				sampleCount,
+				transmissionIndex,
+				transmissionCount,
+				receiveChannelIndex,
+				receiveChannelCount,
+				cpuValue,
+				gpuValue,
+				difference,
+				tolerance,
+			)
 			anyMismatch += 1
 			if anyMismatch > 10 {
 				break
 			}
 		}
+	}
+	if anyMismatch > 0 {
+		log.error(strings.to_string(mismatchBuilder))
 	}
 
 	return anyMismatch == 0
