@@ -547,7 +547,7 @@ sample_aperture_discrete :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD
 		return simd.clamp(sDelta, SIMD_F32(0), SIMD_F32(1))
 	}
 
-	if qRect := aperture.y - aperture.x <= 1; qRect {
+	if qRect := aperture.y - aperture.x <= linalg.F32_EPSILON; qRect {
 		qRectLeft := and(ge(nf, SIMD_F32(aperture.y - 0.5)), le(nf, SIMD_F32(aperture.y + 0.5)))
 		sRectLeft := nf - (aperture.y - 0.5)
 		value = select(SIMD_U32(and(SIMD_U32(qRect), qRectLeft)), sRectLeft, value)
@@ -560,7 +560,7 @@ sample_aperture_discrete :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SIMD
 		return simd.clamp(value, SIMD_F32(0), SIMD_F32(1))
 	}
 
-	if qTri := aperture.z - aperture.y <= 1; qTri {
+	if qTri := aperture.z - aperture.y <= linalg.F32_EPSILON; qTri {
 		qTriLeft := and(ge(nf, SIMD_F32(aperture.x)), le(nf, SIMD_F32(aperture.y)))
 		sTriLeft := (nf - aperture.x) / (aperture.y - aperture.x + linalg.F32_EPSILON)
 		value = select(SIMD_U32(and(SIMD_U32(qTri), qTriLeft)), sTriLeft, value)
@@ -595,8 +595,8 @@ sample_aperture_cumulative :: proc(n: SIMD_I32, aperture: [4]f32) -> (result: SI
 	value := SIMD_F32(0)
 
 	qDelta := aperture.w - aperture.x <= 1
-	qRect := !qDelta && (aperture.y - aperture.x <= 1)
-	qTri := !qDelta && !qRect && (aperture.z - aperture.y <= 1)
+	qRect := !qDelta && (aperture.y - aperture.x <= linalg.F32_EPSILON)
+	qTri := !qDelta && !qRect && (aperture.z - aperture.y <= linalg.F32_EPSILON)
 	qTrap := !(qDelta | qRect | qTri)
 
 	if qDelta {

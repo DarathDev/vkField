@@ -67,9 +67,9 @@ float sample_rect_aperture(in int i, in float4 nRectT) {
 float b2f(bool v) { return v ? 1.0f : 0.0f; }
 
 float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
-  bool qDelta = rectSamples.w - rectSamples.x <= 1;
-  bool qRect = !qDelta && (rectSamples.y - rectSamples.x <= 1);
-  bool qTri = !qDelta && !qRect && (rectSamples.z - rectSamples.y <= 1);
+  bool qDelta = rectSamples.w - rectSamples.x <= 1.f;
+  bool qRect = !qDelta && (rectSamples.y - rectSamples.x <= EPSILON);
+  bool qTri = !qDelta && !qRect && (rectSamples.z - rectSamples.y <= EPSILON);
   bool qTrap = !(qDelta | qRect | qTri);
 
   float sDelta = n >= rectSamples.x ? 1 : 0;
@@ -91,9 +91,9 @@ float sample_rect_aperture_cumulative(in float n, in float4 rectSamples) {
 }
 
 float sample_rect_aperture_discrete(in float n, in float4 rectSamples) {
-  bool qDelta = rectSamples.w - rectSamples.x <= 1;
-  bool qRect = !qDelta && (rectSamples.y - rectSamples.x <= 1);
-  bool qTri = !qDelta && !qRect && (rectSamples.z - rectSamples.y <= 1);
+  bool qDelta = rectSamples.w - rectSamples.x <= 1.f;
+  bool qRect = !qDelta && (rectSamples.y - rectSamples.x <= EPSILON);
+  bool qTri = !qDelta && !qRect && (rectSamples.z - rectSamples.y <= EPSILON);
   bool qTrap = !(qDelta | qRect | qTri);
 
   bool qRectLeft = (n >= rectSamples.y - 0.5f) & (n <= rectSamples.y + 0.5f);

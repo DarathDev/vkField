@@ -240,9 +240,9 @@ for n = minN:maxN
 end
 
 function value = sample_rect_aperture(n, rectSamples)
-qDelta = rectSamples(4) - rectSamples(1) < 1; % Delta
-qRect = ~qDelta && (rectSamples(2) - rectSamples(1) < 1); % Rectangle
-qTri = ~qDelta && (rectSamples(3) - rectSamples(2) < 1); % Triangle
+qDelta = rectSamples(4) - rectSamples(1) <= 1; % Delta
+qRect = ~qDelta && (rectSamples(2) - rectSamples(1) <= eps); % Rectangle
+qTri = ~qDelta && (rectSamples(3) - rectSamples(2) <= eps); % Triangle
 qTrap = ~(qDelta | qRect | qTri); % Trapezoid
 
 qRectLeft = (n >= rectSamples(2) - 0.5) & (n <= rectSamples(2) + 0.5); % Left Rectangle Edge
@@ -304,9 +304,9 @@ for n = minN:maxN
 end
 
 function value = sample_rect_aperture_cum(n, rectSamples)
-qDelta = rectSamples(1) == rectSamples(4); % Delta
-qRect = ~qDelta && (rectSamples(1) == rectSamples(2)); % Rectangle
-qTri = ~qDelta && (rectSamples(2) == rectSamples(3)); % Triangle
+qDelta = rectSamples(4) - rectSamples(1) < 1; % Delta
+qRect = ~qDelta && (rectSamples(2) - rectSamples(1) < eps); % Rectangle
+qTri = ~qDelta && (rectSamples(3) - rectSamples(2) < eps); % Triangle
 qTrap = ~(qDelta | qRect | qTri); % Trapezoid
 
 sDelta = n >= rectSamples(1); % Delta
