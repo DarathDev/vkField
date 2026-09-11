@@ -77,7 +77,11 @@ simulate_cpu :: proc(
 	transmissionSampleRanges := make([]SampleRange, int(min(batchSize, scatterCount)) * int(batchTxCount), context.allocator)
 	transmissionImpulses := make_aligned([]f32, int(min(batchSize, scatterCount)) * int(batchTxCount) * int(sampleCount), 16, context.allocator)
 	scatterBatchMemory := assert(
-		mem.alloc_bytes_non_zeroed(scatter_batch_memory_size(sampleCount, batchTxCount, maxBatchRxCount, scatterCount, batchSize), align_of(u8), context.allocator),
+		mem.alloc_bytes_non_zeroed(
+			scatter_batch_memory_size(sampleCount, batchTxCount, maxBatchRxCount, scatterCount, batchSize),
+			align_of(u8),
+			context.allocator,
+		),
 	)
 	scatterArena: mem.Arena
 	mem.arena_init(&scatterArena, scatterBatchMemory)
@@ -443,7 +447,10 @@ CpuScatterData :: struct {
 	fftCount:                   i32,
 }
 
-scatter_batch_memory_size :: proc(sampleCount, transmissionCount, receiveChannelCount, scatterCount: i32, scattererBatchSize: i32 = SCATTER_BATCH_SIZE) -> int {
+scatter_batch_memory_size :: proc(
+	sampleCount, transmissionCount, receiveChannelCount, scatterCount: i32,
+	scattererBatchSize: i32 = SCATTER_BATCH_SIZE,
+) -> int {
 	batchSize := int(min(scattererBatchSize, scatterCount))
 	maxRx := int(min(DATALINE_BATCH_SIZE, receiveChannelCount))
 	receiveChannelMetadataSize := maxRx * size_of(SampleRange)
