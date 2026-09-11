@@ -991,6 +991,17 @@ cmd_upload_to_buffer :: proc(commandBuffer: CommandBuffer, data: []byte, buffer:
 	}
 }
 
+cmd_copy_buffer :: proc(commandBuffer: CommandBuffer, source, destination: Buffer, regions: []vk.BufferCopy2) {
+	copyInfo: vk.CopyBufferInfo2 = {
+		sType       = .COPY_BUFFER_INFO_2,
+		srcBuffer   = source.buffer,
+		dstBuffer   = destination.buffer,
+		regionCount = u32(len(regions)),
+		pRegions    = raw_data(regions),
+	}
+	vk.CmdCopyBuffer2(commandBuffer.commandBuffer, &copyInfo)
+}
+
 cmd_upload_to_image :: proc(commandBuffer: CommandBuffer, data: []byte, image: Image, stagingBuffer: Buffer) {
 	assert(image.size == vk.DeviceSize(len(data)))
 	assert(.HOST_VISIBLE in stagingBuffer.memory.properties && .HOST_COHERENT in stagingBuffer.memory.properties)

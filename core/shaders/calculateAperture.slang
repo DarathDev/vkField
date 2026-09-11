@@ -44,7 +44,7 @@ void main(uint2 GlobalInvocationID: SV_DispatchThreadID, uint threadID: SV_Group
   element.apodization = pushData.getElementApodizations()[elementInputIndex];
   element.delay = pushData.getElementDelays()[elementInputIndex];
 
-  uint scattererInputIndex = scattererIndex + pushData.scattererOffset;
+  uint scattererInputIndex = scattererIndex;
   Scatterer scatterer = pushData.getScatterers()[scattererInputIndex];
 
   float dt = 1.f / SamplingFrequency;
