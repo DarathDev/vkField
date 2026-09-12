@@ -13,5 +13,6 @@ VKFIELD_PULSE_ECHO_SHADERS: []SlangShaderFile = {
 	{path = SHADER_FOLDER + "measureAperture.slang", outputName = "measureAperture", type = .Compute},
 	{path = SHADER_FOLDER + "coalesceAperture.slang", outputName = "coalesceAperture", type = .Compute},
 	{path = SHADER_FOLDER + "pulseEchoConvolution.slang", outputName = "pulseEchoConvolution", type = .Compute},
+	{path = SHADER_FOLDER + "temporalResponse.slang", outputName = "temporalResponse", type = .Compute},
 }
 VKFIELD_DEBUG_PRECOMPILED_SHADERS: []SlangShaderFile = {}

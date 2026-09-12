@@ -225,7 +225,7 @@ plan_simulation :: proc(
 	case vkSimulator:
 		sim.info.apertureSampleCount = apertureSampleCount
 		sim.info.scattererBatchSize = scattererBatchSize
-		is_ok(check(plan_vulkan_simulator(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
+		is_ok(check(plan_vulkan_simulator(&sim, settings^, transmissions, receiveChannels, elements, scatters, impulses, excitations))) or_return
 	case cpuSimulator:
 		sim.info.apertureSampleCount = apertureSampleCount
 		sim.info.scattererBatchSize = scattererBatchSize
