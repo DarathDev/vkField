@@ -928,7 +928,7 @@ queue_submit :: proc(queue: Queue, commandBuffers: []CommandBuffer, waits, signa
 		return commandBuffer.queueFamilyIndex == queue.familyIndex
 	}
 	commandBufferMapper :: proc(commandBuffer: CommandBuffer) -> vk.CommandBufferSubmitInfo {
-		assert(commandBuffer.queueFamilyIndex == (cast(^Queue)context.user_ptr).queueIndex)
+		assert(commandBuffer.queueFamilyIndex == (cast(^Queue)context.user_ptr).familyIndex)
 		return {sType = .COMMAND_BUFFER_SUBMIT_INFO, commandBuffer = commandBuffer.commandBuffer}
 	}
 	semaphoreMapper :: proc(barrier: SemaphoreBarrier) -> vk.SemaphoreSubmitInfo {
