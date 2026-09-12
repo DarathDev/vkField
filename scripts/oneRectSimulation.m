@@ -14,10 +14,10 @@ dieKerf = 3e-5;
 fc = 5e6;
 cycleCount = 2;
 
-% impulseResponse = GetImpulseResponse(fc, fs);
-impulseResponse = 1;
-% excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
-excitation = 1;
+impulseResponse = GetImpulseResponse(fc, fs);
+% impulseResponse = 1;
+excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
+% excitation = 1;
 
 % scatterPosition = [0, 0, 20e-3]*1;
 % scatterPosition = [0, 5e-3, 20e-3]*1;
@@ -65,6 +65,8 @@ simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 simulator.Cumulative = false;
 simulator.SimulatorType = vkField.SimulatorType.CPU;
+simulator.Impulses = {single(impulseResponse)};
+simulator.Excitations = {single(excitation)};
 
 simulator.Elements = vkField.RectangularElementSet();
 simulator.Elements.Count = uint32(2);
@@ -80,6 +82,8 @@ transmissions.ElementCounts = uint32(1);
 transmissions.Indices = int32(1);
 transmissions.Apodizations = single(1);
 transmissions.Delays = single(0);
+transmissions.Impulse = ones(1, transmissions.Count, 'uint16');
+transmissions.Excitation = ones(1, transmissions.Count, 'uint16');
 simulator.Transmissions = transmissions;
 
 receiveChannels = vkField.ReceiveChannelSet();
@@ -88,6 +92,7 @@ receiveChannels.ElementCounts = uint32(1);
 receiveChannels.Indices = int32(2);
 receiveChannels.Apodizations = single(1);
 receiveChannels.Delays = single(0);
+receiveChannels.Impulse = ones(1, receiveChannels.Count, 'uint16');
 simulator.ReceiveChannels = receiveChannels;
 
 scatterSet = vkField.ScatterSet();
@@ -336,11 +341,10 @@ mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-outpu
 pulseEcho = vkField_mex(simulator);
 vkStartTime = simulator.StartTime;
 
-% pulseEcho = double(pulseEcho) * 2^-106;
-pulseEcho = double(pulseEcho) * dt^4;
-% pulseEcho = double(pulseEcho);
+pulseEcho = double(pulseEcho) * dt;
 
 vkTimes = vkStartTime + (0:(size(pulseEcho, 1)-1))/fs;
+manTimes = vkStartTime + (0:(size(manualCumConvRf, 2)-1))/fs;
 
 %% Plot
 if plotting
@@ -348,8 +352,8 @@ if plotting
     f1 = figure(); ax1 = axes(); hold(ax1, "on");
     p1(1) = plot(ax1, times*1e6, fullRF, '-');
     p1(2) = plot(ax1, fraunTimes*1e6, fraun, '-');
-    p1(3) = plot(ax1, manVkTimes*1e6, manualConvRf, '-');
-    p1(4) = plot(ax1, manVkTimes*1e6, manualCumConvRf, '-');
+    p1(3) = plot(ax1, manTimes*1e6, manualConvRf, '-');
+    p1(4) = plot(ax1, manTimes*1e6, manualCumConvRf, '-');
     p1(5) = plot(ax1, vkTimes*1e6, pulseEcho, '-');
     legend(ax1, "FieldII", "Manual Fraunhoffer", "Manual Fraounhoffer with Manual Convolution", "Manual Fraounhoffer Cumulative with Manual Convolution", "vkField");
 

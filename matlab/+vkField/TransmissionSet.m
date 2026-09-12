@@ -5,5 +5,7 @@ classdef TransmissionSet
         Indices(1, :) int32
         Apodizations(1, :) single
         Delays(1, :) single
+        Impulse(1, :) uint16
+        Excitation(1, :) uint16
     end
 end

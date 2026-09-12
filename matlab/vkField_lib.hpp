@@ -101,10 +101,14 @@ typedef TransmissionElementSoaSlice ReceiveChannelElementSoaSlice;
 
 typedef struct {
 	TransmissionElementSoaSlice elements;
+	u16 impulse;
+	u16 excitation;
 } Transmission;
 
 typedef struct {
 	ReceiveChannelElementSoaSlice elements;
+	u16 impulse;
+	u16 excitation;
 } ReceiveChannel;
 
 typedef struct {
@@ -126,6 +130,16 @@ typedef struct {
 	Scatter* data;
 	iz len;
 } ScatterSlice;
+
+typedef struct {
+	f32* data;
+	iz len;
+} SignalResponse;
+
+typedef struct {
+	SignalResponse* data;
+	iz len;
+} SignalResponseSlice;
 
 typedef void ( *CLogProc )( void* pUserData, const char* text );
 
@@ -165,6 +179,8 @@ extern "C" {
 		ReceiveChannelSlice receiveChannels,
 		RectangularElementSoaSlice elements,
 		ScatterSlice scatters,
+		SignalResponseSlice impulses,
+		SignalResponseSlice excitations,
 		CLogProc logFunc,
 		void* pUserData
 	);
@@ -176,6 +192,8 @@ extern "C" {
 		ReceiveChannelSlice receiveChannels,
 		RectangularElementSoaSlice elements,
 		ScatterSlice scatters,
+		SignalResponseSlice impulses,
+		SignalResponseSlice excitations,
 		float* pulseEcho,
 		CLogProc logFunc,
 		void* pUserData

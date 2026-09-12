@@ -22,6 +22,8 @@ compare_simulators :: proc(
 	receiveChannels: []vkField.ReceiveChannel,
 	elements: #soa[]vkField.RectangularElement,
 	scatters: []vkField.Scatter,
+	impulses: []vkField.TransducerImpulse,
+	excitations: []vkField.Excitation,
 ) -> (
 	ok := true,
 ) {
@@ -39,13 +41,13 @@ compare_simulators :: proc(
 	gpuSim: vkField.Simulator = gpuSimulator
 	defer vkField.destroy_vulkan_simulator(&gpuSim.(vkField.vkSimulator))
 
-	if !vkField.plan_simulation(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters) do return false
-	if !vkField.plan_simulation(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters) do return false
+	if !vkField.plan_simulation(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
+	if !vkField.plan_simulation(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
 
-	cpuData, cpuSimulationOk := vkField.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters)
+	cpuData, cpuSimulationOk := vkField.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	if !cpuSimulationOk do return false
 	defer delete(cpuData)
-	gpuData, gpuSimulationOk := vkField.simulate(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters)
+	gpuData, gpuSimulationOk := vkField.simulate(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	if !gpuSimulationOk do return false
 	defer delete(gpuData)
 
@@ -170,7 +172,12 @@ oneRectSimulation :: proc() -> (ok := true) {
 	}
 	scatters := slice.from_ptr(&scatter, 1)
 
-	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters)
+	impulses := []vkField.TransducerImpulse{{1, 2}, {1, -1}}
+	excitations := []vkField.Excitation{{0.5, 1}}
+	transmissions[0].impulse = 1
+	transmissions[0].excitation = 1
+	receiveChannels[0].impulse = 2
+	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 }
 
 linearArraySimulation :: proc() -> (ok := true) {
@@ -205,7 +212,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {10e-3, 100e-3})
 	defer delete(scatters)
 
-	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters)
+	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters, nil, nil)
 }
 
 matrixArraySimulation :: proc() -> (ok := true) {
@@ -240,7 +247,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {0, 100e-3})
 	defer delete(scatters)
 
-	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters)
+	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters, nil, nil)
 }
 
 @(test)
@@ -251,6 +258,26 @@ oneRectSimulationTest :: proc(t: ^testing.T) {
 @(test)
 linearArraySimulationTest :: proc(t: ^testing.T) {
 	_ = utility.expect(t, linearArraySimulation())
+}
+
+@(test)
+temporalResponseTest :: proc(t: ^testing.T) {
+	input := []f32{1, 2, 3, 0, 0, 0, 0, 0}
+	impulses := []vkField.TransducerImpulse{{1, 2}, {1, -1}}
+	excitations := []vkField.Excitation{{0.5, 1}}
+	transmissions := []vkField.Transmission{{impulse = 1, excitation = 1}}
+	receiveChannels := []vkField.ReceiveChannel{{impulse = 2}}
+
+	vkField.apply_temporal_responses(input, i32(len(input)), 1, transmissions, receiveChannels, impulses, excitations)
+	expected := []f32{0.5, 2.5, 4.5, 2.5, -4.0, -6.0, 0.0, 0.0}
+	passed := true
+	for actual, index in input {
+		expectedValue := expected[index]
+		if math.abs(actual - expectedValue) > f32(1e-6) {
+			passed = false
+		}
+	}
+	_ = utility.expect(t, passed)
 }
 
 // @(test)

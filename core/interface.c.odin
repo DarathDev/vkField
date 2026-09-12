@@ -65,6 +65,8 @@ plan_simulation_c :: proc "c" (
 	receiveChannels: []ReceiveChannel,
 	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
 	cLogger: cLogProc = nil,
 	loggerUserData: rawptr = nil,
 ) -> (
@@ -72,7 +74,7 @@ plan_simulation_c :: proc "c" (
 ) {
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	return plan_simulation(simulator, settings, transmissions, receiveChannels, elements, scatters)
+	return plan_simulation(simulator, settings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 }
 
 @(export)
@@ -83,13 +85,15 @@ simulate_c :: proc "c" (
 	receiveChannels: []ReceiveChannel,
 	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
 	pulseEcho: [^]f32,
 	cLogger: cLogProc = nil,
 	loggerUserData: rawptr = nil,
 ) -> bool {
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, loggerUserData)
-	data, ok := simulate(simulator, settings, transmissions, receiveChannels, elements, scatters)
+	data, ok := simulate(simulator, settings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	copy(pulseEcho[:len(data)], data)
 	delete(data)
 	free_all(context.temp_allocator)

@@ -57,6 +57,8 @@ transmit.ElementCounts = uint32(columnCount);
 transmit.Indices = int32(1:columnCount);
 transmit.Apodizations = ones(1, columnCount, 'single');
 transmit.Delays = zeros(1, columnCount, 'single');
+transmit.Impulse = ones(1, transmit.Count, 'uint16');
+transmit.Excitation = ones(1, transmit.Count, 'uint16');
 
 receiveChannels = vkField.ReceiveChannelSet();
 receiveChannels.Count = uint32(columnCount);
@@ -64,6 +66,7 @@ receiveChannels.ElementCounts = repmat(uint32(1), 1, columnCount);
 receiveChannels.Indices = int32(columnCount + (1:columnCount));
 receiveChannels.Apodizations = ones(1, columnCount, 'single');
 receiveChannels.Delays = zeros(1, columnCount, 'single');
+receiveChannels.Impulse = ones(1, receiveChannels.Count, 'uint16');
 
 results = struct('scatterCount', cell(size(scatterCounts)), 'cpu', cell(size(scatterCounts)), ...
     'gpu', cell(size(scatterCounts)), 'cpuGpu', cell(size(scatterCounts)));
@@ -84,6 +87,8 @@ for resultIndex = 1:numel(scatterCounts)
         simulation.Cumulative = true;
         simulation.SamplingFrequency = single(fs);
         simulation.SpeedOfSound = single(c);
+        simulation.Impulses = {single(impulseResponse)};
+        simulation.Excitations = {single(excitation)};
         simulation.Elements = vkField.RectangularElementSet();
         simulation.Elements.Count = uint32(elementCount);
         simulation.Elements.Positions = elementPositions;
@@ -99,7 +104,7 @@ for resultIndex = 1:numel(scatterCounts)
         simulation.Scatters.Amplitudes = single(scatterAmplitudes);
 
         vkData = vkField_mex(simulation);
-        vkData = applyResponseFilters(squeeze(double(vkData(:, :, 1))), impulseResponse, excitation, dt) * plotScale;
+        vkData = squeeze(double(vkData(:, :, 1))) * plotScale;
         vkTimes = double(simulation.StartTime) + (0:size(vkData, 1) - 1) / fs;
         [fieldAligned, vkAligned, commonTimes] = align_signal_union(vkData, vkTimes, fieldData, fieldTimes, fs);
         metrics = compareSignals(vkAligned, fieldAligned);

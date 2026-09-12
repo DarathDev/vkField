@@ -27,6 +27,8 @@ classdef Simulation < handle
         Transmissions(1,1) vkField.TransmissionSet
         ReceiveChannels(1,1) vkField.ReceiveChannelSet
         Scatters(1,1) vkField.ScatterSet
+        Impulses(1,:) cell
+        Excitations(1,:) cell
     end
 
     methods

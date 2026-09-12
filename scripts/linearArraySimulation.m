@@ -22,10 +22,10 @@ dieKerfR = 3e-5;
 fc = 5e6;
 cycleCount = 2;
 
-% impulseResponse = GetImpulseResponse(fc, fs);
-impulseResponse = 1;
-% excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
-excitation = 1;
+impulseResponse = GetImpulseResponse(fc, fs);
+% impulseResponse = 1;
+excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
+% excitation = 1;
 
 nScatters = 16;
 scatterPosition = rand(3, nScatters) .* [16e-3, 16e-3, 100e-3]' + [-8e-3, -8e-3, 0]';
@@ -78,6 +78,8 @@ simulator.Cumulative = true;
 simulator.SimulatorType = vkField.SimulatorType.CPU;
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
+simulator.Impulses = {single(impulseResponse)};
+simulator.Excitations = {single(excitation)};
 
 simulator.Elements = vkField.RectangularElementSet();
 simulator.Elements.Count = uint32(size(tData, 2) + size(rData, 2));
@@ -93,6 +95,8 @@ transmit.ElementCounts = uint32(size(tData, 2));
 transmit.Indices = int32(1:size(tData, 2));
 transmit.Apodizations = single(tData(5, :));
 transmit.Delays = single(tData(23, :));
+transmit.Impulse = ones(1, transmit.Count, 'uint16');
+transmit.Excitation = ones(1, transmit.Count, 'uint16');
 simulator.Transmissions = transmit;
 
 receiveChannels = vkField.ReceiveChannelSet();
@@ -101,6 +105,7 @@ receiveChannels.ElementCounts = repmat(uint32(rowCountR), 1, columnCountR);
 receiveChannels.Indices = int32(size(tData, 2) + (1:size(rData, 2)));
 receiveChannels.Apodizations = single(rData(5, :));
 receiveChannels.Delays = single(rData(23, :));
+receiveChannels.Impulse = ones(1, receiveChannels.Count, 'uint16');
 simulator.ReceiveChannels = receiveChannels;
 
 simulator.Scatters = vkField.ScatterSet();
@@ -120,8 +125,8 @@ fprintf("vkField Time == %d\n", vkTime);
 fprintf("vkField Self Time == %d\n", simulator.Metrics.SimulationTime);
 fprintf("Relative Speed Up == %.3fx\n", fieldTime / simulator.Metrics.SimulationTime);
 
-pulseEcho = double(pulseEcho) * dt^4;
-pulseEcho = fliplr(pulseEcho);
+pulseEcho = double(pulseEcho) * dt;
+% pulseEcho = fliplr(pulseEcho);
 
 vkTimes = simulator.StartTime + (0:(size(pulseEcho, 1)-1))/fs;
 if plotting

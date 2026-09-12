@@ -89,11 +89,9 @@ for caseIndex = 1:caseCount
     elementDelays = single([0, 0]);
 
     [cpuData, cpuStartTime] = run_vkfield(vkField.SimulatorType.CPU, elementPositions, elementNormals, elementSizes, ...
-        elementApodizations, elementDelays, scatterPosition, fs, c);
+        elementApodizations, elementDelays, scatterPosition, fs, c, impulseResponse, excitation);
     [gpuData, gpuStartTime] = run_vkfield(vkField.SimulatorType.GPU, elementPositions, elementNormals, elementSizes, ...
-        elementApodizations, elementDelays, scatterPosition, fs, c);
-    cpuData = applyResponseFilters(cpuData, impulseResponse, excitation, dt);
-    gpuData = applyResponseFilters(gpuData, impulseResponse, excitation, dt);
+        elementApodizations, elementDelays, scatterPosition, fs, c, impulseResponse, excitation);
 
     [fieldAligned, cpuAligned, gpuAligned, compareTimes] = align_signals(...
         cpuData, cpuStartTime, gpuData, gpuStartTime, fieldData, fieldStartTime, fs);
@@ -130,13 +128,15 @@ end
 
 fprintf('Completed %d reproducible one-rectangle cases.\n', caseCount);
 
-function [data, startTime] = run_vkfield(simulatorType, positions, normals, sizes, apodizations, delays, scatterPosition, fs, c)
+function [data, startTime] = run_vkfield(simulatorType, positions, normals, sizes, apodizations, delays, scatterPosition, fs, c, impulseResponse, excitation)
 simulation = vkField.Simulation();
 simulation.SimulatorType = simulatorType;
 simulation.Cumulative = true;
 simulation.GpuSettings.EnableDriverDebugMessages = false;
 simulation.SamplingFrequency = single(fs);
 simulation.SpeedOfSound = single(c);
+simulation.Impulses = {single(impulseResponse)};
+simulation.Excitations = {single(excitation)};
 simulation.Elements = vkField.RectangularElementSet();
 simulation.Elements.Count = uint32(2);
 simulation.Elements.Positions = positions;
@@ -150,6 +150,8 @@ transmission.ElementCounts = uint32(1);
 transmission.Indices = int32(1);
 transmission.Apodizations = single(1);
 transmission.Delays = single(0);
+transmission.Impulse = ones(1, transmission.Count, 'uint16');
+transmission.Excitation = ones(1, transmission.Count, 'uint16');
 simulation.Transmissions = transmission;
 receiveChannel = vkField.ReceiveChannelSet();
 receiveChannel.Count = uint32(1);
@@ -157,6 +159,7 @@ receiveChannel.ElementCounts = uint32(1);
 receiveChannel.Indices = int32(2);
 receiveChannel.Apodizations = single(1);
 receiveChannel.Delays = single(0);
+receiveChannel.Impulse = ones(1, receiveChannel.Count, 'uint16');
 simulation.ReceiveChannels = receiveChannel;
 simulation.Scatters = vkField.ScatterSet();
 simulation.Scatters.Count = uint32(1);

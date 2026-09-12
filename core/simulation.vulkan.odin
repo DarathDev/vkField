@@ -494,6 +494,8 @@ vkSimulate :: proc(
 	receiveChannels: []ReceiveChannel,
 	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
 	allocator := context.allocator,
 ) -> (
 	response: []f32,
@@ -816,6 +818,8 @@ vkSimulate :: proc(
 	check(vk.WaitForFences(device.device, 1, &simulator.computeFence, true, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
 	vkField_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
 	vk.DeviceWaitIdle(device.device) or_return
+	// Keep temporal filtering on the validated CPU path until its dedicated shader is implemented.
+	apply_temporal_responses(response, settings.sampleCount, 1 / settings.samplingFrequency, transmissions, receiveChannels, impulses, excitations)
 	return
 }
 

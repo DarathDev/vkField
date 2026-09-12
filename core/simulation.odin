@@ -69,8 +69,15 @@ Scatter :: struct {
 }
 #assert(size_of(Scatter) == 16)
 
+TransducerImpulse :: distinct []f32
+Excitation :: TransducerImpulse
+
+// Transducer impulse and excitation use MATLAB-compatible one-based response indices.
+// Zero is reserved as the null/identity index; a nonzero index addresses response[index - 1].
 Transmission :: struct {
-	elements: #soa[]TransmissionElement,
+	elements:   #soa[]TransmissionElement,
+	impulse:    u16,
+	excitation: u16,
 }
 
 ReceiveChannel :: distinct Transmission
@@ -105,6 +112,8 @@ simulate :: proc(
 	receiveChannels: []ReceiveChannel,
 	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
 	allocator := context.allocator,
 ) -> (
 	data: []f32,
@@ -138,9 +147,9 @@ simulate :: proc(
 			LaunchOrShowRenderdocUI(rdocApi)
 		}
 
-		data = is_ok(check(vkSimulate(&sim, settings^, transmissions, receiveChannels, elements, scatters))) or_return
+		data = is_ok(check(vkSimulate(&sim, settings^, transmissions, receiveChannels, elements, scatters, impulses, excitations))) or_return
 	case cpuSimulator:
-		data = check(simulate_cpu(&sim, settings^, transmissions, receiveChannels, elements, scatters)) or_return
+		data = check(simulate_cpu(&sim, settings^, transmissions, receiveChannels, elements, scatters, impulses, excitations)) or_return
 	}
 	time.stopwatch_stop(&stopwatch)
 	settings.metrics.simulationTime = auto_cast time.duration_seconds(time.stopwatch_duration(stopwatch))
@@ -155,6 +164,8 @@ plan_simulation :: proc(
 	receiveChannels: []ReceiveChannel,
 	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
 ) -> (
 	ok := true,
 ) {
@@ -175,6 +186,13 @@ plan_simulation :: proc(
 			assert(element.index >= 0 && element.index < i32(len(elements)))
 		}
 	}
+	for transmission in transmissions {
+		assert(transmission.impulse == 0 || int(transmission.impulse) <= len(impulses))
+		assert(transmission.excitation == 0 || int(transmission.excitation) <= len(excitations))
+	}
+	for receiveChannel in receiveChannels {
+		assert(receiveChannel.impulse == 0 || int(receiveChannel.impulse) <= len(impulses))
+	}
 
 	centroid := calculate_array_centroid(elements)
 	sort_scatters_by_centroid_distance(scatters, centroid)
@@ -186,6 +204,16 @@ plan_simulation :: proc(
 	sampleCountPadding :: 6
 	settings.sampleCount += sampleCountPadding
 	settings.startTime -= sampleCountPadding / 4 / settings.samplingFrequency
+
+	maxTemporalTail: i32
+	for transmission in transmissions {
+		transmissionLength := response_length(impulses, transmission.impulse) + response_length(excitations, transmission.excitation) - 1
+		for receiveChannel in receiveChannels {
+			receiveLength := response_length(impulses, receiveChannel.impulse)
+			maxTemporalTail = max(maxTemporalTail, transmissionLength + receiveLength - 2)
+		}
+	}
+	settings.sampleCount += maxTemporalTail
 
 	// We are rounding up to the nearest multiple of 32
 	// PFFFT requires this for the CPU simulator, and it avoids some potential warp divergence on the GPU
@@ -204,6 +232,12 @@ plan_simulation :: proc(
 		check(plan_cpu_simulation(&sim, settings)) or_return
 	}
 	return
+}
+
+response_length :: proc(responses: $T, index: u16) -> i32 {
+	if index == 0 do return 1
+	response := responses[int(index) - 1]
+	return max(i32(1), i32(len(response)))
 }
 
 plan_scatterer_batching :: proc(

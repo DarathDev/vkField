@@ -38,6 +38,8 @@ simulate_cpu :: proc(
 	receiveChannels: []ReceiveChannel,
 	elements: #soa[]RectangularElement,
 	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
 ) -> (
 	data: []f32,
 	ok := true,
@@ -290,7 +292,67 @@ simulate_cpu :: proc(
 			}
 		}
 	}
+
+	apply_temporal_responses(data, sampleCount, 1 / samplingFrequency, transmissions, receiveChannels, impulses, excitations)
 	return
+}
+
+apply_temporal_responses :: proc(
+	data: []f32,
+	sampleCount: i32,
+	sampleInterval: f32,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
+) {
+	maxResponseLength: i32 = 1
+	for response in impulses do maxResponseLength = max(maxResponseLength, i32(len(response)))
+	for response in excitations do maxResponseLength = max(maxResponseLength, i32(len(response)))
+
+	current := make_aligned([]f32, sampleCount, 16, context.allocator)
+	next := make_aligned([]f32, sampleCount, 16, context.allocator)
+	defer delete(current)
+	defer delete(next)
+
+	for transmission, transmissionIndex in transmissions {
+		for receiveChannel, receiveChannelIndex in receiveChannels {
+			lineOffset := (receiveChannelIndex + transmissionIndex * len(receiveChannels)) * int(sampleCount)
+			line := data[lineOffset:lineOffset + int(sampleCount)]
+			copy(current, line)
+
+			if transmission.impulse != 0 {
+				convolve_temporal_response(current, next, impulses[int(transmission.impulse) - 1], sampleInterval)
+				temporary := current
+				current = next
+				next = temporary
+			}
+			if transmission.excitation != 0 {
+				convolve_temporal_response(current, next, excitations[int(transmission.excitation) - 1], sampleInterval)
+				temporary := current
+				current = next
+				next = temporary
+			}
+			if receiveChannel.impulse != 0 {
+				convolve_temporal_response(current, next, impulses[int(receiveChannel.impulse) - 1], sampleInterval)
+				temporary := current
+				current = next
+				next = temporary
+			}
+			copy(line, current)
+		}
+	}
+}
+
+convolve_temporal_response :: proc(current, next: []f32, response: $T, sampleInterval: f32) {
+	if len(response) == 0 do return
+	slice.zero(next)
+	for outputIndex in 0 ..< len(current) {
+		firstInput := max(0, outputIndex - len(response) + 1)
+		for inputIndex in firstInput ..< outputIndex + 1 {
+			next[outputIndex] += current[inputIndex] * response[outputIndex - inputIndex] * sampleInterval
+		}
+	}
 }
 
 convolve_time_domain :: proc(sampleCount, transmissionCount, receiveChannelCount: i32, scatters: []CpuScatterData, data: []f32) {

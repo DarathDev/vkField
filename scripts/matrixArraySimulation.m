@@ -22,10 +22,10 @@ dieKerfR = 3e-5;
 fc = 5e6;
 cycleCount = 2;
 
-% impulseResponse = GetImpulseResponse(fc, fs);
-impulseResponse = 1;
-% excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
-excitation = 1;
+impulseResponse = GetImpulseResponse(fc, fs);
+% impulseResponse = 1;
+excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
+% excitation = 1;
 
 % scatterPosition = [0, 0, 20e-3]'*1;
 % scatterPosition = [0, 5e-3, 20e-3]'*1;
@@ -78,6 +78,8 @@ simulator.Cumulative = false;
 
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
+simulator.Impulses = {single(impulseResponse)};
+simulator.Excitations = {single(excitation)};
 
 simulator.Elements = vkField.RectangularElementSet();
 simulator.Elements.Count = uint32(size(tData, 2) + size(rData, 2));
@@ -93,6 +95,8 @@ transmit.ElementCounts = uint32(size(tData, 2));
 transmit.Indices = int32(1:size(tData, 2));
 transmit.Apodizations = single(tData(5, :));
 transmit.Delays = single(tData(23, :));
+transmit.Impulse = ones(1, transmit.Count, 'uint16');
+transmit.Excitation = ones(1, transmit.Count, 'uint16');
 simulator.Transmissions = transmit;
 
 receiveChannels = vkField.ReceiveChannelSet();
@@ -101,6 +105,7 @@ receiveChannels.ElementCounts = ones(1, size(rData, 2), 'uint32');
 receiveChannels.Indices = int32(size(tData, 2) + (1:size(rData, 2)));
 receiveChannels.Apodizations = single(rData(5, :));
 receiveChannels.Delays = single(rData(23, :));
+receiveChannels.Impulse = ones(1, receiveChannels.Count, 'uint16');
 simulator.ReceiveChannels = receiveChannels;
 
 simulator.Scatters = vkField.ScatterSet();
@@ -119,7 +124,7 @@ fprintf("vkField Time == %d\n", vkTime);
 fprintf("vkField Self Time == %d\n", simulator.Metrics.SimulationTime);
 fprintf("Relative Speed Up == %d\n", fieldTime / simulator.Metrics.SimulationTime);
 
-pulseEcho = double(pulseEcho) * dt^4;
+pulseEcho = double(pulseEcho) * dt;
 
 vkTimes = simulator.StartTime + (0:(size(pulseEcho, 1)-1))/fs;
 

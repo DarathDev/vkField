@@ -5,6 +5,8 @@
 #include <cstring>
 #include <functional>
 #include <stdint.h>
+#include <stdexcept>
+#include <vector>
 
 using namespace matlab::data;
 using matlab::mex::ArgumentList;
@@ -52,6 +54,18 @@ static void freeReceiveChannelSlice(ReceiveChannelSlice* receiveChannels) {
 	freeTransmissionSlice(reinterpret_cast<TransmissionSlice*>( receiveChannels ));
 }
 
+static void freeSignalResponseSlice(SignalResponseSlice* responses) {
+	if (responses == nullptr || responses->data == nullptr) {
+		return;
+	}
+	for (iz i = 0; i < responses->len; ++i) {
+		delete[ ] responses->data[i].data;
+	}
+	delete[ ] responses->data;
+	responses->data = nullptr;
+	responses->len = 0;
+}
+
 template <typename T> const T* getDataPtr(matlab::data::Array arr) {
 	const matlab::data::TypedArray<T> arr_t = arr;
 	matlab::data::TypedIterator<const T> it(arr_t.begin());
@@ -78,9 +92,11 @@ public:
 		TransmissionSlice transmissions;
 		ReceiveChannelSlice receiveChannels;
 		ScatterSlice scatters;
+		SignalResponseSlice impulses;
+		SignalResponseSlice excitations;
 
 		readSimulationInputs(mxSimulator, settings, simulatorType,
-			elements, transmissions, receiveChannels, scatters);
+			elements, transmissions, receiveChannels, scatters, impulses, excitations);
 
 		Simulator* simulator;
 		switch (simulatorType) {
@@ -98,7 +114,7 @@ public:
 		}
 
 		plan_simulation_c(simulator, &settings, transmissions, receiveChannels, elements,
-					  scatters, printLogger, this);
+					  scatters, impulses, excitations, printLogger, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime",
 						   factory.createScalar<f32>(settings.startTime));
 		matlabPtr->setProperty(mxSimulator, u"SampleCount",
@@ -108,7 +124,7 @@ public:
 			settings.sampleCount * receiveChannels.len * transmissions.len);
 
 		simulate_c(simulator, &settings, transmissions, receiveChannels, elements,
-				   scatters, pulseEchoBuffer.get(), printLogger, this);
+				   scatters, impulses, excitations, pulseEchoBuffer.get(), printLogger, this);
 		ObjectArray mxMetrics = matlabPtr->getProperty(mxSimulator, u"Metrics");
 		matlabPtr->setProperty(mxMetrics, u"SimulationTime",
 							   factory.createScalar<f32>(settings.simulationMetrics.simulationTime));
@@ -133,6 +149,8 @@ public:
 		freeRectangularElementSoaSlice(&elements);
 		freeTransmissionSlice(&transmissions);
 		freeReceiveChannelSlice(&receiveChannels);
+		freeSignalResponseSlice(&impulses);
+		freeSignalResponseSlice(&excitations);
 		free(scatters.data);
 
 		void mexUnlock();
@@ -158,7 +176,9 @@ public:
 		RectangularElementSoaSlice& elements,
 		TransmissionSlice& transmissions,
 		ReceiveChannelSlice& receiveChannels,
-		ScatterSlice& scatters) {
+		ScatterSlice& scatters,
+		SignalResponseSlice& impulses,
+		SignalResponseSlice& excitations) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
 
 		const EnumArray mxSimulatorType =
@@ -184,6 +204,10 @@ public:
 			matlabPtr->getProperty(mxSimulator, u"ReceiveChannels");
 		const ObjectArray mxScatterSet =
 			matlabPtr->getProperty(mxSimulator, u"Scatters");
+		const CellArray mxImpulses =
+			matlabPtr->getProperty(mxSimulator, u"Impulses");
+		const CellArray mxExcitations =
+			matlabPtr->getProperty(mxSimulator, u"Excitations");
 
 		const std::string simulatorTypeName = static_cast<std::string>( mxSimulatorType[0] );
 		if (simulatorTypeName == "CPU") {
@@ -193,7 +217,7 @@ public:
 			simulatorType = SimulatorType::GPU;
 		}
 		else {
-			assert(false, "Unsupported simulator type");
+			throw std::runtime_error("Unsupported simulator type");
 		}
 		settings.samplingFrequency = mxSamplingFrequency[0];
 		settings.speedOfSound = mxSpeedOfSound[0];
@@ -208,7 +232,7 @@ public:
 			settings.gpuSettings.backend = GpuBackend::Vulkan;
 		}
 		else {
-			assert(false, "Unsupported GPU backend");
+			throw std::runtime_error("Unsupported GPU backend");
 		}
 		settings.gpuSettings.dispatchWorkLimit =
 			(i32)matlabPtr->getProperty(mxGpuSettings, "DispatchWorkLimit")[0];
@@ -218,6 +242,8 @@ public:
 		elements = { nullptr, nullptr, nullptr, nullptr, nullptr, 0 };
 		transmissions = { nullptr, 0 };
 		receiveChannels = { nullptr, 0 };
+		impulses = { nullptr, 0 };
+		excitations = { nullptr, 0 };
 		scatters.data = (Scatter*)malloc(sizeof(Scatter) * scatterCount);
 		scatters.len = scatterCount;
 
@@ -225,6 +251,8 @@ public:
 		copyTransmissions(mxTransmissions, &transmissions);
 		copyReceiveChannels(mxReceiveChannels, &receiveChannels);
 		copyScatters(mxScatterSet, scatters.data, scatters.len);
+		copySignalResponses(mxImpulses, &impulses);
+		copySignalResponses(mxExcitations, &excitations);
 	}
 
 	void copyElements(const Array& matlabArray, RectangularElementSoaSlice* slice) {
@@ -264,13 +292,14 @@ public:
 		std::memcpy(slice->delay, pDelays, numelDelays * sizeof(f32));
 	}
 
-	void copyTransmissions(const ObjectArray& mxTransmissionSet, TransmissionSlice* slice) {
+	void copyTransmissions(const ObjectArray& mxTransmissionSet, TransmissionSlice* slice, bool hasExcitation = true) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
 		const TypedArray<u32> mxCount = matlabPtr->getProperty(mxTransmissionSet, u"Count");
 		const TypedArray<u32> mxElementCounts = matlabPtr->getProperty(mxTransmissionSet, u"ElementCounts");
 		const TypedArray<i32> mxIndices = matlabPtr->getProperty(mxTransmissionSet, u"Indices");
 		const TypedArray<f32> mxApodizations = matlabPtr->getProperty(mxTransmissionSet, u"Apodizations");
 		const TypedArray<f32> mxDelays = matlabPtr->getProperty(mxTransmissionSet, u"Delays");
+		const TypedArray<u16> mxImpulses = matlabPtr->getProperty(mxTransmissionSet, u"Impulse");
 
 		slice->len = static_cast<iz>( mxCount[0] );
 		slice->data = new Transmission[slice->len];
@@ -284,6 +313,15 @@ public:
 		const i32* pIndices = getDataPtr<i32>(mxIndices);
 		const f32* pApodizations = getDataPtr<f32>(mxApodizations);
 		const f32* pDelays = getDataPtr<f32>(mxDelays);
+		const u16* pImpulses = getDataPtr<u16>(mxImpulses);
+		std::vector<u16> excitationIndices(slice->len, 0);
+		if (hasExcitation) {
+			const TypedArray<u16> mxExcitations = matlabPtr->getProperty(mxTransmissionSet, u"Excitation");
+			const u16* pExcitations = getDataPtr<u16>(mxExcitations);
+			for (iz i = 0; i < slice->len; ++i) {
+				excitationIndices[i] = pExcitations[i];
+			}
+		}
 
 		uz offset = 0;
 		for (iz i = 0; i < slice->len; ++i) {
@@ -295,6 +333,8 @@ public:
 			slice->data[i].elements.index = new i32[numel];
 			slice->data[i].elements.apodization = new f32[numel];
 			slice->data[i].elements.delay = new f32[numel];
+			slice->data[i].impulse = pImpulses[i];
+			slice->data[i].excitation = excitationIndices[i];
 
 			std::memcpy(slice->data[i].elements.index, pIndices + offset, numel * sizeof(i32));
 			std::memcpy(slice->data[i].elements.apodization, pApodizations + offset, numel * sizeof(f32));
@@ -309,7 +349,22 @@ public:
 	}
 
 	void copyReceiveChannels(const ObjectArray& matlabArray, ReceiveChannelSlice* slice) {
-		copyTransmissions(matlabArray, reinterpret_cast<TransmissionSlice*>(slice));
+		copyTransmissions(matlabArray, reinterpret_cast<TransmissionSlice*>(slice), false);
+	}
+
+	void copySignalResponses(const CellArray& matlabArray, SignalResponseSlice* slice) {
+		slice->len = static_cast<iz>( matlabArray.getNumberOfElements() );
+		slice->data = new SignalResponse[slice->len] { };
+		for (iz i = 0; i < slice->len; ++i) {
+			const Array response = matlabArray[i];
+			const uz length = response.getNumberOfElements();
+			slice->data[i].len = static_cast<iz>(length);
+			slice->data[i].data = new f32[length];
+			if (length != 0) {
+				const f32* data = getDataPtr<f32>(response);
+				std::memcpy(slice->data[i].data, data, length * sizeof(f32));
+			}
+		}
 	}
 
 	void copyScatters(const Array& matlabArray, Scatter* array, uz length) {
