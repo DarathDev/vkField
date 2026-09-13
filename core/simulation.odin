@@ -3,6 +3,7 @@ package vkfield
 import "base:runtime"
 import "core:log"
 import "core:math"
+import "core:math/bits"
 import "core:math/linalg"
 import "core:slice"
 import "core:time"
@@ -19,6 +20,9 @@ check :: utility.check
 assert :: utility.assert
 @(private = "file")
 assume :: utility.assume
+
+PULSE_CONV_SAMPLE_WORKGROUP_SIZE :: 64
+PULSE_CONVOLUTION_TILE_SIZE :: 256
 
 Simulator :: union {
 	cpuSimulator,
@@ -194,8 +198,7 @@ plan_simulation :: proc(
 		assert(receiveChannel.impulse == 0 || int(receiveChannel.impulse) <= len(impulses))
 	}
 
-	centroid := calculate_array_centroid(elements)
-	sort_scatters_by_centroid_distance(scatters, centroid)
+	sort_scatters_by_distance_interval(scatters, transmissions, receiveChannels, elements)
 
 	distanceRange, _, _ := findDistanceLimits(transmissions, receiveChannels, elements, scatters)
 	settings.startTime = distanceRange.minDistance / settings.speedOfSound
@@ -276,7 +279,7 @@ plan_scatterer_batching :: proc(
 			maxBatchApertureSampleCount = max(maxBatchApertureSampleCount, batchApertureSampleCount)
 		}
 
-		sharedMemoryNeeded := 2 * maxBatchApertureSampleCount * u32(size_of(f32))
+		sharedMemoryNeeded := (PULSE_CONVOLUTION_TILE_SIZE + PULSE_CONVOLUTION_TILE_SIZE + PULSE_CONV_SAMPLE_WORKGROUP_SIZE - 1) * u32(size_of(f32))
 		if sharedMemoryNeeded <= maxSharedMemoryAllowed || scattererBatchSize <= 1 {
 			apertureSampleCount = maxBatchApertureSampleCount
 			break
@@ -306,6 +309,261 @@ sort_scatters_by_centroid_distance :: proc(scatters: []Scatter, centroid: [3]f32
 			db := linalg.length2(b.position - centroid_ptr^)
 			return da < db
 		}, &c)
+}
+
+DistanceBounds :: struct {
+	minimum: [3]f32,
+	maximum: [3]f32,
+}
+
+DEFAULT_DISTANCE_BOUNDS: DistanceBounds : {minimum = {math.INF_F32, math.INF_F32, math.INF_F32}, maximum = {-math.INF_F32, -math.INF_F32, -math.INF_F32}}
+
+DistanceRepresentatives :: struct {
+	transmit: [dynamic; 8][3]f32,
+	receive:  [dynamic; 8][3]f32,
+}
+
+sort_scatters_by_distance_interval :: proc(
+	scatters: []Scatter,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
+) {
+	if len(scatters) <= 1 do return
+
+	transmitBounds := DEFAULT_DISTANCE_BOUNDS
+	for transmission in transmissions {
+		for transmissionElement in transmission.elements {
+			transmitBounds.minimum = linalg.min(transmitBounds.minimum, elements[transmissionElement.index].position)
+			transmitBounds.maximum = linalg.min(transmitBounds.maximum, elements[transmissionElement.index].position)
+		}
+	}
+	receiveBounds := DEFAULT_DISTANCE_BOUNDS
+	for receiveChannel in receiveChannels {
+		for receiveChannelElement in receiveChannel.elements {
+			receiveBounds.minimum = linalg.min(receiveBounds.minimum, elements[receiveChannelElement.index].position)
+			receiveBounds.maximum = linalg.min(receiveBounds.maximum, elements[receiveChannelElement.index].position)
+		}
+	}
+
+	representatives := DistanceRepresentatives{}
+	distance_bounds_make_representatives(transmitBounds, &representatives.transmit)
+	distance_bounds_make_representatives(receiveBounds, &representatives.receive)
+
+	distanceMidpoints := make([]f32, len(scatters), context.allocator)
+	defer delete(distanceMidpoints)
+	for scatterIndex in 0 ..< len(scatters) {
+		transmitMinimum: f32 = math.INF_F32
+		transmitMaximum: f32 = 0
+		for representative in representatives.transmit {
+			distance := linalg.length(scatters[scatterIndex].position - representative)
+			transmitMinimum = min(transmitMinimum, distance)
+			transmitMaximum = max(transmitMaximum, distance)
+		}
+
+		receiveMinimum: f32 = math.INF_F32
+		receiveMaximum: f32 = 0
+		for representative in representatives.receive {
+			distance := linalg.length(scatters[scatterIndex].position - representative)
+			receiveMinimum = min(receiveMinimum, distance)
+			receiveMaximum = max(receiveMaximum, distance)
+		}
+
+		distanceMidpoints[scatterIndex] = (transmitMinimum + transmitMaximum + receiveMinimum + receiveMaximum) / 2
+	}
+
+	indices := slice.sort_with_indices(distanceMidpoints, context.allocator)
+	defer delete(indices)
+	slice.sort_from_permutation_indices(scatters, indices)
+}
+
+distance_bounds_add :: proc(bounds: ^DistanceBounds, position: [3]f32) {
+	bounds.minimum = linalg.min(bounds.minimum, position)
+	bounds.maximum = linalg.min(bounds.maximum, position)
+}
+
+distance_bounds_make_representatives :: proc(bounds: DistanceBounds, representatives: ^[dynamic; 8][3]f32) {
+	for corner in 0 ..< 8 {
+		runtime.append(
+			representatives,
+			[3]f32 {
+				((corner >> 0) & 1) == 0 ? bounds.minimum.x : bounds.maximum.x,
+				((corner >> 1) & 1) == 0 ? bounds.minimum.y : bounds.maximum.y,
+				((corner >> 2) & 1) == 0 ? bounds.minimum.z : bounds.maximum.z,
+			},
+		)
+	}
+}
+
+MortonSortData :: struct {
+	minimum: [3]f32,
+	maximum: [3]f32,
+}
+
+sort_scatters_by_morton_code :: proc(scatters: []Scatter) {
+	if len(scatters) <= 1 do return
+
+	sortData := MortonSortData {
+		minimum = scatters[0].position,
+		maximum = scatters[0].position,
+	}
+	for scatter in scatters[1:] {
+		for axis in 0 ..< 3 {
+			sortData.minimum[axis] = min(sortData.minimum[axis], scatter.position[axis])
+			sortData.maximum[axis] = max(sortData.maximum[axis], scatter.position[axis])
+		}
+	}
+
+	codes := make([]u32, len(scatters), context.allocator)
+	defer delete(codes)
+	for i in 0 ..< len(scatters) {
+		codes[i] = scatter_morton_code(scatters[i].position, sortData.minimum, sortData.maximum)
+	}
+
+	indices := slice.sort_with_indices(codes, context.allocator)
+	defer delete(indices)
+	slice.sort_from_permutation_indices(scatters, indices)
+}
+
+scatter_morton_code :: proc(position, minimum, maximum: [3]f32) -> u32 {
+	MortonAxisBits: uint : 10
+	coordinates := quantize_scatter_position(position, minimum, maximum, MortonAxisBits)
+
+	result: u32
+	for bit_index in 0 ..< MortonAxisBits {
+		for axis in 0 ..< 3 {
+			source_bit := bits.bitfield_extract(coordinates[axis], bit_index, uint(1))
+			destination_bit := bit_index * 3 + auto_cast axis
+			result = bits.bitfield_insert(result, source_bit, destination_bit, uint(1))
+		}
+	}
+	return result
+}
+
+sort_scatters_by_hilbert_code :: proc(scatters: []Scatter) {
+	if len(scatters) <= 1 do return
+
+	sortData := MortonSortData {
+		minimum = scatters[0].position,
+		maximum = scatters[0].position,
+	}
+	for scatter in scatters[1:] {
+		for axis in 0 ..< 3 {
+			sortData.minimum[axis] = min(sortData.minimum[axis], scatter.position[axis])
+			sortData.maximum[axis] = max(sortData.maximum[axis], scatter.position[axis])
+		}
+	}
+
+	codes := make([]u32, len(scatters), context.allocator)
+	defer delete(codes)
+	for i in 0 ..< len(scatters) {
+		codes[i] = scatter_hilbert_code(scatters[i].position, sortData.minimum, sortData.maximum)
+	}
+
+	indices := slice.sort_with_indices(codes, context.allocator)
+	defer delete(indices)
+	slice.sort_from_permutation_indices(scatters, indices)
+}
+
+sort_scatters_by_depth_banded_morton :: proc(scatters: []Scatter, depthBandCount: u32) {
+	if len(scatters) <= 1 do return
+
+	sortData := MortonSortData {
+		minimum = scatters[0].position,
+		maximum = scatters[0].position,
+	}
+	for scatter in scatters[1:] {
+		for axis in 0 ..< 3 {
+			sortData.minimum[axis] = min(sortData.minimum[axis], scatter.position[axis])
+			sortData.maximum[axis] = max(sortData.maximum[axis], scatter.position[axis])
+		}
+	}
+
+	codes := make([]u32, len(scatters), context.allocator)
+	defer delete(codes)
+	for scatterIndex in 0 ..< len(scatters) {
+		coordinates := quantize_scatter_position(scatters[scatterIndex].position, sortData.minimum, sortData.maximum, 10)
+		depthBand := min(depthBandCount - 1, coordinates.z * depthBandCount / 1024)
+		xyCode := scatter_morton_2d_code(coordinates.x, coordinates.y)
+		codes[scatterIndex] = (depthBand << 20) | xyCode
+	}
+
+	indices := slice.sort_with_indices(codes, context.allocator)
+	defer delete(indices)
+	slice.sort_from_permutation_indices(scatters, indices)
+}
+
+scatter_morton_2d_code :: proc(x, y: u32) -> u32 {
+	result: u32
+	for bitIndex in 0 ..< 10 {
+		bit := uint(bitIndex)
+		result = bits.bitfield_insert(result, bits.bitfield_extract(x, bit, uint(1)), bit * 2, uint(1))
+		result = bits.bitfield_insert(result, bits.bitfield_extract(y, bit, uint(1)), bit * 2 + 1, uint(1))
+	}
+	return result
+}
+
+quantize_scatter_position :: proc(position, minimum, maximum: [3]f32, axisBits: uint) -> [3]u32 {
+	axisMax: f32 = f32((u32(1) << axisBits) - 1)
+	coordinates: [3]u32
+	for axis in 0 ..< 3 {
+		span := maximum[axis] - minimum[axis]
+		normalized: f32 = 0
+		if span > 0 {
+			normalized = (position[axis] - minimum[axis]) / span
+		}
+		normalized = min(1, max(0, normalized))
+		coordinates[axis] = u32(normalized * axisMax + 0.5)
+	}
+	return coordinates
+}
+
+scatter_hilbert_code :: proc(position, minimum, maximum: [3]f32) -> u32 {
+	HilbertAxisBits: uint : 10
+	coordinates := quantize_scatter_position(position, minimum, maximum, HilbertAxisBits)
+
+	// Skilling's transpose algorithm converts 3D coordinates into Hilbert distance.
+	mostSignificantBit := u32(1) << (HilbertAxisBits - 1)
+	q := mostSignificantBit
+	for q > 1 {
+		p := q - 1
+		for axis in 0 ..< 3 {
+			if (coordinates[axis] & q) != 0 {
+				coordinates[0] ~= p
+			} else {
+				t := (coordinates[0] ~ coordinates[axis]) & p
+				coordinates[0] ~= t
+				coordinates[axis] ~= t
+			}
+		}
+		q >>= 1
+	}
+
+	for axis in 1 ..< 3 {
+		coordinates[axis] ~= coordinates[axis - 1]
+	}
+
+	transform: u32
+	q = mostSignificantBit
+	for q > 1 {
+		if (coordinates[2] & q) != 0 {
+			transform ~= q - 1
+		}
+		q >>= 1
+	}
+	for axis in 0 ..< 3 {
+		coordinates[axis] ~= transform
+	}
+
+	result: u32
+	bitIndex := int(HilbertAxisBits)
+	for bitIndex > 0 {
+		bitIndex -= 1
+		for axis in 0 ..< 3 {
+			result = (result << 1) | ((coordinates[axis] >> u32(bitIndex)) & 1)
+		}
+	}
+	return result
 }
 
 findDistanceLimits :: proc(
