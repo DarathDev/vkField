@@ -11,7 +11,7 @@ const uint ScattererWorkgroupSize = 64;
 [shader("compute")]
 [numthreads(ElementSetWorkgroupSize, ScattererWorkgroupSize, 1)]
 void main(uint2 GlobalInvocationID: SV_DispatchThreadID) {
-  uint elementSetIndex = GlobalInvocationID.x;
+  uint elementSetIndex = GlobalInvocationID.x + pushData.elementSetOffset;
   uint scattererIndex = GlobalInvocationID.y;
 
   uint ElementSetCount = CoalesceTransmissions ? TransmissionCount : ReceiveChannelCount;

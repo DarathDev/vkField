@@ -13,6 +13,7 @@ struct PulseEchoSettings {
   float *response;
   uint transmissionIndex;
   uint receiveChannelIndex;
+  uint sampleOffset;
   uint scattererOffset;
 
   ElementSetInfo *getReceiveChannelInfos() {
@@ -38,10 +39,10 @@ void main(uint ThreadID: SV_GroupIndex, uint1 LocalInvocationID: SV_GroupThreadI
 
   const uint threadCount = SampleWorkgroupSize;
 
-  uint sampleIndex = GlobalInvocationID.x;
+  uint sampleIndex = GlobalInvocationID.x + pushData.sampleOffset;
   uint transmissionIndex = pushData.transmissionIndex;
   uint receiveChannelIndex = pushData.receiveChannelIndex;
-  uint baseSampleIndex = GroupID * SampleWorkgroupSize;
+  uint baseSampleIndex = pushData.sampleOffset + GroupID * SampleWorkgroupSize;
 
   float sample = 0;
   for (uint scattererIndex = 0; scattererIndex < ScattererBatchCount; scattererIndex++) {

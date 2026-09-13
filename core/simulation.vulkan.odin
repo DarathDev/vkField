@@ -26,6 +26,10 @@ assume :: vkField_util.assume
 MAX_FRAMES_IN_FLIGHT :: 2
 SCATTER_UPLOAD_WINDOW_SIZE :: 16 * runtime.Megabyte
 SCATTER_BATCHES_PER_COMMAND_BUFFER :: 2
+GPU_CALC_ELEMENT_CHUNK_SIZE :: 256
+GPU_ELEMENT_SET_CHUNK_SIZE :: 1024
+GPU_APERTURE_SAMPLE_CHUNK_SIZE :: 65536
+GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE :: 1024
 VULKAN_PROGRESS_LOG_DELAY_THRESHOLD :: 20.0 * time.Second
 VULKAN_PROGRESS_LOG_INTERVAL :: 20.0 * time.Second
 
@@ -168,6 +172,7 @@ vkCoalescePushData :: struct {
 	transmissionElementCounts: vk.DeviceAddress,
 	elementSetMembers:         vk.DeviceAddress,
 	elementSetOffset:          u32,
+	sampleOffset:               u32,
 	scattererOffset:           u32,
 }
 
@@ -177,6 +182,7 @@ vkPulseConvPushData :: struct {
 	response:              vk.DeviceAddress,
 	transmissionIndex:     u32,
 	receiveChannelIndex:   u32,
+	sampleOffset:          u32,
 	scattererOffset:       u32,
 }
 
@@ -192,6 +198,7 @@ vkTemporalPushData :: struct {
 	impulseCount:        u32,
 	excitationCount:     u32,
 	receiveImpulseCount: u32,
+	sampleOffset:       u32,
 	sampleInterval:      f32,
 }
 
@@ -935,25 +942,27 @@ vkSimulate :: proc(
 					)
 				}
 
-				vkField_vk.cmd_push_constants(
-					commandBuffer,
-					simulator.pipelineLayout,
-					shaderStage,
-					vkCalcAperPushData {
-						elementPositions = dataBufferAddress + auto_cast header.elementPositions,
-						apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
-						elementOffset = 0,
-						scattererOffset = auto_cast scatterOffset,
-					},
-				)
-
 				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.calcAperShader)
-				vk.CmdDispatch(
-					commandBuffer.commandBuffer,
-					u32(math.ceil(f32(len(elements)) / f32(resources.calcAperSpec.ElementWorkgroupSize))),
-					u32(math.ceil(f32(scatterBatchSize) / f32(resources.calcAperSpec.ScattererWorkgroupSize))),
-					1,
-				)
+				for elementOffset := 0; elementOffset < len(elements); elementOffset += GPU_CALC_ELEMENT_CHUNK_SIZE {
+					elementChunkCount := min(GPU_CALC_ELEMENT_CHUNK_SIZE, len(elements) - elementOffset)
+					vkField_vk.cmd_push_constants(
+						commandBuffer,
+						simulator.pipelineLayout,
+						shaderStage,
+						vkCalcAperPushData {
+							elementPositions = dataBufferAddress + auto_cast header.elementPositions,
+							apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+							elementOffset = auto_cast elementOffset,
+							scattererOffset = auto_cast scatterOffset,
+						},
+					)
+					vk.CmdDispatch(
+						commandBuffer.commandBuffer,
+						u32(math.ceil(f32(elementChunkCount) / f32(resources.calcAperSpec.ElementWorkgroupSize))),
+						u32(math.ceil(f32(scatterBatchSize) / f32(resources.calcAperSpec.ScattererWorkgroupSize))),
+						1,
+					)
+				}
 
 				vkField_vk.cmd_pipeline_barrier(
 					commandBuffer,
@@ -972,35 +981,36 @@ vkSimulate :: proc(
 					{},
 				)
 
-				vkField_vk.cmd_push_constants(
-					commandBuffer,
-					simulator.pipelineLayout,
-					shaderStage,
-					vkCoalescePushData {
+				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.measAperShaderTx)
+				for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+					elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
+					vkField_vk.cmd_push_constants(commandBuffer, simulator.pipelineLayout, shaderStage, vkCoalescePushData {
 						apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
 						transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
 						transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
 						transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
 						elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
-						elementSetOffset = 0,
+						elementSetOffset = auto_cast elementSetOffset,
+						sampleOffset = 0,
 						scattererOffset = auto_cast scatterOffset,
-					},
-				)
-
-				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.measAperShaderTx)
-				vk.CmdDispatch(
-					commandBuffer.commandBuffer,
-					u32(math.ceil(f32(len(transmissions)) / f32(resources.measAperSpecTx.ElementSetWorkgroupSize))),
-					u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecTx.ScattererWorkgroupSize))),
-					1,
-				)
+					})
+					vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil(f32(elementSetChunkCount) / f32(resources.measAperSpecTx.ElementSetWorkgroupSize))), u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecTx.ScattererWorkgroupSize))), 1)
+				}
 				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.measAperShaderRcv)
-				vk.CmdDispatch(
-					commandBuffer.commandBuffer,
-					u32(math.ceil(f32(len(receiveChannels)) / f32(resources.measAperSpecRcv.ElementSetWorkgroupSize))),
-					u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecRcv.ScattererWorkgroupSize))),
-					1,
-				)
+				for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+					elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
+					vkField_vk.cmd_push_constants(commandBuffer, simulator.pipelineLayout, shaderStage, vkCoalescePushData {
+						apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+						transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+						transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+						transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+						elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+						elementSetOffset = auto_cast elementSetOffset,
+						sampleOffset = 0,
+						scattererOffset = auto_cast scatterOffset,
+					})
+					vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil(f32(elementSetChunkCount) / f32(resources.measAperSpecRcv.ElementSetWorkgroupSize))), u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecRcv.ScattererWorkgroupSize))), 1)
+				}
 
 				vkField_vk.cmd_pipeline_barrier(
 					commandBuffer,
@@ -1020,19 +1030,41 @@ vkSimulate :: proc(
 				)
 
 				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.coalAperShaderTx)
-				vk.CmdDispatch(
-					commandBuffer.commandBuffer,
-					u32(math.ceil(f32(simulator.info.apertureSampleCount) / f32(resources.coalAperSpecTx.SampleWorkgroupSize))),
-					u32(math.ceil(f32(len(transmissions)) / f32(resources.coalAperSpecTx.ElementSetWorkgroupSize))),
-					u32(math.ceil(f32(scatterBatchSize) / f32(resources.coalAperSpecTx.ScattererWorkgroupSize))),
-				)
+				for sampleOffset: u32 = 0; sampleOffset < simulator.info.apertureSampleCount; sampleOffset += GPU_APERTURE_SAMPLE_CHUNK_SIZE {
+					sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
+					for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+						elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
+						vkField_vk.cmd_push_constants(commandBuffer, simulator.pipelineLayout, shaderStage, vkCoalescePushData {
+							apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+							transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+							transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+							transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+							elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+							elementSetOffset = auto_cast elementSetOffset,
+							sampleOffset = auto_cast sampleOffset,
+							scattererOffset = auto_cast scatterOffset,
+						})
+						vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.coalAperSpecTx.SampleWorkgroupSize))), u32(math.ceil_f32(f32(elementSetChunkCount) / f32(resources.coalAperSpecTx.ElementSetWorkgroupSize))), u32(math.ceil_f32(f32(scatterBatchSize) / f32(resources.coalAperSpecTx.ScattererWorkgroupSize))))
+					}
+				}
 				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.coalAperShaderRcv)
-				vk.CmdDispatch(
-					commandBuffer.commandBuffer,
-					u32(math.ceil(f32(simulator.info.apertureSampleCount) / f32(resources.coalAperSpecTx.SampleWorkgroupSize))),
-					u32(math.ceil(f32(len(receiveChannels)) / f32(resources.coalAperSpecRcv.ElementSetWorkgroupSize))),
-					u32(math.ceil(f32(scatterBatchSize) / f32(resources.coalAperSpecRcv.ScattererWorkgroupSize))),
-				)
+				for sampleOffset: u32 = 0; sampleOffset < simulator.info.apertureSampleCount; sampleOffset += GPU_APERTURE_SAMPLE_CHUNK_SIZE {
+					sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
+					for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+						elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
+						vkField_vk.cmd_push_constants(commandBuffer, simulator.pipelineLayout, shaderStage, vkCoalescePushData {
+							apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+							transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+							transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+							transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+							elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+							elementSetOffset = auto_cast elementSetOffset,
+							sampleOffset = auto_cast sampleOffset,
+							scattererOffset = auto_cast scatterOffset,
+						})
+						vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.coalAperSpecRcv.SampleWorkgroupSize))), u32(math.ceil_f32(f32(elementSetChunkCount) / f32(resources.coalAperSpecRcv.ElementSetWorkgroupSize))), u32(math.ceil_f32(f32(scatterBatchSize) / f32(resources.coalAperSpecRcv.ScattererWorkgroupSize))))
+					}
+				}
 
 				vkField_vk.cmd_pipeline_barrier(
 					commandBuffer,
@@ -1054,26 +1086,19 @@ vkSimulate :: proc(
 				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.pulseConvShader)
 				for transmissionIndex in 0 ..< len(transmissions) {
 					for receiveChannelIndex in 0 ..< len(receiveChannels) {
-						vkField_vk.cmd_push_constants(
-							commandBuffer,
-							simulator.pipelineLayout,
-							shaderStage,
-							vkPulseConvPushData {
-								transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
-								transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-								response = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
-								transmissionIndex = auto_cast transmissionIndex,
-								receiveChannelIndex = auto_cast receiveChannelIndex,
-								scattererOffset = auto_cast scatterOffset,
-							},
-						)
-
-						vk.CmdDispatch(
-							commandBuffer.commandBuffer,
-							u32(math.ceil(f32(settings.sampleCount) / f32(resources.pulseConvSpec.SampleWorkgroupSize))),
-							1,
-							1,
-						)
+									for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
+										sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
+										vkField_vk.cmd_push_constants(commandBuffer, simulator.pipelineLayout, shaderStage, vkPulseConvPushData {
+											transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+											transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+											response = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
+											transmissionIndex = auto_cast transmissionIndex,
+											receiveChannelIndex = auto_cast receiveChannelIndex,
+											sampleOffset = auto_cast sampleOffset,
+											scattererOffset = auto_cast scatterOffset,
+										})
+										vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.pulseConvSpec.SampleWorkgroupSize))), 1, 1)
+									}
 					}
 				}
 
@@ -1153,11 +1178,9 @@ vkSimulate :: proc(
 			impulseLength := response_length(impulses, transmission.impulse)
 			excitationLength := response_length(excitations, transmission.excitation)
 			receiveImpulseLength := response_length(impulses, receiveChannel.impulse)
-			vkField_vk.cmd_push_constants(
-				commandBuffer,
-				simulator.pipelineLayout,
-				shaderStage,
-				vkTemporalPushData {
+			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
+				sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
+				vkField_vk.cmd_push_constants(commandBuffer, simulator.pipelineLayout, shaderStage, vkTemporalPushData {
 					response = responseAddress,
 					temporalOutput = vkField_vk.get_buffer_address(device, resources.temporalOutputBuffer),
 					temporalResponses = temporalAddress,
@@ -1169,10 +1192,11 @@ vkSimulate :: proc(
 					impulseCount = auto_cast impulseLength,
 					excitationCount = auto_cast excitationLength,
 					receiveImpulseCount = auto_cast receiveImpulseLength,
+					sampleOffset = auto_cast sampleOffset,
 					sampleInterval = 1 / settings.samplingFrequency,
-				},
-			)
-			vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil(f32(settings.sampleCount) / f32(resources.temporalSpec.SampleWorkgroupSize))), 1, 1)
+				})
+				vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.temporalSpec.SampleWorkgroupSize))), 1, 1)
+			}
 		}
 	}
 	vkField_vk.cmd_pipeline_barrier(

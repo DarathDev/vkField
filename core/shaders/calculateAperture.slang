@@ -51,7 +51,7 @@ void main(uint2 GlobalInvocationID: SV_DispatchThreadID, uint threadID: SV_Group
 
   ApertureResponse elementResponse = compute_aperture_response(element, scatterer);
 
-  uint apertureOutputIndex = scattererIndex * ElementCount + elementIndex;
+  uint apertureOutputIndex = scattererIndex * ElementCount + elementInputIndex;
 
   pushData.apertureResponseRects[apertureOutputIndex] = elementResponse.rectTimes;
   pushData.getApertureResponseScales()[apertureOutputIndex] = elementResponse.scale;

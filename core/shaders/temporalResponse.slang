@@ -21,6 +21,7 @@ struct TemporalResponseSettings {
   uint impulseCount;
   uint excitationCount;
   uint receiveImpulseCount;
+  uint sampleOffset;
   float sampleInterval;
 };
 
@@ -35,7 +36,7 @@ groupshared float receiveImpulseResponse[MaxImpulseLength];
 [numthreads(SampleWorkgroupSize, 1, 1)]
 void main(uint1 LocalInvocationID : SV_GroupThreadID, uint1 GroupID : SV_GroupID) {
   uint threadIndex = LocalInvocationID.x;
-  uint outputIndex = GroupID.x * SampleWorkgroupSize + threadIndex;
+  uint outputIndex = pushData.sampleOffset + GroupID.x * SampleWorkgroupSize + threadIndex;
 
   for (uint responseIndex = threadIndex; responseIndex < MaxImpulseLength; responseIndex += SampleWorkgroupSize) {
     impulseResponse[responseIndex] = pushData.impulseIndex == 0 ? 0 :

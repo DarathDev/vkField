@@ -14,6 +14,7 @@ public struct CoalesceAperturePushData {
   public uint *transmissionElementCounts;
   public uint *elementSetMembers;
   public uint elementSetOffset;
+  public uint sampleOffset;
   public uint scattererOffset;
 
   public float *getApertureResponseScales() {
