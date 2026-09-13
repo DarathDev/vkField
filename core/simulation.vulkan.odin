@@ -144,6 +144,7 @@ vkCoalAperSpecConstants :: struct {
 vkPulseConvSpecConstants :: struct {
 	using general:       vkGeneralSpecContants,
 	SampleWorkgroupSize: u32,
+	ConvolutionTileSize: u32,
 }
 
 vkTemporalSpecConstants :: struct {
@@ -346,7 +347,9 @@ plan_vulkan_simulator :: proc(
 
 	limits := simulator.device.physicalDevice.properties.limits
 	maxComputeSharedMemorySize := limits.maxComputeSharedMemorySize
-	pulseEchoSharedMemory := 2 * simulator.info.apertureSampleCount * size_of(f32)
+	pulseConvSampleWorkgroupSize: u32 = PULSE_CONV_SAMPLE_WORKGROUP_SIZE
+	pulseConvTileSize: u32 = PULSE_CONVOLUTION_TILE_SIZE
+	pulseEchoSharedMemory := (pulseConvTileSize + pulseConvTileSize + pulseConvSampleWorkgroupSize - 1) * size_of(f32)
 	assert(pulseEchoSharedMemory <= maxComputeSharedMemorySize, "Pulse echo convolution shared memory exceeds device maxComputeSharedMemorySize")
 
 	maxStorageBufferRange := u32(limits.maxStorageBufferRange)
@@ -378,12 +381,34 @@ plan_vulkan_simulator :: proc(
 		(transmissionCount + receiveChannelCount) * apertureSampleCount * u32(size_of(f32))
 
 	targetBatchSize := max(u32(1), min(scatterCount, 256))
+	maxBatchFromBuffer: u32 = targetBatchSize
 	if fixedHeaderBytes < maxBufferLimit && bytesPerScatterer > 0 {
-		maxBatchFromBuffer := (maxBufferLimit - fixedHeaderBytes) / bytesPerScatterer
+		maxBatchFromBuffer = (maxBufferLimit - fixedHeaderBytes) / bytesPerScatterer
 		simulator.info.scattererBatchSize = max(u32(1), min(targetBatchSize, maxBatchFromBuffer))
 	} else {
 		simulator.info.scattererBatchSize = targetBatchSize
 	}
+
+	log.infof(
+		"Vulkan scatter batch plan: scatters=%d, elements=%d, transmissions=%d, receiveChannels=%d, apertureSamples=%d, " +
+			"sharedMemory=%d/%d bytes, fixedBuffer=%d bytes, bytesPerScatterer=%d, bufferLimit=%d bytes, " +
+			"physicalStorageLimit=%d bytes, dispatchWorkLimit=%d bytes, bufferBatchLimit=%d, targetBatch=%d, finalBatch=%d",
+		scatterCount,
+		elementCount,
+		transmissionCount,
+		receiveChannelCount,
+		apertureSampleCount,
+		pulseEchoSharedMemory,
+		maxComputeSharedMemorySize,
+		fixedHeaderBytes,
+		bytesPerScatterer,
+		maxBufferLimit,
+		maxStorageBufferRange,
+		settings.gpuSettings.dispatchWorkLimit,
+		maxBatchFromBuffer,
+		targetBatchSize,
+		simulator.info.scattererBatchSize,
+	)
 
 	dataBufferHeader := calculate_vk_data_buffer_offsets(
 		elementCount,
@@ -478,7 +503,8 @@ plan_vulkan_simulator :: proc(
 
 	pulseConvSpec: vkPulseConvSpecConstants = {
 		general             = generalSpec,
-		SampleWorkgroupSize = 64,
+		SampleWorkgroupSize = pulseConvSampleWorkgroupSize,
+		ConvolutionTileSize = pulseConvTileSize,
 	}
 	temporalSpec: vkTemporalSpecConstants = {
 		general             = generalSpec,

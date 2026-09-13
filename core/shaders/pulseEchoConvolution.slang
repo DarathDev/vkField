@@ -4,6 +4,8 @@ import util;
 
 [vk::constant_id(10)]
 public const uint SampleWorkgroupSize = 64;
+[vk::constant_id(11)]
+public const uint ConvolutionTileSize = 256;
 
 struct PulseEchoSettings {
   ElementSetInfo *transmissionInfos;
@@ -26,8 +28,8 @@ struct PulseEchoSettings {
 [[vk::push_constant]]
 ConstantBuffer<PulseEchoSettings> pushData;
 
-groupshared float transmissionAperture[ApertureSampleCount];
-groupshared float receiveChannelAperture[ApertureSampleCount];
+groupshared float transmissionAperture[ConvolutionTileSize];
+groupshared float receiveChannelAperture[ConvolutionTileSize + SampleWorkgroupSize - 1];
 
 [shader("compute")]
 [numthreads(SampleWorkgroupSize, 1, 1)]
@@ -52,55 +54,47 @@ void main(uint ThreadID: SV_GroupIndex, uint1 LocalInvocationID: SV_GroupThreadI
     ElementSetInfo transmissionInfo = pushData.transmissionInfos[transmissionInputIndex];
     ElementSetInfo receiveChannelInfo = pushData.getReceiveChannelInfos()[receiveChannelInputIndex];
 
-    if (transmissionInfo.minSample > transmissionInfo.maxSample || receiveChannelInfo.minSample > receiveChannelInfo.maxSample)
-      continue;
+    int nTx = clamp(transmissionInfo.maxSample - transmissionInfo.minSample + 1, 0, (int)ApertureSampleCount);
+    int nRx = clamp(receiveChannelInfo.maxSample - receiveChannelInfo.minSample + 1, 0, (int)ApertureSampleCount);
+    int outputMin = clamp(transmissionInfo.minSample + receiveChannelInfo.minSample, 0, (int)ResponseSampleCount);
+    int outputMax = clamp(transmissionInfo.maxSample + receiveChannelInfo.maxSample + 1, 0, (int)ResponseSampleCount);
+    bool contributes = nTx > 0 && nRx > 0 && outputMin < outputMax &&
+                       (int)baseSampleIndex < outputMax && (int)baseSampleIndex + (int)SampleWorkgroupSize > outputMin;
 
-    // Check if there is actually contribution to the samples covered in this workgroup by the scatterer
-    int minSample = clamp(transmissionInfo.minSample + receiveChannelInfo.minSample, 0, (int)ResponseSampleCount);
-    int maxSample = clamp(transmissionInfo.maxSample + receiveChannelInfo.maxSample + 1, 0, (int)ResponseSampleCount);
-    if (minSample >= maxSample || (int)baseSampleIndex > maxSample || (int)baseSampleIndex + (int)SampleWorkgroupSize < minSample)
-      continue;
+    if (contributes) {
+      int s = (int)sampleIndex - (transmissionInfo.minSample + receiveChannelInfo.minSample);
+      int groupSMin = (int)baseSampleIndex - (transmissionInfo.minSample + receiveChannelInfo.minSample);
+      int groupSMax = groupSMin + (int)SampleWorkgroupSize - 1;
+      int txStart = max(0, groupSMin - (nRx - 1));
+      int txEnd = min(nTx - 1, groupSMax);
 
-    // Load Impulse Responses
-    {
-      int nTotal = min(transmissionInfo.maxSample - transmissionInfo.minSample + 1, (int)ApertureSampleCount);
-      if (nTotal <= 0)
-        continue;
-      uint nPerThread = (uint)nTotal / threadCount;
-      uint nLeftover = (uint)nTotal % threadCount;
-      uint nThisThread = nPerThread + uint(ThreadID < nLeftover);
-      for (uint n = 0; n < nThisThread; n++) {
-        uint apertureIndex = n * threadCount + ThreadID;
-        uint sampleInputIndex =
-            scattererIndex * (ApertureSampleCount * TransmissionCount) + transmissionIndex * ApertureSampleCount + apertureIndex;
-        transmissionAperture[apertureIndex] = pushData.transmissionResponses[sampleInputIndex];
-      }
-    }
-    {
-      int nTotal = min(receiveChannelInfo.maxSample - receiveChannelInfo.minSample + 1, (int)ApertureSampleCount);
-      if (nTotal <= 0)
-        continue;
-      uint nPerThread = (uint)nTotal / threadCount;
-      uint nLeftover = (uint)nTotal % threadCount;
-      uint nThisThread = nPerThread + uint(ThreadID < nLeftover);
-      for (uint n = 0; n < nThisThread; n++) {
-        uint apertureIndex = n * threadCount + ThreadID;
-        uint sampleInputIndex =
-            scattererIndex * (ApertureSampleCount * ReceiveChannelCount) + receiveChannelIndex * ApertureSampleCount + apertureIndex;
-        receiveChannelAperture[apertureIndex] = pushData.getReceiveChannelResponses()[sampleInputIndex];
-      }
-    }
-    GroupMemoryBarrierWithGroupSync();
+      for (int tileStart = txStart; tileStart <= txEnd; tileStart += (int)ConvolutionTileSize) {
+        int tileTxCount = min((int)ConvolutionTileSize, txEnd - tileStart + 1);
+        int tileRxStart = max(0, groupSMin - (tileStart + tileTxCount - 1));
+        int tileRxEnd = min(nRx - 1, groupSMax - tileStart);
+        int tileRxCount = max(0, tileRxEnd - tileRxStart + 1);
 
-    // Convolution
-    int s = (int)sampleIndex - (transmissionInfo.minSample + receiveChannelInfo.minSample);
-    int nTx = min(transmissionInfo.maxSample - transmissionInfo.minSample + 1, (int)ApertureSampleCount);
-    int nRx = min(receiveChannelInfo.maxSample - receiveChannelInfo.minSample + 1, (int)ApertureSampleCount);
+        for (uint index = ThreadID; index < (uint)tileTxCount; index += threadCount) {
+          uint apertureIndex = (uint)tileStart + index;
+          uint sampleInputIndex =
+              scattererIndex * (ApertureSampleCount * TransmissionCount) + transmissionIndex * ApertureSampleCount + apertureIndex;
+          transmissionAperture[index] = pushData.transmissionResponses[sampleInputIndex];
+        }
+        for (uint index = ThreadID; index < (uint)tileRxCount; index += threadCount) {
+          uint apertureIndex = (uint)tileRxStart + index;
+          uint sampleInputIndex =
+              scattererIndex * (ApertureSampleCount * ReceiveChannelCount) + receiveChannelIndex * ApertureSampleCount + apertureIndex;
+          receiveChannelAperture[index] = pushData.getReceiveChannelResponses()[sampleInputIndex];
+        }
+        GroupMemoryBarrierWithGroupSync();
 
-    for (int kt = 0; kt < nTx; kt++) {
-      int kr = s - kt;
-      if (kr >= 0 && kr < nRx) {
-        sample += transmissionAperture[kt] * receiveChannelAperture[kr];
+        for (int kt = 0; kt < tileTxCount; kt++) {
+          int kr = s - (tileStart + kt);
+          if (kr >= tileRxStart && kr <= tileRxEnd) {
+            sample += transmissionAperture[kt] * receiveChannelAperture[kr - tileRxStart];
+          }
+        }
+        GroupMemoryBarrierWithGroupSync();
       }
     }
   }
