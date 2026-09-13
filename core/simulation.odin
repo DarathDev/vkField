@@ -21,6 +21,8 @@ assert :: utility.assert
 @(private = "file")
 assume :: utility.assume
 
+ENABLE_RENDERDOC :: bool(#config(ENABLE_RENDERDOC, true))
+
 PULSE_CONV_SAMPLE_WORKGROUP_SIZE :: 64
 PULSE_CONVOLUTION_TILE_SIZE :: 256
 
@@ -132,23 +134,25 @@ simulate :: proc(
 		assert(settings.gpuSettings.backend == .Vulkan, "Only the Vulkan GPU backend is implemented")
 	}
 
-	rdocLib, rdocApi, rdoc_ok := rdoc.load_api()
-	if rdoc_ok do log.infof("loaded renderdoc %v", rdocApi)
-	defer if rdoc_ok do rdoc.unload_api(rdocLib)
-
 	stopwatch: time.Stopwatch
 	time.stopwatch_start(&stopwatch)
 	switch &sim in simulator {
 	case vkSimulator:
-		if rdoc_ok {
-			devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
-			rdoc.start_frame_capture(rdocApi, devicePointer, nil)
-			assert(rdoc.is_frame_capturing(rdocApi))
-		}
-		defer if rdoc_ok {
-			devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
-			rdoc.end_frame_capture(rdocApi, devicePointer, nil)
-			LaunchOrShowRenderdocUI(rdocApi)
+		when ENABLE_RENDERDOC {
+			rdocLib, rdocApi, rdoc_ok := rdoc.load_api()
+			if rdoc_ok do log.infof("loaded renderdoc %v", rdocApi)
+			defer if rdoc_ok do rdoc.unload_api(rdocLib)
+
+			if rdoc_ok {
+				devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
+				rdoc.start_frame_capture(rdocApi, devicePointer, nil)
+				assert(rdoc.is_frame_capturing(rdocApi))
+			}
+			defer if rdoc_ok {
+				devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
+				rdoc.end_frame_capture(rdocApi, devicePointer, nil)
+				LaunchOrShowRenderdocUI(rdocApi)
+			}
 		}
 
 		data = is_ok(check(vkSimulate(&sim, settings^, transmissions, receiveChannels, elements, scatters, impulses, excitations))) or_return
