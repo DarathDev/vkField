@@ -81,20 +81,21 @@ Excitation :: TransducerImpulse
 // Transducer impulse and excitation use MATLAB-compatible one-based response indices.
 // Zero is reserved as the null/identity index; a nonzero index addresses response[index - 1].
 Transmission :: struct {
-	elements:   #soa[]TransmissionElement,
+	elements:   #soa[]ElementSetMember,
 	impulse:    u16,
 	excitation: u16,
 }
 
-ReceiveChannel :: distinct Transmission
+ReceiveChannel :: struct {
+	elements: #soa[]ElementSetMember,
+	impulse:  u16,
+}
 
-TransmissionElement :: struct {
+ElementSetMember :: struct {
 	index:       i32,
 	apodization: f32,
 	delay:       f32,
 }
-
-ReceiveChannelElement :: distinct TransmissionElement
 
 DistanceRange :: struct {
 	minDistance: f32,
@@ -602,7 +603,7 @@ findDistanceLimits :: proc(
 
 		for receiveChannel in receiveChannels {
 			for receiveChannelElement in receiveChannel.elements {
-				element := TransmissionElement(receiveChannelElement)
+				element := receiveChannelElement
 				receive := elements[element.index]
 				delta := linalg.length(scatter.position - receive.position)
 				elementDelta := linalg.length(receive.size) / 2

@@ -23,6 +23,12 @@ typedef double f64;
 typedef ptrdiff_t iz;
 typedef size_t uz;
 
+template <typename T>
+struct Slice {
+	T* data;
+	iz len;
+};
+
 struct Simulator { };
 
 enum class SimulatorType : u32 {
@@ -108,38 +114,21 @@ typedef struct {
 typedef struct {
 	ReceiveChannelElementSoaSlice elements;
 	u16 impulse;
-	u16 excitation;
 } ReceiveChannel;
 
-typedef struct {
-	Transmission* data;
-	iz len;
-} TransmissionSlice;
-
-typedef struct {
-	ReceiveChannel* data;
-	iz len;
-} ReceiveChannelSlice;
+typedef Slice<Transmission> TransmissionSlice;
+typedef Slice<ReceiveChannel> ReceiveChannelSlice;
 
 typedef struct {
 	f32 position[3];
 	f32 amplitude;
 } Scatter;
 
-typedef struct {
-	Scatter* data;
-	iz len;
-} ScatterSlice;
+typedef Slice<Scatter> ScatterSlice;
 
-typedef struct {
-	f32* data;
-	iz len;
-} SignalResponse;
+typedef Slice<f32> SignalResponse;
 
-typedef struct {
-	SignalResponse* data;
-	iz len;
-} SignalResponseSlice;
+typedef Slice<SignalResponse> SignalResponseSlice;
 
 typedef void ( *CLogProc )( void* pUserData, const char* text );
 

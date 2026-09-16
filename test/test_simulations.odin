@@ -145,16 +145,16 @@ oneRectSimulation :: proc() -> (ok := true) {
 	elements[0] = transmitElement
 	elements[0].apodization = receiveElement.apodization
 
-	transmissionElements := make(#soa[]vkField.TransmissionElement, 1, context.allocator)
+	transmissionElements := make(#soa[]vkField.ElementSetMember, 1, context.allocator)
 	defer delete(transmissionElements)
 	transmissionElements[0] = {
 		index       = 0,
 		apodization = 1,
 		delay       = 0,
 	}
-	receiveChannelElements := make(#soa[]vkField.TransmissionElement, 1, context.allocator)
+	receiveChannelElements := make(#soa[]vkField.ElementSetMember, 1, context.allocator)
 	defer delete(receiveChannelElements)
-	receiveChannelElements[0] = vkField.TransmissionElement {
+	receiveChannelElements[0] = vkField.ElementSetMember {
 		index       = 0,
 		apodization = 1,
 		delay       = 0,
@@ -343,7 +343,7 @@ make_transmit_and_receive_grid_elements :: proc(columnCount, rowCount: int, pitc
 }
 
 make_full_aperture_transmissions :: proc(elementCount: int) -> []vkField.Transmission {
-	transmissionElements := make(#soa[]vkField.TransmissionElement, elementCount, context.allocator)
+	transmissionElements := make(#soa[]vkField.ElementSetMember, elementCount, context.allocator)
 	for i in 0 ..< elementCount {
 		transmissionElements[i] = {
 			index       = i32(i),
@@ -361,8 +361,8 @@ make_full_aperture_transmissions :: proc(elementCount: int) -> []vkField.Transmi
 make_single_element_receive_channels :: proc(elementCount, elementIndexOffset: int) -> []vkField.ReceiveChannel {
 	receiveChannels := make([]vkField.ReceiveChannel, elementCount, context.allocator)
 	for i in 0 ..< elementCount {
-		elements := make(#soa[]vkField.TransmissionElement, 1, context.allocator)
-		elements[0] = vkField.TransmissionElement {
+		elements := make(#soa[]vkField.ElementSetMember, 1, context.allocator)
+		elements[0] = vkField.ElementSetMember {
 			index       = i32(elementIndexOffset + i),
 			apodization = 1,
 			delay       = 0,
@@ -377,10 +377,10 @@ make_single_element_receive_channels :: proc(elementCount, elementIndexOffset: i
 make_column_receive_channels :: proc(columnCount, rowCount, elementIndexOffset: int) -> []vkField.ReceiveChannel {
 	receiveChannels := make([]vkField.ReceiveChannel, columnCount, context.allocator)
 	for column in 0 ..< columnCount {
-		elements := make(#soa[]vkField.TransmissionElement, rowCount, context.allocator)
+		elements := make(#soa[]vkField.ElementSetMember, rowCount, context.allocator)
 		for row in 0 ..< rowCount {
 			elementIndex := elementIndexOffset + column * rowCount + row
-			elements[row] = vkField.TransmissionElement {
+			elements[row] = vkField.ElementSetMember {
 				index       = i32(elementIndex),
 				apodization = 1,
 				delay       = 0,

@@ -51,7 +51,17 @@ static void freeTransmissionSlice(TransmissionSlice* transmissions) {
 }
 
 static void freeReceiveChannelSlice(ReceiveChannelSlice* receiveChannels) {
-	freeTransmissionSlice(reinterpret_cast<TransmissionSlice*>( receiveChannels ));
+	if (receiveChannels == nullptr || receiveChannels->data == nullptr) {
+		return;
+	}
+	for (iz i = 0; i < receiveChannels->len; ++i) {
+		delete[ ] receiveChannels->data[i].elements.index;
+		delete[ ] receiveChannels->data[i].elements.apodization;
+		delete[ ] receiveChannels->data[i].elements.delay;
+	}
+	delete[ ] receiveChannels->data;
+	receiveChannels->data = nullptr;
+	receiveChannels->len = 0;
 }
 
 static void freeSignalResponseSlice(SignalResponseSlice* responses) {
@@ -248,8 +258,8 @@ public:
 		scatters.len = scatterCount;
 
 		copyElements(mxElementSet, &elements);
-		copyTransmissions(mxTransmissions, &transmissions);
 		copyReceiveChannels(mxReceiveChannels, &receiveChannels);
+		copyTransmissions(mxTransmissions, &transmissions);
 		copyScatters(mxScatterSet, scatters.data, scatters.len);
 		copySignalResponses(mxImpulses, &impulses);
 		copySignalResponses(mxExcitations, &excitations);
@@ -292,7 +302,7 @@ public:
 		std::memcpy(slice->delay, pDelays, numelDelays * sizeof(f32));
 	}
 
-	void copyTransmissions(const ObjectArray& mxTransmissionSet, TransmissionSlice* slice, bool hasExcitation = true) {
+	void copyTransmissions(const ObjectArray& mxTransmissionSet, TransmissionSlice* slice) {
 		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
 		const TypedArray<u32> mxCount = matlabPtr->getProperty(mxTransmissionSet, u"Count");
 		const TypedArray<u32> mxElementCounts = matlabPtr->getProperty(mxTransmissionSet, u"ElementCounts");
@@ -314,15 +324,8 @@ public:
 		const f32* pApodizations = getDataPtr<f32>(mxApodizations);
 		const f32* pDelays = getDataPtr<f32>(mxDelays);
 		const u16* pImpulses = getDataPtr<u16>(mxImpulses);
-		std::vector<u16> excitationIndices(slice->len, 0);
-		if (hasExcitation) {
-			const TypedArray<u16> mxExcitations = matlabPtr->getProperty(mxTransmissionSet, u"Excitation");
-			const u16* pExcitations = getDataPtr<u16>(mxExcitations);
-			for (iz i = 0; i < slice->len; ++i) {
-				excitationIndices[i] = pExcitations[i];
-			}
-		}
-
+		const TypedArray<u16> mxExcitations = matlabPtr->getProperty(mxTransmissionSet, u"Excitation");
+		const u16* pExcitations = getDataPtr<u16>(mxExcitations);
 		uz offset = 0;
 		for (iz i = 0; i < slice->len; ++i) {
 			const uz count = static_cast<uz>(pElementCounts[i]);
@@ -334,7 +337,7 @@ public:
 			slice->data[i].elements.apodization = new f32[numel];
 			slice->data[i].elements.delay = new f32[numel];
 			slice->data[i].impulse = pImpulses[i];
-			slice->data[i].excitation = excitationIndices[i];
+			slice->data[i].excitation = pExcitations[i];
 
 			std::memcpy(slice->data[i].elements.index, pIndices + offset, numel * sizeof(i32));
 			std::memcpy(slice->data[i].elements.apodization, pApodizations + offset, numel * sizeof(f32));
@@ -349,11 +352,43 @@ public:
 	}
 
 	void copyReceiveChannels(const ObjectArray& matlabArray, ReceiveChannelSlice* slice) {
-		copyTransmissions(matlabArray, reinterpret_cast<TransmissionSlice*>(slice), false);
+		std::shared_ptr<matlab::engine::MATLABEngine> matlabPtr = getEngine();
+		const TypedArray<u32> mxCount = matlabPtr->getProperty(matlabArray, u"Count");
+		const TypedArray<u32> mxElementCounts = matlabPtr->getProperty(matlabArray, u"ElementCounts");
+		const TypedArray<i32> mxIndices = matlabPtr->getProperty(matlabArray, u"Indices");
+		const TypedArray<f32> mxApodizations = matlabPtr->getProperty(matlabArray, u"Apodizations");
+		const TypedArray<f32> mxDelays = matlabPtr->getProperty(matlabArray, u"Delays");
+		const TypedArray<u16> mxImpulses = matlabPtr->getProperty(matlabArray, u"Impulse");
+
+		slice->len = static_cast<iz>( mxCount[0] );
+		slice->data = new ReceiveChannel[slice->len];
+		const uz totalElementCount = std::min({ mxIndices.getNumberOfElements(), mxApodizations.getNumberOfElements(), mxDelays.getNumberOfElements() });
+		const u32* pElementCounts = getDataPtr<u32>(mxElementCounts);
+		const i32* pIndices = getDataPtr<i32>(mxIndices);
+		const f32* pApodizations = getDataPtr<f32>(mxApodizations);
+		const f32* pDelays = getDataPtr<f32>(mxDelays);
+		const u16* pImpulses = getDataPtr<u16>(mxImpulses);
+
+		uz offset = 0;
+		for (iz i = 0; i < slice->len; ++i) {
+			const uz count = static_cast<uz>(pElementCounts[i]);
+			const uz available = offset < totalElementCount ? totalElementCount - offset : 0;
+			const uz numel = std::min(count, available);
+			slice->data[i].elements.len = static_cast<iz>(count);
+			slice->data[i].elements.index = new i32[numel];
+			slice->data[i].elements.apodization = new f32[numel];
+			slice->data[i].elements.delay = new f32[numel];
+			slice->data[i].impulse = pImpulses[i];
+			std::memcpy(slice->data[i].elements.index, pIndices + offset, numel * sizeof(i32));
+			std::memcpy(slice->data[i].elements.apodization, pApodizations + offset, numel * sizeof(f32));
+			std::memcpy(slice->data[i].elements.delay, pDelays + offset, numel * sizeof(f32));
+			for (uz j = 0; j < numel; ++j) slice->data[i].elements.index[j] -= 1;
+			offset += count;
+		}
 	}
 
 	void copySignalResponses(const CellArray& matlabArray, SignalResponseSlice* slice) {
-		slice->len = static_cast<iz>( matlabArray.getNumberOfElements() );
+		slice->len = static_cast<iz>(matlabArray.getNumberOfElements());
 		slice->data = new SignalResponse[slice->len] { };
 		for (iz i = 0; i < slice->len; ++i) {
 			const Array response = matlabArray[i];
