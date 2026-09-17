@@ -2,12 +2,13 @@ package vkfield
 
 import "base:intrinsics"
 import "base:runtime"
+import "core:dynlib"
 import "core:log"
 import "core:math"
 import "core:mem"
 import "core:slice"
 import "core:time"
-
+import rdoc "import:renderdoc"
 import vk "vendor:vulkan"
 import vkField_util "vkField:utility"
 import vkField_vk "vkField:vulkan"
@@ -55,6 +56,8 @@ when ODIN_OS != .Darwin {
 }
 
 vkSimulator :: struct {
+	rdocLib:               dynlib.Library,
+	rdocApi:               rdoc.Api,
 	info:                  vkSimulationInfo,
 	instance:              vkField_vk.Instance,
 	debugUserData:         ^vkField_vk.DebugUserData,
@@ -229,6 +232,11 @@ vkDataBufferHeader :: struct {
 }
 
 create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkSimulator, ok := vk.Result.SUCCESS) {
+	when ENABLE_RENDERDOC {
+		simulator.rdocLib, simulator.rdocApi, _ = rdoc.load_api()
+		if simulator.rdocApi != nil do log.infof("loaded renderdoc %v", simulator.rdocApi)
+	}
+
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
 
@@ -317,6 +325,17 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 }
 
 destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
+	when ENABLE_RENDERDOC {
+		if simulator.rdocApi != nil {
+			if rdoc.is_frame_capturing(simulator.rdocApi) {
+				captureOk := rdoc.end_frame_capture(simulator.rdocApi, nil, nil)
+				if !captureOk do log.error("renderdoc: EndFrameCapture failed during simulator destruction")
+			}
+			vk.DeviceWaitIdle(simulator.device.device)
+			rdoc.unload_api(simulator.rdocLib)
+		}
+	}
+
 	destroy_vulkan_simulator_resources(simulator)
 
 	vkField_vk.destroy_timeline_semaphore(simulator.device, simulator.computeTimeline)

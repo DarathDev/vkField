@@ -140,19 +140,14 @@ simulate :: proc(
 	switch &sim in simulator {
 	case vkSimulator:
 		when ENABLE_RENDERDOC {
-			rdocLib, rdocApi, rdoc_ok := rdoc.load_api()
-			if rdoc_ok do log.infof("loaded renderdoc %v", rdocApi)
-			defer if rdoc_ok do rdoc.unload_api(rdocLib)
-
-			if rdoc_ok {
-				devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
-				rdoc.start_frame_capture(rdocApi, devicePointer, nil)
-				assert(rdoc.is_frame_capturing(rdocApi))
+			if sim.rdocApi != nil {
+				rdoc.start_frame_capture(sim.rdocApi, nil, nil)
+				assert(rdoc.is_frame_capturing(sim.rdocApi))
 			}
-			defer if rdoc_ok {
-				devicePointer := rdoc.DevicePointer(auto_cast sim.instance.instance)
-				rdoc.end_frame_capture(rdocApi, devicePointer, nil)
-				LaunchOrShowRenderdocUI(rdocApi)
+			defer if sim.rdocApi != nil {
+				captureOk := rdoc.end_frame_capture(sim.rdocApi, nil, nil)
+				if !captureOk do log.error("renderdoc: EndFrameCapture failed")
+				LaunchOrShowRenderdocUI(sim.rdocApi)
 			}
 		}
 
