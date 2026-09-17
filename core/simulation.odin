@@ -147,11 +147,11 @@ simulate :: proc(
 			defer if sim.rdocApi != nil {
 				captureOk := rdoc.end_frame_capture(sim.rdocApi, nil, nil)
 				if !captureOk do log.error("renderdoc: EndFrameCapture failed")
-				LaunchOrShowRenderdocUI(sim.rdocApi)
+				launch_or_show_renderdoc_ui(sim.rdocApi)
 			}
 		}
 
-		data = is_ok(check(vkSimulate(&sim, settings^, transmissions, receiveChannels, elements, scatters, impulses, excitations))) or_return
+		data = is_ok(check(simulate_vulkan(&sim, settings^, transmissions, receiveChannels, elements, scatters, impulses, excitations))) or_return
 	case cpuSimulator:
 		data = check(simulate_cpu(&sim, settings^, transmissions, receiveChannels, elements, scatters, impulses, excitations)) or_return
 	}
@@ -201,7 +201,7 @@ plan_simulation :: proc(
 
 	sort_scatters_by_distance_interval(scatters, transmissions, receiveChannels, elements)
 
-	distanceRange, _, _ := findDistanceLimits(transmissions, receiveChannels, elements, scatters)
+	distanceRange, _, _ := find_distance_limits(transmissions, receiveChannels, elements, scatters)
 	settings.startTime = distanceRange.minDistance / settings.speedOfSound
 	sampleRange := distance_range_to_sample_range(distanceRange, settings.speedOfSound, settings.samplingFrequency, settings.startTime)
 	settings.sampleCount = sample_range_sample_count(sampleRange)
@@ -280,7 +280,7 @@ plan_scatterer_batching :: proc(
 			batchEnd := min(batchStart + scattererBatchSize, scatterCount)
 			batchScatters := scatters[batchStart:batchEnd]
 
-			_, batchTransmitDistanceRange, batchReceiveDistanceRange := findDistanceLimits(transmissions, receiveChannels, elements, batchScatters)
+			_, batchTransmitDistanceRange, batchReceiveDistanceRange := find_distance_limits(transmissions, receiveChannels, elements, batchScatters)
 
 			batchTransmitSampleRange := distance_range_to_sample_range(batchTransmitDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
 			batchReceiveSampleRange := distance_range_to_sample_range(batchReceiveDistanceRange, settings.speedOfSound, settings.samplingFrequency, 0)
@@ -576,7 +576,7 @@ scatter_hilbert_code :: proc(position, minimum, maximum: [3]f32) -> u32 {
 	return result
 }
 
-findDistanceLimits :: proc(
+find_distance_limits :: proc(
 	transmissions: []Transmission,
 	receiveChannels: []ReceiveChannel,
 	elements: #soa[]RectangularElement,
@@ -624,7 +624,7 @@ findDistanceLimits :: proc(
 	return
 }
 
-LaunchOrShowRenderdocUI :: proc(rdoc_api: rdoc.Api) {
+launch_or_show_renderdoc_ui :: proc(rdoc_api: rdoc.Api) {
 	num_captures, num_ok := rdoc.get_num_captures(rdoc_api)
 	if !num_ok || num_captures == 0 do return
 	latest_capture_index := num_captures - 1

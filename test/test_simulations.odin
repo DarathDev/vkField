@@ -17,6 +17,50 @@ MIN_CORRELATION :: 0.95
 MAX_RMS_ERROR_PERCENT :: 1
 MAX_RELATIVE_DIFFERENCE_PERCENT :: 5
 
+main :: proc() {
+	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
+
+	oneRectSimulation()
+	linearArraySimulation()
+	matrixArraySimulation()
+}
+
+@(test)
+oneRectSimulationTest :: proc(t: ^testing.T) {
+	_ = utility.expect(t, oneRectSimulation())
+}
+
+@(test)
+linearArraySimulationTest :: proc(t: ^testing.T) {
+	_ = utility.expect(t, linearArraySimulation())
+}
+
+@(test)
+temporalResponseTest :: proc(t: ^testing.T) {
+	input := []f32{1, 2, 3, 0, 0, 0, 0, 0}
+	impulses := []vkField.TransducerImpulse{{1, 2}, {1, -1}}
+	excitations := []vkField.Excitation{{0.5, 1}}
+	transmissions := []vkField.Transmission{{impulse = 1, excitation = 1}}
+	receiveChannels := []vkField.ReceiveChannel{{impulse = 2}}
+
+	vkField.apply_temporal_responses(input, i32(len(input)), 1, transmissions, receiveChannels, impulses, excitations)
+	expected := []f32{0.5, 2.5, 4.5, 2.5, -4.0, -6.0, 0.0, 0.0}
+	passed := true
+	for actual, index in input {
+		expectedValue := expected[index]
+		if math.abs(actual - expectedValue) > f32(1e-6) {
+			passed = false
+		}
+	}
+	_ = utility.expect(t, passed)
+}
+
+// @(test)
+matrixArraySimulationTest :: proc(t: ^testing.T) {
+	_ = utility.expect(t, matrixArraySimulation())
+}
+
 compare_simulators :: proc(
 	settings: vkField.SimulationSettings,
 	transmissions: []vkField.Transmission,
@@ -254,50 +298,6 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	defer delete(scatters)
 
 	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters, nil, nil)
-}
-
-@(test)
-oneRectSimulationTest :: proc(t: ^testing.T) {
-	_ = utility.expect(t, oneRectSimulation())
-}
-
-@(test)
-linearArraySimulationTest :: proc(t: ^testing.T) {
-	_ = utility.expect(t, linearArraySimulation())
-}
-
-@(test)
-temporalResponseTest :: proc(t: ^testing.T) {
-	input := []f32{1, 2, 3, 0, 0, 0, 0, 0}
-	impulses := []vkField.TransducerImpulse{{1, 2}, {1, -1}}
-	excitations := []vkField.Excitation{{0.5, 1}}
-	transmissions := []vkField.Transmission{{impulse = 1, excitation = 1}}
-	receiveChannels := []vkField.ReceiveChannel{{impulse = 2}}
-
-	vkField.apply_temporal_responses(input, i32(len(input)), 1, transmissions, receiveChannels, impulses, excitations)
-	expected := []f32{0.5, 2.5, 4.5, 2.5, -4.0, -6.0, 0.0, 0.0}
-	passed := true
-	for actual, index in input {
-		expectedValue := expected[index]
-		if math.abs(actual - expectedValue) > f32(1e-6) {
-			passed = false
-		}
-	}
-	_ = utility.expect(t, passed)
-}
-
-// @(test)
-matrixArraySimulationTest :: proc(t: ^testing.T) {
-	_ = utility.expect(t, matrixArraySimulation())
-}
-
-main :: proc() {
-	context.logger = log.create_console_logger()
-	defer log.destroy_console_logger(context.logger)
-
-	oneRectSimulation()
-	linearArraySimulation()
-	matrixArraySimulation()
 }
 
 make_random_scatters :: proc(count: int, xRange, yRange, zRange: [2]f32) -> []vkField.Scatter {

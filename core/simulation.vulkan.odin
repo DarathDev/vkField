@@ -666,41 +666,24 @@ destroy_vulkan_simulator_resources :: proc(simulator: ^vkSimulator) {
 	}
 }
 
-vkSimulate :: proc(
+prepare_vk_simulation :: proc(
 	simulator: ^vkSimulator,
-	settings: SimulationSettings,
-	transmissions: []Transmission,
-	receiveChannels: []ReceiveChannel,
-	elements: #soa[]RectangularElement,
-	scatters: []Scatter,
-	impulses: []TransducerImpulse,
-	excitations: []Excitation,
-	allocator := context.allocator,
+	resources: vkPulseEchoSimulationResources,
+	initialDataBuffer: []byte,
+	initialTemporalBuffer: []byte,
 ) -> (
-	response: []f32,
+	commandBuffer: vkField_vk.CommandBuffer,
+	timelineWait: #soa[]vkField_vk.WaitSemaphore,
+	hasTransferQueue: bool,
 	result: vk.Result,
 ) {
-	resources, pulseEchoResourcesOk := simulator.simulationResources.(vkPulseEchoSimulationResources)
-	if !check(pulseEchoResourcesOk) do return {}, .ERROR_INITIALIZATION_FAILED
-
 	device := simulator.device
-	transferQueue, hasTransferQueue := simulator.transferQueue.?
+	transferQueue: vkField_vk.Queue
+	transferQueue, hasTransferQueue = simulator.transferQueue.?
 
-	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
-
-	commandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
-
-	initialDataBuffer := vkBuildDataBuffer(resources.dataBufferHeader, transmissions, receiveChannels, elements, context.temp_allocator)
-	initialTemporalBuffer := vkBuildTemporalResponseBuffer(
-		impulses,
-		excitations,
-		resources.maxImpulseLength,
-		resources.maxExcitationLength,
-		context.temp_allocator,
-	)
-
+	commandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
 	if hasTransferQueue {
-		transferCommandBuffer := check(vkField_vk.get_command_buffer(device, &simulator.transferCommandPool)) or_return
+		transferCommandBuffer := vkField_vk.get_command_buffer(device, &simulator.transferCommandPool) or_return
 		vkField_vk.cmd_begin(transferCommandBuffer, true) or_return
 		vkField_vk.cmd_upload(transferCommandBuffer, initialDataBuffer, resources.dataBuffer.main, resources.dataBuffer.staging.? or_else {})
 		vkField_vk.cmd_upload(transferCommandBuffer, initialTemporalBuffer, resources.temporalBuffer.main, resources.temporalBuffer.staging.? or_else {})
@@ -766,15 +749,158 @@ vkSimulate :: proc(
 		computeWaits,
 		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
 	) or_return
-	timelineWait := make(#soa[]vkField_vk.WaitSemaphore, 1, context.temp_allocator)
+	timelineWait = make(#soa[]vkField_vk.WaitSemaphore, 1, context.temp_allocator)
 	timelineWait.sempahore[0] = auto_cast simulator.computeTimeline
 	timelineWait.value[0] = simulator.computeTimelineValue
-	check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
+	vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
 	vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
 	if hasTransferQueue {
 		vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
 	}
-	commandBuffer = check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
+	commandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
+	return
+}
+
+run_vk_temporal_pass :: proc(
+	simulator: ^vkSimulator,
+	resources: vkPulseEchoSimulationResources,
+	settings: SimulationSettings,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
+	commandBuffer: vkField_vk.CommandBuffer,
+	timelineWait: #soa[]vkField_vk.WaitSemaphore,
+	hasTransferQueue: bool,
+) -> (
+	resultCommandBuffer: vkField_vk.CommandBuffer,
+	result: vk.Result,
+) {
+	device := simulator.device
+	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
+	temporalShader := resources.temporalShader
+	vkField_vk.cmd_begin(commandBuffer, true) or_return
+	vkField_vk.cmd_pipeline_barrier(
+		commandBuffer,
+		{},
+		{
+			{
+				buffer = resources.responseBuffer.main.buffer,
+				size = resources.responseBuffer.main.size,
+				offset = 0,
+				srcStageMask = {.COMPUTE_SHADER},
+				srcAccessMask = {.SHADER_WRITE},
+				dstStageMask = {.COMPUTE_SHADER},
+				dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
+			},
+		},
+		{},
+	)
+	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &temporalShader)
+	temporalAddress := vkField_vk.get_buffer_address(device, resources.temporalBuffer.main)
+	responseAddress := vkField_vk.get_buffer_address(device, resources.responseBuffer.main)
+	for transmission, transmissionIndex in transmissions {
+		for receiveChannel, receiveChannelIndex in receiveChannels {
+			impulseLength := response_length(impulses, transmission.impulse)
+			excitationLength := response_length(excitations, transmission.excitation)
+			receiveImpulseLength := response_length(impulses, receiveChannel.impulse)
+			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
+				sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
+				vkField_vk.cmd_push_constants(
+					commandBuffer,
+					simulator.pipelineLayout,
+					shaderStage,
+					vkTemporalPushData {
+						response = responseAddress,
+						temporalOutput = vkField_vk.get_buffer_address(device, resources.temporalOutputBuffer),
+						temporalResponses = temporalAddress,
+						lineIndex = auto_cast (transmissionIndex * len(receiveChannels) + receiveChannelIndex),
+						impulseIndex = auto_cast transmission.impulse,
+						excitationIndex = auto_cast transmission.excitation,
+						receiveImpulseIndex = auto_cast receiveChannel.impulse,
+						impulseLibraryCount = auto_cast len(impulses),
+						impulseCount = auto_cast impulseLength,
+						excitationCount = auto_cast excitationLength,
+						receiveImpulseCount = auto_cast receiveImpulseLength,
+						sampleOffset = auto_cast sampleOffset,
+						sampleInterval = 1 / settings.samplingFrequency,
+					},
+				)
+				vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.temporalSpec.SampleWorkgroupSize))), 1, 1)
+			}
+		}
+	}
+	vkField_vk.cmd_pipeline_barrier(
+		commandBuffer,
+		{},
+		{
+			{
+				buffer = resources.temporalOutputBuffer.buffer,
+				size = resources.temporalOutputBuffer.size,
+				offset = 0,
+				srcStageMask = {.COMPUTE_SHADER},
+				srcAccessMask = {.SHADER_WRITE},
+				dstStageMask = {.TRANSFER},
+				dstAccessMask = {.TRANSFER_READ},
+			},
+		},
+		{},
+	)
+	vkField_vk.cmd_copy_buffer(
+		commandBuffer,
+		resources.temporalOutputBuffer,
+		resources.responseBuffer.main,
+		{{sType = .BUFFER_COPY_2, srcOffset = 0, dstOffset = 0, size = resources.temporalOutputBuffer.size}},
+	)
+	vkField_vk.cmd_end(commandBuffer) or_return
+	simulator.computeTimelineValue += 1
+	vkField_vk.queue_submit(
+		simulator.queue,
+		{commandBuffer},
+		{},
+		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
+	) or_return
+	timelineWait.value[0] = simulator.computeTimelineValue
+	vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
+	vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
+	if hasTransferQueue {
+		vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
+	}
+	resultCommandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
+	return
+}
+
+simulate_vulkan :: proc(
+	simulator: ^vkSimulator,
+	settings: SimulationSettings,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
+	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
+	allocator := context.allocator,
+) -> (
+	response: []f32,
+	result: vk.Result,
+) {
+	resources, pulseEchoResourcesOk := simulator.simulationResources.(vkPulseEchoSimulationResources)
+	if !check(pulseEchoResourcesOk) do return {}, .ERROR_INITIALIZATION_FAILED
+
+	device := simulator.device
+	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
+
+	initialDataBuffer := build_vk_data_buffer(resources.dataBufferHeader, transmissions, receiveChannels, elements, context.temp_allocator)
+	initialTemporalBuffer := build_vk_temporal_response_buffer(
+		impulses,
+		excitations,
+		resources.maxImpulseLength,
+		resources.maxExcitationLength,
+		context.temp_allocator,
+	)
+
+	commandBuffer, timelineWait, hasTransferQueue := prepare_vk_simulation(simulator, resources, initialDataBuffer, initialTemporalBuffer) or_return
+	transferQueue, _ := simulator.transferQueue.?
 
 	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
 
@@ -1222,94 +1348,18 @@ vkSimulate :: proc(
 		commandBuffer = check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
 	}
 
-	vkField_vk.cmd_begin(commandBuffer, true) or_return
-	vkField_vk.cmd_pipeline_barrier(
+	commandBuffer = run_vk_temporal_pass(
+		simulator,
+		resources,
+		settings,
+		transmissions,
+		receiveChannels,
+		impulses,
+		excitations,
 		commandBuffer,
-		{},
-		{
-			{
-				buffer = resources.responseBuffer.main.buffer,
-				size = resources.responseBuffer.main.size,
-				offset = 0,
-				srcStageMask = {.COMPUTE_SHADER},
-				srcAccessMask = {.SHADER_WRITE},
-				dstStageMask = {.COMPUTE_SHADER},
-				dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
-			},
-		},
-		{},
-	)
-	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.temporalShader)
-	temporalAddress := vkField_vk.get_buffer_address(device, resources.temporalBuffer.main)
-	responseAddress := vkField_vk.get_buffer_address(device, resources.responseBuffer.main)
-	for transmission, transmissionIndex in transmissions {
-		for receiveChannel, receiveChannelIndex in receiveChannels {
-			impulseLength := response_length(impulses, transmission.impulse)
-			excitationLength := response_length(excitations, transmission.excitation)
-			receiveImpulseLength := response_length(impulses, receiveChannel.impulse)
-			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
-				sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
-				vkField_vk.cmd_push_constants(
-					commandBuffer,
-					simulator.pipelineLayout,
-					shaderStage,
-					vkTemporalPushData {
-						response = responseAddress,
-						temporalOutput = vkField_vk.get_buffer_address(device, resources.temporalOutputBuffer),
-						temporalResponses = temporalAddress,
-						lineIndex = auto_cast (transmissionIndex * len(receiveChannels) + receiveChannelIndex),
-						impulseIndex = auto_cast transmission.impulse,
-						excitationIndex = auto_cast transmission.excitation,
-						receiveImpulseIndex = auto_cast receiveChannel.impulse,
-						impulseLibraryCount = auto_cast len(impulses),
-						impulseCount = auto_cast impulseLength,
-						excitationCount = auto_cast excitationLength,
-						receiveImpulseCount = auto_cast receiveImpulseLength,
-						sampleOffset = auto_cast sampleOffset,
-						sampleInterval = 1 / settings.samplingFrequency,
-					},
-				)
-				vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.temporalSpec.SampleWorkgroupSize))), 1, 1)
-			}
-		}
-	}
-	vkField_vk.cmd_pipeline_barrier(
-		commandBuffer,
-		{},
-		{
-			{
-				buffer = resources.temporalOutputBuffer.buffer,
-				size = resources.temporalOutputBuffer.size,
-				offset = 0,
-				srcStageMask = {.COMPUTE_SHADER},
-				srcAccessMask = {.SHADER_WRITE},
-				dstStageMask = {.TRANSFER},
-				dstAccessMask = {.TRANSFER_READ},
-			},
-		},
-		{},
-	)
-	vkField_vk.cmd_copy_buffer(
-		commandBuffer,
-		resources.temporalOutputBuffer,
-		resources.responseBuffer.main,
-		{{sType = .BUFFER_COPY_2, srcOffset = 0, dstOffset = 0, size = resources.temporalOutputBuffer.size}},
-	)
-	vkField_vk.cmd_end(commandBuffer) or_return
-	simulator.computeTimelineValue += 1
-	vkField_vk.queue_submit(
-		simulator.queue,
-		{commandBuffer},
-		{},
-		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
+		timelineWait,
+		hasTransferQueue,
 	) or_return
-	timelineWait.value[0] = simulator.computeTimelineValue
-	check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
-	vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
-	if hasTransferQueue {
-		vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
-	}
-	commandBuffer = check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
 
 	vkField_vk.cmd_begin(commandBuffer, true) or_return
 	vkField_vk.cmd_pipeline_barrier(
@@ -1479,20 +1529,20 @@ prepare_readback :: proc(device: vkField_vk.Device, size: vk.DeviceSize) -> (buf
 	return
 }
 
-vkPackElementBuffer :: proc(transmitElements: #soa[]RectangularElement, receiveElements: #soa[]RectangularElement) -> []byte {
-	elementTotalSize := vkElementBufferSize(len(transmitElements), len(receiveElements))
+pack_vk_element_buffer :: proc(transmitElements: #soa[]RectangularElement, receiveElements: #soa[]RectangularElement) -> []byte {
+	elementTotalSize := vk_element_buffer_size(len(transmitElements), len(receiveElements))
 	elementCount: int = len(transmitElements) + len(receiveElements)
 	rectangularElements := make([]byte, elementTotalSize)
 	elementBuffer := rectangularElements
 	positions: [][3]f32; normals: [][3]f32; sizes: [][2]f32; apodizations: []f32; delays: []f32
-	elementBuffer, positions = seperateSoaBuffer(elementBuffer, elementCount, [3]f32)
-	elementBuffer, normals = seperateSoaBuffer(elementBuffer, elementCount, [3]f32)
-	elementBuffer, sizes = seperateSoaBuffer(elementBuffer, elementCount, [2]f32)
-	elementBuffer, apodizations = seperateSoaBuffer(elementBuffer, elementCount, f32)
-	elementBuffer, delays = seperateSoaBuffer(elementBuffer, elementCount, f32)
+	elementBuffer, positions = separate_soa_buffer(elementBuffer, elementCount, [3]f32)
+	elementBuffer, normals = separate_soa_buffer(elementBuffer, elementCount, [3]f32)
+	elementBuffer, sizes = separate_soa_buffer(elementBuffer, elementCount, [2]f32)
+	elementBuffer, apodizations = separate_soa_buffer(elementBuffer, elementCount, f32)
+	elementBuffer, delays = separate_soa_buffer(elementBuffer, elementCount, f32)
 	assert(len(elementBuffer) == 0)
 
-	seperateSoaBuffer :: proc(buffer: []byte, elementCount: int, $T: typeid) -> (mainBuffer: []byte, splitBuffer: []T) {
+	separate_soa_buffer :: proc(buffer: []byte, elementCount: int, $T: typeid) -> (mainBuffer: []byte, splitBuffer: []T) {
 		tempSplitBuffer: []byte
 		tempSplitBuffer, mainBuffer = slice.split_at(buffer, size_of(T) * elementCount)
 		splitBuffer = slice.reinterpret([]T, tempSplitBuffer)
@@ -1513,7 +1563,7 @@ vkPackElementBuffer :: proc(transmitElements: #soa[]RectangularElement, receiveE
 	return rectangularElements
 }
 
-vkElementBufferSize :: proc(transmitCount, receiveCount: int) -> vk.DeviceSize {
+vk_element_buffer_size :: proc(transmitCount, receiveCount: int) -> vk.DeviceSize {
 	elementTotalSize: vk.DeviceSize
 	elementTotalSize += size_of([3]f32) // Position
 	elementTotalSize += size_of([3]f32) // Normals
@@ -1573,7 +1623,7 @@ calculate_vk_data_buffer_offsets :: proc(
 	return
 }
 
-vkBuildTemporalResponseBuffer :: proc(
+build_vk_temporal_response_buffer :: proc(
 	impulses: []TransducerImpulse,
 	excitations: []Excitation,
 	maxImpulseLength: u32,
@@ -1594,7 +1644,7 @@ vkBuildTemporalResponseBuffer :: proc(
 	return slice.to_bytes(data)
 }
 
-vkBuildDataBuffer :: proc(
+build_vk_data_buffer :: proc(
 	header: vkDataBufferHeader,
 	transmissions: []Transmission,
 	receiveChannels: []ReceiveChannel,
