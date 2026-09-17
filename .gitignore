@@ -1,3 +1,6 @@
+# Temp Folder
+tmp/
+
 # Prerequisites
 *.d
 
@@ -65,3 +68,6 @@ lib/
 
 # Spall Profiles
 *.spall
+
+# Log Files
+*.log
