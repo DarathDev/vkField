@@ -183,8 +183,7 @@ vkPulseConvPushData :: struct {
 	transmissionInfos:     vk.DeviceAddress,
 	transmissionResponses: vk.DeviceAddress,
 	response:              vk.DeviceAddress,
-	transmissionIndex:     u32,
-	receiveChannelIndex:   u32,
+	pairOffset:            u32,
 	sampleOffset:          u32,
 	scattererOffset:       u32,
 }
@@ -417,8 +416,8 @@ plan_vulkan_simulator :: proc(
 
 	log.infof(
 		"Vulkan scatter batch plan: scatters=%d, elements=%d, transmissions=%d, receiveChannels=%d, apertureSamples=%d, " +
-		"sharedMemory=%d/%d bytes, fixedBuffer=%d bytes, bytesPerScatterer=%d, bufferLimit=%d bytes, " +
-		"physicalStorageLimit=%d bytes, dispatchWorkLimit=%d bytes, bufferBatchLimit=%d, targetBatch=%d, finalBatch=%d",
+		"sharedMemory=%M/%M bytes, fixedBuffer=%M bytes, bytesPerScatterer=%M, bufferLimit=%M bytes, " +
+		"physicalStorageLimit=%M bytes, dispatchWorkLimit=%M bytes, bufferBatchLimit=%d, targetBatch=%d, finalBatch=%d",
 		scatterCount,
 		elementCount,
 		transmissionCount,
@@ -1169,6 +1168,7 @@ run_vk_temporal_pass :: proc(
 	device := simulator.device
 	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
 	temporalShader := resources.temporalShader
+	maxSampleChunkSize: i32 = 1024
 	vkField_vk.cmd_begin(commandBuffer, true) or_return
 	vkField_vk.cmd_pipeline_barrier(
 		commandBuffer,
@@ -1194,8 +1194,8 @@ run_vk_temporal_pass :: proc(
 			impulseLength := response_length(impulses, transmission.impulse)
 			excitationLength := response_length(excitations, transmission.excitation)
 			receiveImpulseLength := response_length(impulses, receiveChannel.impulse)
-			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
-				sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
+			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += maxSampleChunkSize {
+				sampleChunkCount := min(maxSampleChunkSize, settings.sampleCount - sampleOffset)
 				vkField_vk.cmd_push_constants(
 					commandBuffer,
 					simulator.pipelineLayout,
@@ -1466,26 +1466,33 @@ dispatch_vk_pulse_echo_convolution :: proc(
 	pulseEchoShader := resources.pulseConvShader
 	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &pulseEchoShader)
 	responseAddress := vkField_vk.get_buffer_address(simulator.device, resources.responseBuffer.main)
-	for transmissionIndex in 0 ..< len(transmissions) {
-		for receiveChannelIndex in 0 ..< len(receiveChannels) {
-			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
-				sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
-				vkField_vk.cmd_push_constants(
-					commandBuffer,
-					simulator.pipelineLayout,
-					stage,
-					vkPulseConvPushData {
-						transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
-						transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-						response = responseAddress,
-						transmissionIndex = auto_cast transmissionIndex,
-						receiveChannelIndex = auto_cast receiveChannelIndex,
-						sampleOffset = auto_cast sampleOffset,
-						scattererOffset = auto_cast scatterOffset,
-					},
-				)
-				vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.pulseConvSpec.SampleWorkgroupSize))), 1, 1)
-			}
+	pairCount := len(transmissions) * len(receiveChannels)
+	if pairCount == 0 do return
+	maxPairGroups := int(simulator.device.physicalDevice.properties.limits.maxComputeWorkGroupCount.y)
+	maxSampleChunkSize: i32 = 1024
+	for pairOffset := 0; pairOffset < pairCount; pairOffset += maxPairGroups {
+		pairChunkCount := min(maxPairGroups, pairCount - pairOffset)
+		for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += maxSampleChunkSize {
+			sampleChunkCount := min(maxSampleChunkSize, settings.sampleCount - sampleOffset)
+			vkField_vk.cmd_push_constants(
+				commandBuffer,
+				simulator.pipelineLayout,
+				stage,
+				vkPulseConvPushData {
+					transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+					transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+					response = responseAddress,
+					pairOffset = auto_cast pairOffset,
+					sampleOffset = auto_cast sampleOffset,
+					scattererOffset = auto_cast scatterOffset,
+				},
+			)
+			vk.CmdDispatch(
+				commandBuffer.commandBuffer,
+				u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.pulseConvSpec.SampleWorkgroupSize))),
+				u32(pairChunkCount),
+				1,
+			)
 		}
 	}
 	return

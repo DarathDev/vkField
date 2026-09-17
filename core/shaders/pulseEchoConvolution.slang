@@ -11,8 +11,7 @@ struct PulseEchoSettings {
   ElementSetInfo *transmissionInfos;
   float *transmissionResponses;
   float *response;
-  uint transmissionIndex;
-  uint receiveChannelIndex;
+  uint pairOffset;
   uint sampleOffset;
   uint scattererOffset;
 
@@ -35,14 +34,22 @@ groupshared float receiveChannelAperture[ConvolutionTileSize + SampleWorkgroupSi
 [shader("compute")]
 [numthreads(SampleWorkgroupSize, 1, 1)]
 void main(uint ThreadID: SV_GroupIndex, uint1 LocalInvocationID: SV_GroupThreadID, uint1 GlobalInvocationID: SV_DispatchThreadID,
-          uint1 GroupID: SV_GroupID) {
+          uint3 GroupID: SV_GroupID) {
 
   const uint threadCount = SampleWorkgroupSize;
 
   uint sampleIndex = GlobalInvocationID.x + pushData.sampleOffset;
-  uint transmissionIndex = pushData.transmissionIndex;
-  uint receiveChannelIndex = pushData.receiveChannelIndex;
-  uint baseSampleIndex = pushData.sampleOffset + GroupID * SampleWorkgroupSize;
+  uint pairIndex = pushData.pairOffset + GroupID.y;
+  if (pairIndex >= TransmissionCount * ReceiveChannelCount)
+    return;
+
+  uint transmissionIndex = pairIndex / ReceiveChannelCount;
+  uint receiveChannelIndex = pairIndex % ReceiveChannelCount;
+  uint baseSampleIndex = pushData.sampleOffset + GroupID.x * SampleWorkgroupSize;
+  if (baseSampleIndex >= ResponseSampleCount)
+    return;
+
+  bool sampleInRange = sampleIndex < ResponseSampleCount;
 
   float sample = 0;
   for (uint scattererIndex = 0; scattererIndex < ScattererBatchCount; scattererIndex++) {
@@ -101,5 +108,6 @@ void main(uint ThreadID: SV_GroupIndex, uint1 LocalInvocationID: SV_GroupThreadI
   }
 
   uint dataLineIndex = transmissionIndex * ReceiveChannelCount + receiveChannelIndex;
-  pushData.response[dataLineIndex * ResponseSampleCount + sampleIndex] += sample;
+  if (sampleInRange)
+    pushData.response[dataLineIndex * ResponseSampleCount + sampleIndex] += sample;
 }
