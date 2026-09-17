@@ -61,7 +61,7 @@ vkSimulator :: struct {
 	info:                  vkSimulationInfo,
 	instance:              vkField_vk.Instance,
 	debugUserData:         ^vkField_vk.DebugUserData,
-	debugMessenger:        vkField_vk.DebugMessenger,
+	debugMessenger:        Maybe(vkField_vk.DebugMessenger),
 	physicalDevices:       #soa[]vkField_vk.PhysicalDevice,
 	device:                vkField_vk.Device,
 	queue:                 vkField_vk.Queue,
@@ -240,8 +240,8 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 	simulator.debugUserData = new(vkField_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
 
-	instanceCapabilities: vkField_vk.InstanceCapabilities = {}
-	if settings.gpuSettings.enableDriverDebugMessages do instanceCapabilities = {.Validation, .DebugUtils}
+	instanceCapabilities: vkField_vk.InstanceCapabilities = {.DebugUtils}
+	if settings.gpuSettings.enableDriverDebugMessages do instanceCapabilities += {.Validation}
 
 	simulator.instance = confirm(
 		vkField_vk.create_instance(
@@ -250,7 +250,7 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 		),
 	) or_return
 
-	if .DebugUtils in simulator.instance.enabledCapabilities {
+	if settings.gpuSettings.enableDriverDebugMessages {
 		simulator.debugMessenger = confirm(vkField_vk.create_debug_messenger(simulator.instance, simulator.debugUserData)) or_return
 	}
 
@@ -349,8 +349,8 @@ destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 
 	vkField_vk.destroy_device(&simulator.device)
 	vkField_vk.free_physical_devices(&simulator.physicalDevices)
-	if .DebugUtils in simulator.instance.enabledCapabilities {
-		vkField_vk.destroy_debug_messenger(simulator.instance.instance, &simulator.debugMessenger)
+	if debugMessenger, ok := simulator.debugMessenger.?; ok {
+		vkField_vk.destroy_debug_messenger(simulator.instance.instance, &debugMessenger)
 	}
 	vkField_vk.destroy_instance(&simulator.instance)
 	free(simulator.debugUserData)
