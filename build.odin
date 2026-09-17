@@ -26,6 +26,7 @@ VKFIELD_OUTPUT_SUBDIR := ""
 VKFIELD_OUTPUT_LIB_NAME := "vkField"
 VKFIELD_TESTS_NAME := "vkField_tests"
 VKFIELD_MATLAB := #config(MATLAB, true)
+VKFIELD_ADDRESS_SANITIZER := #config(ADDRESS_SANITIZER, true)
 
 LOG_DEBUG := #config(LOG_DEBUG, false)
 
@@ -95,6 +96,8 @@ main :: proc() {
 			VKFIELD_MATLAB = true
 		case "-profile":
 			append(&options, ..odin_defines_to_options(VKFIELD_ODIN_PROFILE_DEFINES))
+		case "-asan":
+			VKFIELD_ADDRESS_SANITIZER = true
 		case "-no-break":
 			append(&options, ..odin_defines_to_options({{"MESSENGER_BREAKPOINT", "false"}}))
 		}
@@ -127,6 +130,9 @@ main :: proc() {
 		append(&options, ..VKFIELD_ODIN_RELEASE_OPTIONS)
 	case "debug":
 		append(&options, ..VKFIELD_ODIN_DEBUG_OPTIONS)
+		if VKFIELD_ADDRESS_SANITIZER {
+			append(&options, OdinBuildOption{flag = "sanitize", value = {"address"}})
+		}
 		append(&options, ..odin_defines_to_options(VKFIELD_ODIN_DEBUG_DEFINES))
 	}
 	switch VKFIELD_BUILD_TYPE {
