@@ -1,24 +1,27 @@
 package vkfield
 
 import "base:runtime"
+import "core:fmt"
 import "core:log"
 import "core:strings"
 import "vkField:utility"
 import vkField_vk "vkField:vulkan"
 
 @(export)
-create_cpu_simulator_c :: proc "c" (simulator: ^^Simulator, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
+create_cpu_simulator_c :: proc "c" (simulator: ^^Simulator, cLogger: cLogProc = nil, cAssert: cAssertProc = nil, userData: rawptr = nil) -> (ok := true) {
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	context.logger = c_logger(context.logger, cLogger, userData)
+	context.assertion_failure_proc = c_assertion(cAssert, userData)
 	simulator^ = new(Simulator)
 	simulator^^, ok = create_cpu_simulator()
 	return
 }
 
 @(export)
-destroy_cpu_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
+destroy_cpu_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc = nil, cAssert: cAssertProc = nil, userData: rawptr = nil) -> (ok := true) {
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	context.logger = c_logger(context.logger, cLogger, userData)
+	context.assertion_failure_proc = c_assertion(cAssert, userData)
 	utility.check(simulator != nil) or_return
 	if cpuSimulator, cpuSimOk := simulator.(cpuSimulator); cpuSimOk {
 		destroy_cpu_simulator(&cpuSimulator)
@@ -31,7 +34,8 @@ create_vulkan_simulator_c :: proc "c" (
 	simulator: ^^Simulator,
 	settings: ^SimulationSettings,
 	cLogger: cLogProc = nil,
-	loggerUserData: rawptr = nil,
+	cAssert: cAssertProc = nil,
+	userData: rawptr = nil,
 ) -> (
 	ok := true,
 ) {
@@ -39,7 +43,8 @@ create_vulkan_simulator_c :: proc "c" (
 		vkField_vk.initialize()
 	}
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	context.logger = c_logger(context.logger, cLogger, userData)
+	context.assertion_failure_proc = c_assertion(cAssert, userData)
 	simulator^ = new(Simulator)
 	utility.check(settings != nil) or_return
 	simulator^^, ok = utility.is_ok(create_vulkan_simulator(settings^))
@@ -47,9 +52,10 @@ create_vulkan_simulator_c :: proc "c" (
 }
 
 @(export)
-destroy_vulkan_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc = nil, loggerUserData: rawptr = nil) -> (ok := true) {
+destroy_vulkan_simulator_c :: proc "c" (simulator: ^Simulator, cLogger: cLogProc = nil, cAssert: cAssertProc = nil, userData: rawptr = nil) -> (ok := true) {
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	context.logger = c_logger(context.logger, cLogger, userData)
+	context.assertion_failure_proc = c_assertion(cAssert, userData)
 	utility.check(simulator != nil) or_return
 	if vkSimulator, vkSimOk := simulator.(vkSimulator); vkSimOk {
 		destroy_vulkan_simulator(&vkSimulator)
@@ -68,12 +74,14 @@ plan_simulation_c :: proc "c" (
 	impulses: []TransducerImpulse,
 	excitations: []Excitation,
 	cLogger: cLogProc = nil,
-	loggerUserData: rawptr = nil,
+	cAssert: cAssertProc = nil,
+	userData: rawptr = nil,
 ) -> (
 	ok := true,
 ) {
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	context.logger = c_logger(context.logger, cLogger, userData)
+	context.assertion_failure_proc = c_assertion(cAssert, userData)
 	return plan_simulation(simulator, settings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 }
 
@@ -89,10 +97,12 @@ simulate_c :: proc "c" (
 	excitations: []Excitation,
 	pulseEcho: [^]f32,
 	cLogger: cLogProc = nil,
-	loggerUserData: rawptr = nil,
+	cAssert: cAssertProc = nil,
+	userData: rawptr = nil,
 ) -> bool {
 	context = runtime.default_context()
-	context.logger = c_logger(context.logger, cLogger, loggerUserData)
+	context.logger = c_logger(context.logger, cLogger, userData)
+	context.assertion_failure_proc = c_assertion(cAssert, userData)
 	data, ok := simulate(simulator, settings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	copy(pulseEcho[:len(data)], data)
 	delete(data)
@@ -101,6 +111,25 @@ simulate_c :: proc "c" (
 }
 
 cLogProc :: #type proc "c" (pUserData: rawptr, string: cstring)
+cAssertProc :: #type proc "c" (pUserData: rawptr, string: cstring)
+
+c_assertion_proc_callback: cAssertProc
+c_assertion_proc_user_data: rawptr
+
+@(private = "file")
+c_assertion :: proc(c: cAssertProc, pUserData: rawptr) -> runtime.Assertion_Failure_Proc {
+	c_assertion_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
+		if c_assertion_proc_callback != nil {
+			full_message := fmt.tprintf("%s(%v:%v) %s: %s", loc.file_path, loc.line, loc.column, prefix, message)
+			c_assertion_proc_callback(c_assertion_proc_user_data, strings.clone_to_cstring(full_message, context.temp_allocator))
+		}
+		runtime.default_assertion_failure_proc(prefix, message, loc)
+	}
+	c_assertion_proc_callback = c
+	c_assertion_proc_user_data = pUserData
+	return c_assertion_proc
+}
+
 @(private = "file")
 c_logger :: proc(l: log.Logger, c: cLogProc, pUserData: rawptr) -> log.Logger {
 	c_logger_data :: struct {

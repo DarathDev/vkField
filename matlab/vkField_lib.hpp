@@ -131,6 +131,7 @@ typedef Slice<f32> SignalResponse;
 typedef Slice<SignalResponse> SignalResponseSlice;
 
 typedef void ( *CLogProc )( void* pUserData, const char* text );
+typedef void ( *CAssertProc )( void* pUserData, const char* text );
 
 #ifdef __cplusplus
 extern "C" {
@@ -139,12 +140,14 @@ extern "C" {
 	LIB_FN bool create_cpu_simulator_c(
 		Simulator** simulator,
 		CLogProc logFunc,
+		CAssertProc assertFunc,
 		void* pUserData
 	);
 
 	LIB_FN void destroy_cpu_simulator_c(
 		Simulator* simulator,
 		CLogProc logFunc,
+		CAssertProc assertFunc,
 		void* pUserData
 	);
 
@@ -152,12 +155,14 @@ extern "C" {
 		Simulator** simulator,
 		SimulationSettings* settings,
 		CLogProc logFunc,
+		CAssertProc assertFunc,
 		void* pUserData
 	);
 
 	LIB_FN void destroy_vulkan_simulator_c(
 		Simulator* simulator,
 		CLogProc logFunc,
+		CAssertProc assertFunc,
 		void* pUserData
 	);
 
@@ -171,6 +176,7 @@ extern "C" {
 		SignalResponseSlice impulses,
 		SignalResponseSlice excitations,
 		CLogProc logFunc,
+		CAssertProc assertFunc,
 		void* pUserData
 	);
 
@@ -185,6 +191,7 @@ extern "C" {
 		SignalResponseSlice excitations,
 		float* pulseEcho,
 		CLogProc logFunc,
+		CAssertProc assertFunc,
 		void* pUserData
 	);
 

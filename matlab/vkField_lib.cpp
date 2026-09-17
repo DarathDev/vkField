@@ -18,6 +18,10 @@ static void printLogger(void* pUserData, const char* text) {
 	}
 }
 
+static void throwAssertion(void* pUserData, const char* text) {
+	throw std::runtime_error(text != nullptr ? text : "Odin assertion failed");
+}
+
 static void freeRectangularElementSoaSlice(RectangularElementSoaSlice* slice) {
 	if (slice == nullptr) {
 		return;
@@ -111,20 +115,21 @@ public:
 		Simulator* simulator;
 		switch (simulatorType) {
 		case SimulatorType::CPU:
-			create_cpu_simulator_c(&simulator, printLogger, this);
+			create_cpu_simulator_c(&simulator, printLogger, throwAssertion, this);
 			break;
 		case SimulatorType::GPU:
 			create_vulkan_simulator_c(
 				&simulator,
 				&settings,
 				printLogger,
+				throwAssertion,
 				this
 			);
 			break;
 		}
 
 		plan_simulation_c(simulator, &settings, transmissions, receiveChannels, elements,
-					  scatters, impulses, excitations, printLogger, this);
+					  scatters, impulses, excitations, printLogger, throwAssertion, this);
 		matlabPtr->setProperty(mxSimulator, u"StartTime",
 						   factory.createScalar<f32>(settings.startTime));
 		matlabPtr->setProperty(mxSimulator, u"SampleCount",
@@ -134,7 +139,8 @@ public:
 			settings.sampleCount * receiveChannels.len * transmissions.len);
 
 		simulate_c(simulator, &settings, transmissions, receiveChannels, elements,
-				   scatters, impulses, excitations, pulseEchoBuffer.get(), printLogger, this);
+				   scatters, impulses, excitations, pulseEchoBuffer.get(), printLogger,
+				   throwAssertion, this);
 		ObjectArray mxMetrics = matlabPtr->getProperty(mxSimulator, u"Metrics");
 		matlabPtr->setProperty(mxMetrics, u"SimulationTime",
 							   factory.createScalar<f32>(settings.simulationMetrics.simulationTime));
@@ -149,10 +155,10 @@ public:
 
 		switch (simulatorType) {
 		case SimulatorType::CPU:
-			destroy_cpu_simulator_c(simulator, printLogger, this);
+			destroy_cpu_simulator_c(simulator, printLogger, throwAssertion, this);
 			break;
 		case SimulatorType::GPU:
-			destroy_vulkan_simulator_c(simulator, printLogger, this);
+			destroy_vulkan_simulator_c(simulator, printLogger, throwAssertion, this);
 			break;
 		}
 
