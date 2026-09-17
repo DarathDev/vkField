@@ -636,6 +636,396 @@ plan_vulkan_simulator :: proc(
 	return
 }
 
+simulate_vulkan :: proc(
+	simulator: ^vkSimulator,
+	settings: SimulationSettings,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	elements: #soa[]RectangularElement,
+	scatters: []Scatter,
+	impulses: []TransducerImpulse,
+	excitations: []Excitation,
+	allocator := context.allocator,
+) -> (
+	response: []f32,
+	result: vk.Result,
+) {
+	resources, pulseEchoResourcesOk := simulator.simulationResources.(vkPulseEchoSimulationResources)
+	if !check(pulseEchoResourcesOk) do return {}, .ERROR_INITIALIZATION_FAILED
+
+	device := simulator.device
+	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
+
+	initialDataBuffer := build_vk_data_buffer(resources.dataBufferHeader, transmissions, receiveChannels, elements, context.temp_allocator)
+	initialTemporalBuffer := build_vk_temporal_response_buffer(
+		impulses,
+		excitations,
+		resources.maxImpulseLength,
+		resources.maxExcitationLength,
+		context.temp_allocator,
+	)
+
+	commandBuffer, timelineWait, hasTransferQueue := prepare_vk_simulation(simulator, resources, initialDataBuffer, initialTemporalBuffer) or_return
+	transferQueue, _ := simulator.transferQueue.?
+
+	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
+
+	scatterBatchSize := simulator.info.scattererBatchSize
+	dataBufferAddress := vkField_vk.get_buffer_address(device, resources.dataBuffer.main)
+	header := resources.dataBufferHeader
+	scatterUploadCapacity := int(resources.scatterBuffers[0].size / auto_cast size_of(Scatter))
+	scatterWindowBatchCount := max(1, scatterUploadCapacity / int(scatterBatchSize))
+	scatterWindowSize := scatterWindowBatchCount * int(scatterBatchSize)
+	totalScatterCommands := 0
+	for progressWindowOffset := 0; progressWindowOffset < len(scatters); progressWindowOffset += scatterWindowSize {
+		progressWindowEnd := min(progressWindowOffset + scatterWindowSize, len(scatters))
+		progressWindowBatchCount := (progressWindowEnd - progressWindowOffset + int(scatterBatchSize) - 1) / int(scatterBatchSize)
+		totalScatterCommands += (progressWindowBatchCount + SCATTER_BATCHES_PER_COMMAND_BUFFER - 1) / SCATTER_BATCHES_PER_COMMAND_BUFFER
+	}
+	totalScatterCommands = max(1, totalScatterCommands)
+	scatterComputeStartValue := simulator.computeTimelineValue
+	progressStopwatch: time.Stopwatch
+	time.stopwatch_start(&progressStopwatch)
+	lastProgressLogTime: time.Duration
+	scatterData := slice.to_bytes(scatters)
+	for windowOffset := 0; windowOffset < len(scatters); windowOffset += scatterWindowSize {
+		windowEnd := min(windowOffset + scatterWindowSize, len(scatters))
+		windowBatchCount := (windowEnd - windowOffset + int(scatterBatchSize) - 1) / int(scatterBatchSize)
+		commandBufferCount := (windowBatchCount + SCATTER_BATCHES_PER_COMMAND_BUFFER - 1) / SCATTER_BATCHES_PER_COMMAND_BUFFER
+		computeCommandBuffers := check(
+			vkField_vk.get_command_buffers(device, &simulator.computeCommandPool, commandBufferCount, allocator = context.temp_allocator),
+		) or_return
+		transferCommandBuffers: []vkField_vk.CommandBuffer
+		if hasTransferQueue {
+			transferCommandBuffers = check(
+				vkField_vk.get_command_buffers(device, &simulator.transferCommandPool, commandBufferCount, allocator = context.temp_allocator),
+			) or_return
+		}
+		slotComputeTimelineValues: [MAX_FRAMES_IN_FLIGHT]u64
+		for computeCommandBuffer, commandBufferIndex in computeCommandBuffers {
+			commandStart := windowOffset + commandBufferIndex * SCATTER_BATCHES_PER_COMMAND_BUFFER * int(scatterBatchSize)
+			commandEnd := min(commandStart + SCATTER_BATCHES_PER_COMMAND_BUFFER * int(scatterBatchSize), windowEnd)
+			ringIndex := commandBufferIndex % len(resources.scatterBuffers)
+			if slotComputeTimelineValues[ringIndex] > 0 {
+				timelineWait.value[0] = slotComputeTimelineValues[ringIndex]
+				check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
+			}
+			scatterBuffer := resources.scatterBuffers[ringIndex]
+			windowData := scatterData[commandStart * size_of(Scatter):commandEnd * size_of(Scatter)]
+			copy(vkField_vk.get_buffer_mapped_data(scatterBuffer)[:len(windowData)], windowData)
+
+			if hasTransferQueue {
+				transferCommandBuffer := transferCommandBuffers[commandBufferIndex]
+				vkField_vk.cmd_begin(transferCommandBuffer, true) or_return
+				vkField_vk.cmd_pipeline_barrier(
+					transferCommandBuffer,
+					{},
+					{
+						{
+							buffer = scatterBuffer.buffer,
+							size = scatterBuffer.size,
+							offset = 0,
+							srcStageMask = {.HOST},
+							srcAccessMask = {.HOST_WRITE},
+							dstStageMask = {.TRANSFER},
+							dstAccessMask = {.TRANSFER_READ},
+						},
+					},
+					{},
+				)
+				for transferScatterOffset := commandStart; transferScatterOffset < commandEnd; transferScatterOffset += auto_cast scatterBatchSize {
+					transferScatterBatchEnd := min(transferScatterOffset + auto_cast scatterBatchSize, commandEnd)
+					transferScatterUploadSize: vk.DeviceSize = auto_cast ((transferScatterBatchEnd - transferScatterOffset) * size_of(Scatter))
+					vkField_vk.cmd_copy_buffer(
+						transferCommandBuffer,
+						scatterBuffer,
+						resources.dataBuffer.main,
+						{
+							{
+								sType = .BUFFER_COPY_2,
+								srcOffset = auto_cast ((transferScatterOffset - commandStart) * size_of(Scatter)),
+								dstOffset = auto_cast header.scatterers,
+								size = transferScatterUploadSize,
+							},
+						},
+					)
+				}
+				vkField_vk.cmd_end(transferCommandBuffer) or_return
+				simulator.transferTimelineValue += 1
+				vkField_vk.queue_submit(
+					transferQueue,
+					{transferCommandBuffer},
+					{},
+					{{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.TRANSFER}}},
+				) or_return
+			}
+
+			commandBuffer = computeCommandBuffer
+			vkField_vk.cmd_begin(commandBuffer, true) or_return
+			if !hasTransferQueue {
+				vkField_vk.cmd_pipeline_barrier(
+					commandBuffer,
+					{},
+					{
+						{
+							buffer = scatterBuffer.buffer,
+							size = scatterBuffer.size,
+							offset = 0,
+							srcStageMask = {.HOST},
+							srcAccessMask = {.HOST_WRITE},
+							dstStageMask = {.TRANSFER},
+							dstAccessMask = {.TRANSFER_READ},
+						},
+					},
+					{},
+				)
+			}
+			if hasTransferQueue {
+				vkField_vk.cmd_pipeline_barrier(
+					commandBuffer,
+					{},
+					{
+						{
+							buffer = resources.dataBuffer.main.buffer,
+							size = resources.dataBuffer.main.size,
+							offset = 0,
+							srcStageMask = {.TRANSFER},
+							srcAccessMask = {.TRANSFER_WRITE},
+							dstStageMask = {.COMPUTE_SHADER},
+							dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
+						},
+					},
+					{},
+				)
+			}
+
+			for scatterOffset := commandStart; scatterOffset < commandEnd; scatterOffset += auto_cast scatterBatchSize {
+				if scatterOffset > windowOffset && !hasTransferQueue {
+					vkField_vk.cmd_pipeline_barrier(
+						commandBuffer,
+						{},
+						{
+							{
+								buffer = resources.dataBuffer.main.buffer,
+								size = resources.dataBuffer.main.size,
+								offset = 0,
+								srcStageMask = {.COMPUTE_SHADER},
+								srcAccessMask = {.SHADER_READ, .SHADER_WRITE},
+								dstStageMask = {.TRANSFER},
+								dstAccessMask = {.TRANSFER_WRITE},
+							},
+						},
+						{},
+					)
+				}
+				if !hasTransferQueue {
+					scatterBatchEnd := min(scatterOffset + auto_cast scatterBatchSize, len(scatters))
+					scatterUploadSize: vk.DeviceSize = auto_cast ((scatterBatchEnd - scatterOffset) * size_of(Scatter))
+					vkField_vk.cmd_copy_buffer(
+						commandBuffer,
+						scatterBuffer,
+						resources.dataBuffer.main,
+						{
+							{
+								sType = .BUFFER_COPY_2,
+								srcOffset = auto_cast ((scatterOffset - commandStart) * size_of(Scatter)),
+								dstOffset = auto_cast header.scatterers,
+								size = scatterUploadSize,
+							},
+						},
+					)
+					vkField_vk.cmd_pipeline_barrier(
+						commandBuffer,
+						{},
+						{
+							{
+								buffer = resources.dataBuffer.main.buffer,
+								size = resources.dataBuffer.main.size,
+								offset = 0,
+								srcStageMask = {.TRANSFER},
+								srcAccessMask = {.TRANSFER_WRITE},
+								dstStageMask = {.COMPUTE_SHADER},
+								dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
+							},
+						},
+						{},
+					)
+				}
+
+				dispatch_vk_calculate_aperture(
+					commandBuffer,
+					simulator,
+					resources,
+					shaderStage,
+					dataBufferAddress,
+					header,
+					elements,
+					scatterBatchSize,
+					scatterOffset,
+				) or_return
+				vkField_vk.cmd_pipeline_barrier(
+					commandBuffer,
+					{},
+					{
+						{
+							buffer = resources.dataBuffer.main.buffer,
+							size = resources.dataBuffer.main.size,
+							offset = 0,
+							srcStageMask = {.COMPUTE_SHADER},
+							srcAccessMask = {.SHADER_WRITE},
+							dstStageMask = {.COMPUTE_SHADER},
+							dstAccessMask = {.SHADER_READ},
+						},
+					},
+					{},
+				)
+				dispatch_vk_measure_aperture(
+					commandBuffer,
+					simulator,
+					resources,
+					shaderStage,
+					dataBufferAddress,
+					header,
+					transmissions,
+					receiveChannels,
+					scatterBatchSize,
+					scatterOffset,
+				) or_return
+				vkField_vk.cmd_pipeline_barrier(
+					commandBuffer,
+					{},
+					{
+						{
+							buffer = resources.dataBuffer.main.buffer,
+							size = resources.dataBuffer.main.size,
+							offset = 0,
+							srcStageMask = {.COMPUTE_SHADER},
+							srcAccessMask = {.SHADER_WRITE},
+							dstStageMask = {.COMPUTE_SHADER},
+							dstAccessMask = {.SHADER_READ},
+						},
+					},
+					{},
+				)
+				dispatch_vk_coalesce_aperture(
+					commandBuffer,
+					simulator,
+					resources,
+					shaderStage,
+					dataBufferAddress,
+					header,
+					transmissions,
+					receiveChannels,
+					scatterBatchSize,
+					scatterOffset,
+				) or_return
+				vkField_vk.cmd_pipeline_barrier(
+					commandBuffer,
+					{},
+					{
+						{
+							buffer = resources.dataBuffer.main.buffer,
+							size = resources.dataBuffer.main.size,
+							offset = 0,
+							srcStageMask = {.COMPUTE_SHADER},
+							srcAccessMask = {.SHADER_WRITE},
+							dstStageMask = {.COMPUTE_SHADER},
+							dstAccessMask = {.SHADER_READ},
+						},
+					},
+					{},
+				)
+				dispatch_vk_pulse_echo_convolution(
+					commandBuffer,
+					simulator,
+					resources,
+					settings,
+					shaderStage,
+					dataBufferAddress,
+					header,
+					transmissions,
+					receiveChannels,
+					scatterBatchSize,
+					scatterOffset,
+				) or_return
+			}
+
+			vkField_vk.cmd_end(commandBuffer) or_return
+			scatterComputeWaits: []vkField_vk.SemaphoreBarrier
+			if hasTransferQueue do scatterComputeWaits = {{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.COMPUTE_SHADER}}}
+			simulator.computeTimelineValue += 1
+			vkField_vk.queue_submit(
+				simulator.queue,
+				{commandBuffer},
+				scatterComputeWaits,
+				{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
+			) or_return
+			slotComputeTimelineValues[ringIndex] = simulator.computeTimelineValue
+		}
+		commandBuffer, lastProgressLogTime = run_vk_scatter_window(
+			simulator,
+			device,
+			timelineWait,
+			hasTransferQueue,
+			totalScatterCommands,
+			scatterComputeStartValue,
+			progressStopwatch,
+			lastProgressLogTime,
+		) or_return
+	}
+
+	commandBuffer = run_vk_temporal_pass(
+		simulator,
+		resources,
+		settings,
+		transmissions,
+		receiveChannels,
+		impulses,
+		excitations,
+		commandBuffer,
+		timelineWait,
+		hasTransferQueue,
+	) or_return
+	vkField_vk.cmd_begin(commandBuffer, true) or_return
+	vkField_vk.cmd_pipeline_barrier(
+		commandBuffer,
+		{},
+		{
+			{
+				buffer = resources.responseBuffer.main.buffer,
+				size = resources.responseBuffer.main.size,
+				offset = 0,
+				srcStageMask = {.COMPUTE_SHADER},
+				srcAccessMask = {.SHADER_WRITE},
+				dstStageMask = {.TRANSFER, .HOST},
+				dstAccessMask = {.TRANSFER_READ},
+			},
+		},
+		{},
+	)
+
+	downloadBuffer: vkField_vk.Buffer
+	if buffer, bufferOk := resources.responseBuffer.staging.(vkField_vk.Buffer); bufferOk {
+		vkField_vk.cmd_download_from_buffer(commandBuffer, resources.responseBuffer.main, buffer)
+		downloadBuffer = buffer
+	} else {
+		downloadBuffer = resources.responseBuffer.main
+	}
+	vkField_vk.cmd_end(commandBuffer) or_return
+	simulator.computeTimelineValue += 1
+	vkField_vk.queue_submit(
+		simulator.queue,
+		{commandBuffer},
+		{},
+		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
+	) or_return
+	timelineWait.value[0] = simulator.computeTimelineValue
+	check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
+	vkField_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
+	vk.DeviceWaitIdle(device.device) or_return
+	return
+}
+
 destroy_vulkan_simulator_resources :: proc(simulator: ^vkSimulator) {
 	device := simulator.device
 
@@ -870,536 +1260,285 @@ run_vk_temporal_pass :: proc(
 	return
 }
 
-simulate_vulkan :: proc(
+dispatch_vk_calculate_aperture :: proc(
+	commandBuffer: vkField_vk.CommandBuffer,
 	simulator: ^vkSimulator,
-	settings: SimulationSettings,
-	transmissions: []Transmission,
-	receiveChannels: []ReceiveChannel,
+	resources: vkPulseEchoSimulationResources,
+	shaderStage: vk.ShaderStageFlags,
+	dataBufferAddress: vk.DeviceAddress,
+	header: vkDataBufferHeader,
 	elements: #soa[]RectangularElement,
-	scatters: []Scatter,
-	impulses: []TransducerImpulse,
-	excitations: []Excitation,
-	allocator := context.allocator,
+	scatterBatchSize: u32,
+	scatterOffset: int,
 ) -> (
-	response: []f32,
 	result: vk.Result,
 ) {
-	resources, pulseEchoResourcesOk := simulator.simulationResources.(vkPulseEchoSimulationResources)
-	if !check(pulseEchoResourcesOk) do return {}, .ERROR_INITIALIZATION_FAILED
-
-	device := simulator.device
-	response = make([]f32, resources.responseBuffer.main.size / size_of(f32), allocator)
-
-	initialDataBuffer := build_vk_data_buffer(resources.dataBufferHeader, transmissions, receiveChannels, elements, context.temp_allocator)
-	initialTemporalBuffer := build_vk_temporal_response_buffer(
-		impulses,
-		excitations,
-		resources.maxImpulseLength,
-		resources.maxExcitationLength,
-		context.temp_allocator,
-	)
-
-	commandBuffer, timelineWait, hasTransferQueue := prepare_vk_simulation(simulator, resources, initialDataBuffer, initialTemporalBuffer) or_return
-	transferQueue, _ := simulator.transferQueue.?
-
-	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
-
-	scatterBatchSize := simulator.info.scattererBatchSize
-	dataBufferAddress := vkField_vk.get_buffer_address(device, resources.dataBuffer.main)
-	header := resources.dataBufferHeader
-	scatterUploadCapacity := int(resources.scatterBuffers[0].size / auto_cast size_of(Scatter))
-	scatterWindowBatchCount := max(1, scatterUploadCapacity / int(scatterBatchSize))
-	scatterWindowSize := scatterWindowBatchCount * int(scatterBatchSize)
-	totalScatterCommands := 0
-	for progressWindowOffset := 0; progressWindowOffset < len(scatters); progressWindowOffset += scatterWindowSize {
-		progressWindowEnd := min(progressWindowOffset + scatterWindowSize, len(scatters))
-		progressWindowBatchCount := (progressWindowEnd - progressWindowOffset + int(scatterBatchSize) - 1) / int(scatterBatchSize)
-		totalScatterCommands += (progressWindowBatchCount + SCATTER_BATCHES_PER_COMMAND_BUFFER - 1) / SCATTER_BATCHES_PER_COMMAND_BUFFER
-	}
-	totalScatterCommands = max(1, totalScatterCommands)
-	scatterComputeStartValue := simulator.computeTimelineValue
-	progressStopwatch: time.Stopwatch
-	time.stopwatch_start(&progressStopwatch)
-	lastProgressLogTime: time.Duration
-	scatterData := slice.to_bytes(scatters)
-	for windowOffset := 0; windowOffset < len(scatters); windowOffset += scatterWindowSize {
-		windowEnd := min(windowOffset + scatterWindowSize, len(scatters))
-		windowBatchCount := (windowEnd - windowOffset + int(scatterBatchSize) - 1) / int(scatterBatchSize)
-		commandBufferCount := (windowBatchCount + SCATTER_BATCHES_PER_COMMAND_BUFFER - 1) / SCATTER_BATCHES_PER_COMMAND_BUFFER
-		computeCommandBuffers := check(
-			vkField_vk.get_command_buffers(device, &simulator.computeCommandPool, commandBufferCount, allocator = context.temp_allocator),
-		) or_return
-		transferCommandBuffers: []vkField_vk.CommandBuffer
-		if hasTransferQueue {
-			transferCommandBuffers = check(
-				vkField_vk.get_command_buffers(device, &simulator.transferCommandPool, commandBufferCount, allocator = context.temp_allocator),
-			) or_return
-		}
-		slotComputeTimelineValues: [MAX_FRAMES_IN_FLIGHT]u64
-		for computeCommandBuffer, commandBufferIndex in computeCommandBuffers {
-			commandStart := windowOffset + commandBufferIndex * SCATTER_BATCHES_PER_COMMAND_BUFFER * int(scatterBatchSize)
-			commandEnd := min(commandStart + SCATTER_BATCHES_PER_COMMAND_BUFFER * int(scatterBatchSize), windowEnd)
-			ringIndex := commandBufferIndex % len(resources.scatterBuffers)
-			if slotComputeTimelineValues[ringIndex] > 0 {
-				timelineWait.value[0] = slotComputeTimelineValues[ringIndex]
-				check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
-			}
-			scatterBuffer := resources.scatterBuffers[ringIndex]
-			windowData := scatterData[commandStart * size_of(Scatter):commandEnd * size_of(Scatter)]
-			copy(vkField_vk.get_buffer_mapped_data(scatterBuffer)[:len(windowData)], windowData)
-
-			if hasTransferQueue {
-				transferCommandBuffer := transferCommandBuffers[commandBufferIndex]
-				vkField_vk.cmd_begin(transferCommandBuffer, true) or_return
-				vkField_vk.cmd_pipeline_barrier(
-					transferCommandBuffer,
-					{},
-					{
-						{
-							buffer = scatterBuffer.buffer,
-							size = scatterBuffer.size,
-							offset = 0,
-							srcStageMask = {.HOST},
-							srcAccessMask = {.HOST_WRITE},
-							dstStageMask = {.TRANSFER},
-							dstAccessMask = {.TRANSFER_READ},
-						},
-					},
-					{},
-				)
-				for transferScatterOffset := commandStart; transferScatterOffset < commandEnd; transferScatterOffset += auto_cast scatterBatchSize {
-					transferScatterBatchEnd := min(transferScatterOffset + auto_cast scatterBatchSize, commandEnd)
-					transferScatterUploadSize: vk.DeviceSize = auto_cast ((transferScatterBatchEnd - transferScatterOffset) * size_of(Scatter))
-					vkField_vk.cmd_copy_buffer(
-						transferCommandBuffer,
-						scatterBuffer,
-						resources.dataBuffer.main,
-						{
-							{
-								sType = .BUFFER_COPY_2,
-								srcOffset = auto_cast ((transferScatterOffset - commandStart) * size_of(Scatter)),
-								dstOffset = auto_cast header.scatterers,
-								size = transferScatterUploadSize,
-							},
-						},
-					)
-				}
-				vkField_vk.cmd_end(transferCommandBuffer) or_return
-				simulator.transferTimelineValue += 1
-				vkField_vk.queue_submit(
-					transferQueue,
-					{transferCommandBuffer},
-					{},
-					{{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.TRANSFER}}},
-				) or_return
-			}
-
-			commandBuffer = computeCommandBuffer
-			vkField_vk.cmd_begin(commandBuffer, true) or_return
-			if !hasTransferQueue {
-				vkField_vk.cmd_pipeline_barrier(
-					commandBuffer,
-					{},
-					{
-						{
-							buffer = scatterBuffer.buffer,
-							size = scatterBuffer.size,
-							offset = 0,
-							srcStageMask = {.HOST},
-							srcAccessMask = {.HOST_WRITE},
-							dstStageMask = {.TRANSFER},
-							dstAccessMask = {.TRANSFER_READ},
-						},
-					},
-					{},
-				)
-			}
-			if hasTransferQueue {
-				vkField_vk.cmd_pipeline_barrier(
-					commandBuffer,
-					{},
-					{
-						{
-							buffer = resources.dataBuffer.main.buffer,
-							size = resources.dataBuffer.main.size,
-							offset = 0,
-							srcStageMask = {.TRANSFER},
-							srcAccessMask = {.TRANSFER_WRITE},
-							dstStageMask = {.COMPUTE_SHADER},
-							dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
-						},
-					},
-					{},
-				)
-			}
-
-			for scatterOffset := commandStart; scatterOffset < commandEnd; scatterOffset += auto_cast scatterBatchSize {
-				if scatterOffset > windowOffset && !hasTransferQueue {
-					vkField_vk.cmd_pipeline_barrier(
-						commandBuffer,
-						{},
-						{
-							{
-								buffer = resources.dataBuffer.main.buffer,
-								size = resources.dataBuffer.main.size,
-								offset = 0,
-								srcStageMask = {.COMPUTE_SHADER},
-								srcAccessMask = {.SHADER_READ, .SHADER_WRITE},
-								dstStageMask = {.TRANSFER},
-								dstAccessMask = {.TRANSFER_WRITE},
-							},
-						},
-						{},
-					)
-				}
-
-				if !hasTransferQueue {
-					scatterBatchEnd := min(scatterOffset + auto_cast scatterBatchSize, len(scatters))
-					scatterUploadSize: vk.DeviceSize = auto_cast ((scatterBatchEnd - scatterOffset) * size_of(Scatter))
-					vkField_vk.cmd_copy_buffer(
-						commandBuffer,
-						scatterBuffer,
-						resources.dataBuffer.main,
-						{
-							{
-								sType = .BUFFER_COPY_2,
-								srcOffset = auto_cast ((scatterOffset - commandStart) * size_of(Scatter)),
-								dstOffset = auto_cast header.scatterers,
-								size = scatterUploadSize,
-							},
-						},
-					)
-					vkField_vk.cmd_pipeline_barrier(
-						commandBuffer,
-						{},
-						{
-							{
-								buffer = resources.dataBuffer.main.buffer,
-								size = resources.dataBuffer.main.size,
-								offset = 0,
-								srcStageMask = {.TRANSFER},
-								srcAccessMask = {.TRANSFER_WRITE},
-								dstStageMask = {.COMPUTE_SHADER},
-								dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
-							},
-						},
-						{},
-					)
-				}
-
-				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.calcAperShader)
-				for elementOffset := 0; elementOffset < len(elements); elementOffset += GPU_CALC_ELEMENT_CHUNK_SIZE {
-					elementChunkCount := min(GPU_CALC_ELEMENT_CHUNK_SIZE, len(elements) - elementOffset)
-					vkField_vk.cmd_push_constants(
-						commandBuffer,
-						simulator.pipelineLayout,
-						shaderStage,
-						vkCalcAperPushData {
-							elementPositions = dataBufferAddress + auto_cast header.elementPositions,
-							apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
-							elementOffset = auto_cast elementOffset,
-							scattererOffset = auto_cast scatterOffset,
-						},
-					)
-					vk.CmdDispatch(
-						commandBuffer.commandBuffer,
-						u32(math.ceil(f32(elementChunkCount) / f32(resources.calcAperSpec.ElementWorkgroupSize))),
-						u32(math.ceil(f32(scatterBatchSize) / f32(resources.calcAperSpec.ScattererWorkgroupSize))),
-						1,
-					)
-				}
-
-				vkField_vk.cmd_pipeline_barrier(
-					commandBuffer,
-					{},
-					{
-						{
-							buffer = resources.dataBuffer.main.buffer,
-							size = resources.dataBuffer.main.size,
-							offset = 0,
-							srcStageMask = {.COMPUTE_SHADER},
-							srcAccessMask = {.SHADER_WRITE},
-							dstStageMask = {.COMPUTE_SHADER},
-							dstAccessMask = {.SHADER_READ},
-						},
-					},
-					{},
-				)
-
-				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.measAperShaderTx)
-				for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
-					elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
-					vkField_vk.cmd_push_constants(
-						commandBuffer,
-						simulator.pipelineLayout,
-						shaderStage,
-						vkCoalescePushData {
-							apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
-							transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
-							transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-							transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
-							elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
-							elementSetOffset = auto_cast elementSetOffset,
-							sampleOffset = 0,
-							scattererOffset = auto_cast scatterOffset,
-						},
-					)
-					vk.CmdDispatch(
-						commandBuffer.commandBuffer,
-						u32(math.ceil(f32(elementSetChunkCount) / f32(resources.measAperSpecTx.ElementSetWorkgroupSize))),
-						u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecTx.ScattererWorkgroupSize))),
-						1,
-					)
-				}
-				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.measAperShaderRcv)
-				for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
-					elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
-					vkField_vk.cmd_push_constants(
-						commandBuffer,
-						simulator.pipelineLayout,
-						shaderStage,
-						vkCoalescePushData {
-							apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
-							transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
-							transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-							transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
-							elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
-							elementSetOffset = auto_cast elementSetOffset,
-							sampleOffset = 0,
-							scattererOffset = auto_cast scatterOffset,
-						},
-					)
-					vk.CmdDispatch(
-						commandBuffer.commandBuffer,
-						u32(math.ceil(f32(elementSetChunkCount) / f32(resources.measAperSpecRcv.ElementSetWorkgroupSize))),
-						u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecRcv.ScattererWorkgroupSize))),
-						1,
-					)
-				}
-
-				vkField_vk.cmd_pipeline_barrier(
-					commandBuffer,
-					{},
-					{
-						{
-							buffer = resources.dataBuffer.main.buffer,
-							size = resources.dataBuffer.main.size,
-							offset = 0,
-							srcStageMask = {.COMPUTE_SHADER},
-							srcAccessMask = {.SHADER_WRITE},
-							dstStageMask = {.COMPUTE_SHADER},
-							dstAccessMask = {.SHADER_READ},
-						},
-					},
-					{},
-				)
-
-				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.coalAperShaderTx)
-				for sampleOffset: u32 = 0; sampleOffset < simulator.info.apertureSampleCount; sampleOffset += GPU_APERTURE_SAMPLE_CHUNK_SIZE {
-					sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
-					for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
-						elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
-						vkField_vk.cmd_push_constants(
-							commandBuffer,
-							simulator.pipelineLayout,
-							shaderStage,
-							vkCoalescePushData {
-								apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
-								transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
-								transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-								transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
-								elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
-								elementSetOffset = auto_cast elementSetOffset,
-								sampleOffset = auto_cast sampleOffset,
-								scattererOffset = auto_cast scatterOffset,
-							},
-						)
-						vk.CmdDispatch(
-							commandBuffer.commandBuffer,
-							u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.coalAperSpecTx.SampleWorkgroupSize))),
-							u32(math.ceil_f32(f32(elementSetChunkCount) / f32(resources.coalAperSpecTx.ElementSetWorkgroupSize))),
-							u32(math.ceil_f32(f32(scatterBatchSize) / f32(resources.coalAperSpecTx.ScattererWorkgroupSize))),
-						)
-					}
-				}
-				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.coalAperShaderRcv)
-				for sampleOffset: u32 = 0; sampleOffset < simulator.info.apertureSampleCount; sampleOffset += GPU_APERTURE_SAMPLE_CHUNK_SIZE {
-					sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
-					for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
-						elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
-						vkField_vk.cmd_push_constants(
-							commandBuffer,
-							simulator.pipelineLayout,
-							shaderStage,
-							vkCoalescePushData {
-								apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
-								transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
-								transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-								transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
-								elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
-								elementSetOffset = auto_cast elementSetOffset,
-								sampleOffset = auto_cast sampleOffset,
-								scattererOffset = auto_cast scatterOffset,
-							},
-						)
-						vk.CmdDispatch(
-							commandBuffer.commandBuffer,
-							u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.coalAperSpecRcv.SampleWorkgroupSize))),
-							u32(math.ceil_f32(f32(elementSetChunkCount) / f32(resources.coalAperSpecRcv.ElementSetWorkgroupSize))),
-							u32(math.ceil_f32(f32(scatterBatchSize) / f32(resources.coalAperSpecRcv.ScattererWorkgroupSize))),
-						)
-					}
-				}
-
-				vkField_vk.cmd_pipeline_barrier(
-					commandBuffer,
-					{},
-					{
-						{
-							buffer = resources.dataBuffer.main.buffer,
-							size = resources.dataBuffer.main.size,
-							offset = 0,
-							srcStageMask = {.COMPUTE_SHADER},
-							srcAccessMask = {.SHADER_WRITE},
-							dstStageMask = {.COMPUTE_SHADER},
-							dstAccessMask = {.SHADER_READ},
-						},
-					},
-					{},
-				)
-
-				vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &resources.pulseConvShader)
-				for transmissionIndex in 0 ..< len(transmissions) {
-					for receiveChannelIndex in 0 ..< len(receiveChannels) {
-						for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
-							sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
-							vkField_vk.cmd_push_constants(
-								commandBuffer,
-								simulator.pipelineLayout,
-								shaderStage,
-								vkPulseConvPushData {
-									transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
-									transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
-									response = vkField_vk.get_buffer_address(device, resources.responseBuffer.main),
-									transmissionIndex = auto_cast transmissionIndex,
-									receiveChannelIndex = auto_cast receiveChannelIndex,
-									sampleOffset = auto_cast sampleOffset,
-									scattererOffset = auto_cast scatterOffset,
-								},
-							)
-							vk.CmdDispatch(
-								commandBuffer.commandBuffer,
-								u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.pulseConvSpec.SampleWorkgroupSize))),
-								1,
-								1,
-							)
-						}
-					}
-				}
-
-			}
-
-			vkField_vk.cmd_end(commandBuffer) or_return
-			scatterComputeWaits: []vkField_vk.SemaphoreBarrier
-			if hasTransferQueue {
-				scatterComputeWaits = {{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.COMPUTE_SHADER}}}
-			}
-			simulator.computeTimelineValue += 1
-			vkField_vk.queue_submit(
-				simulator.queue,
-				{commandBuffer},
-				scatterComputeWaits,
-				{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
-			) or_return
-			slotComputeTimelineValues[ringIndex] = simulator.computeTimelineValue
-		}
-		windowComputeTimelineValue := simulator.computeTimelineValue
-		timelineWait.value[0] = windowComputeTimelineValue
-		check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
-
-		completedTimelineValue, timelineValueOk := vkField_vk.get_timeline_value(device, simulator.computeTimeline)
-		if timelineValueOk {
-			completedCommands := min(int(max(completedTimelineValue, scatterComputeStartValue) - scatterComputeStartValue), totalScatterCommands)
-			fraction := f64(completedCommands) / f64(totalScatterCommands)
-			elapsedDuration := time.stopwatch_duration(progressStopwatch)
-			if elapsedDuration >= VULKAN_PROGRESS_LOG_DELAY_THRESHOLD &&
-			   (lastProgressLogTime == 0 || elapsedDuration - lastProgressLogTime >= VULKAN_PROGRESS_LOG_INTERVAL) {
-				lastProgressLogTime = elapsedDuration
-				percentage := fraction * 100.0
-				if fraction > 0 {
-					estimatedTotalDuration := time.Duration(f64(elapsedDuration) / fraction)
-					estimatedRemainingDuration := max(estimatedTotalDuration - elapsedDuration, time.Duration(0))
-					log.infof(
-						"Vulkan simulation progress: %.1f%%, estimated completion in %v (elapsed: %v, timeline: %d)",
-						percentage,
-						estimatedRemainingDuration,
-						elapsedDuration,
-						completedTimelineValue,
-					)
-				} else {
-					log.infof("Vulkan simulation progress: %.1f%% (elapsed: %v, timeline: %d)", percentage, elapsedDuration, completedTimelineValue)
-				}
-			}
-		}
-		if hasTransferQueue {
-			vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
-		}
-		vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
-		commandBuffer = check(vkField_vk.get_command_buffer(device, &simulator.computeCommandPool)) or_return
-	}
-
-	commandBuffer = run_vk_temporal_pass(
-		simulator,
-		resources,
-		settings,
-		transmissions,
-		receiveChannels,
-		impulses,
-		excitations,
-		commandBuffer,
-		timelineWait,
-		hasTransferQueue,
-	) or_return
-
-	vkField_vk.cmd_begin(commandBuffer, true) or_return
-	vkField_vk.cmd_pipeline_barrier(
-		commandBuffer,
-		{},
-		{
-			{
-				buffer = resources.responseBuffer.main.buffer,
-				size = resources.responseBuffer.main.size,
-				offset = 0,
-				srcStageMask = {.COMPUTE_SHADER},
-				srcAccessMask = {.SHADER_WRITE},
-				dstStageMask = {.TRANSFER, .HOST},
-				dstAccessMask = {.TRANSFER_READ},
+	calculateApertureShader := resources.calcAperShader
+	stage := shaderStage
+	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &calculateApertureShader)
+	for elementOffset := 0; elementOffset < len(elements); elementOffset += GPU_CALC_ELEMENT_CHUNK_SIZE {
+		elementChunkCount := min(GPU_CALC_ELEMENT_CHUNK_SIZE, len(elements) - elementOffset)
+		vkField_vk.cmd_push_constants(
+			commandBuffer,
+			simulator.pipelineLayout,
+			shaderStage,
+			vkCalcAperPushData {
+				elementPositions = dataBufferAddress + auto_cast header.elementPositions,
+				apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+				elementOffset = auto_cast elementOffset,
+				scattererOffset = auto_cast scatterOffset,
 			},
-		},
-		{},
-	)
+		)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(elementChunkCount) / f32(resources.calcAperSpec.ElementWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.calcAperSpec.ScattererWorkgroupSize))),
+			1,
+		)
+	}
+	return
+}
 
-	downloadBuffer: vkField_vk.Buffer
-	if buffer, bufferOk := resources.responseBuffer.staging.(vkField_vk.Buffer); bufferOk {
-		vkField_vk.cmd_download_from_buffer(commandBuffer, resources.responseBuffer.main, buffer)
-		downloadBuffer = buffer
-	} else {
-		downloadBuffer = resources.responseBuffer.main
+dispatch_vk_measure_aperture :: proc(
+	commandBuffer: vkField_vk.CommandBuffer,
+	simulator: ^vkSimulator,
+	resources: vkPulseEchoSimulationResources,
+	shaderStage: vk.ShaderStageFlags,
+	dataBufferAddress: vk.DeviceAddress,
+	header: vkDataBufferHeader,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	scatterBatchSize: u32,
+	scatterOffset: int,
+) -> (
+	result: vk.Result,
+) {
+	stage := shaderStage
+	measureApertureShader := resources.measAperShaderTx
+	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &measureApertureShader)
+	for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+		elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
+		vkField_vk.cmd_push_constants(
+			commandBuffer,
+			simulator.pipelineLayout,
+			stage,
+			vkCoalescePushData {
+				apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+				transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+				transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+				transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+				elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+				elementSetOffset = auto_cast elementSetOffset,
+				sampleOffset = 0,
+				scattererOffset = auto_cast scatterOffset,
+			},
+		)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(elementSetChunkCount) / f32(resources.measAperSpecTx.ElementSetWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecTx.ScattererWorkgroupSize))),
+			1,
+		)
 	}
 
-	vkField_vk.cmd_end(commandBuffer) or_return
+	measureApertureShader = resources.measAperShaderRcv
+	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &measureApertureShader)
+	for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+		elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
+		vkField_vk.cmd_push_constants(
+			commandBuffer,
+			simulator.pipelineLayout,
+			stage,
+			vkCoalescePushData {
+				apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+				transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+				transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+				transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+				elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+				elementSetOffset = auto_cast elementSetOffset,
+				sampleOffset = 0,
+				scattererOffset = auto_cast scatterOffset,
+			},
+		)
+		vk.CmdDispatch(
+			commandBuffer.commandBuffer,
+			u32(math.ceil(f32(elementSetChunkCount) / f32(resources.measAperSpecRcv.ElementSetWorkgroupSize))),
+			u32(math.ceil(f32(scatterBatchSize) / f32(resources.measAperSpecRcv.ScattererWorkgroupSize))),
+			1,
+		)
+	}
+	return
+}
 
-	simulator.computeTimelineValue += 1
-	vkField_vk.queue_submit(
-		simulator.queue,
-		{commandBuffer},
-		{},
-		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
-	) or_return
-	timelineWait.value[0] = simulator.computeTimelineValue
-	check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
-	vkField_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
-	vk.DeviceWaitIdle(device.device) or_return
+dispatch_vk_coalesce_aperture :: proc(
+	commandBuffer: vkField_vk.CommandBuffer,
+	simulator: ^vkSimulator,
+	resources: vkPulseEchoSimulationResources,
+	shaderStage: vk.ShaderStageFlags,
+	dataBufferAddress: vk.DeviceAddress,
+	header: vkDataBufferHeader,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	scatterBatchSize: u32,
+	scatterOffset: int,
+) -> (
+	result: vk.Result,
+) {
+	stage := shaderStage
+	coalesceApertureShader := resources.coalAperShaderTx
+	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &coalesceApertureShader)
+	for sampleOffset: u32 = 0; sampleOffset < simulator.info.apertureSampleCount; sampleOffset += GPU_APERTURE_SAMPLE_CHUNK_SIZE {
+		sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
+		for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+			elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
+			vkField_vk.cmd_push_constants(
+				commandBuffer,
+				simulator.pipelineLayout,
+				stage,
+				vkCoalescePushData {
+					apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+					transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+					transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+					transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+					elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+					elementSetOffset = auto_cast elementSetOffset,
+					sampleOffset = auto_cast sampleOffset,
+					scattererOffset = auto_cast scatterOffset,
+				},
+			)
+			vk.CmdDispatch(
+				commandBuffer.commandBuffer,
+				u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.coalAperSpecTx.SampleWorkgroupSize))),
+				u32(math.ceil_f32(f32(elementSetChunkCount) / f32(resources.coalAperSpecTx.ElementSetWorkgroupSize))),
+				u32(math.ceil_f32(f32(scatterBatchSize) / f32(resources.coalAperSpecTx.ScattererWorkgroupSize))),
+			)
+		}
+	}
+
+	coalesceApertureShader = resources.coalAperShaderRcv
+	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &coalesceApertureShader)
+	for sampleOffset: u32 = 0; sampleOffset < simulator.info.apertureSampleCount; sampleOffset += GPU_APERTURE_SAMPLE_CHUNK_SIZE {
+		sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
+		for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
+			elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
+			vkField_vk.cmd_push_constants(
+				commandBuffer,
+				simulator.pipelineLayout,
+				stage,
+				vkCoalescePushData {
+					apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
+					transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+					transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+					transmissionElementCounts = dataBufferAddress + auto_cast header.transmissionElementCounts,
+					elementSetMembers = dataBufferAddress + auto_cast header.elementSetMembers,
+					elementSetOffset = auto_cast elementSetOffset,
+					sampleOffset = auto_cast sampleOffset,
+					scattererOffset = auto_cast scatterOffset,
+				},
+			)
+			vk.CmdDispatch(
+				commandBuffer.commandBuffer,
+				u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.coalAperSpecRcv.SampleWorkgroupSize))),
+				u32(math.ceil_f32(f32(elementSetChunkCount) / f32(resources.coalAperSpecRcv.ElementSetWorkgroupSize))),
+				u32(math.ceil_f32(f32(scatterBatchSize) / f32(resources.coalAperSpecRcv.ScattererWorkgroupSize))),
+			)
+		}
+	}
+	return
+}
+
+dispatch_vk_pulse_echo_convolution :: proc(
+	commandBuffer: vkField_vk.CommandBuffer,
+	simulator: ^vkSimulator,
+	resources: vkPulseEchoSimulationResources,
+	settings: SimulationSettings,
+	shaderStage: vk.ShaderStageFlags,
+	dataBufferAddress: vk.DeviceAddress,
+	header: vkDataBufferHeader,
+	transmissions: []Transmission,
+	receiveChannels: []ReceiveChannel,
+	scatterBatchSize: u32,
+	scatterOffset: int,
+) -> (
+	result: vk.Result,
+) {
+	stage := shaderStage
+	pulseEchoShader := resources.pulseConvShader
+	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &pulseEchoShader)
+	responseAddress := vkField_vk.get_buffer_address(simulator.device, resources.responseBuffer.main)
+	for transmissionIndex in 0 ..< len(transmissions) {
+		for receiveChannelIndex in 0 ..< len(receiveChannels) {
+			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE {
+				sampleChunkCount := min(auto_cast GPU_CONVOLUTION_SAMPLE_CHUNK_SIZE, settings.sampleCount - sampleOffset)
+				vkField_vk.cmd_push_constants(
+					commandBuffer,
+					simulator.pipelineLayout,
+					stage,
+					vkPulseConvPushData {
+						transmissionInfos = dataBufferAddress + auto_cast header.transmissionInfos,
+						transmissionResponses = dataBufferAddress + auto_cast header.transmissionResponses,
+						response = responseAddress,
+						transmissionIndex = auto_cast transmissionIndex,
+						receiveChannelIndex = auto_cast receiveChannelIndex,
+						sampleOffset = auto_cast sampleOffset,
+						scattererOffset = auto_cast scatterOffset,
+					},
+				)
+				vk.CmdDispatch(commandBuffer.commandBuffer, u32(math.ceil_f32(f32(sampleChunkCount) / f32(resources.pulseConvSpec.SampleWorkgroupSize))), 1, 1)
+			}
+		}
+	}
+	return
+}
+
+run_vk_scatter_window :: proc(
+	simulator: ^vkSimulator,
+	device: vkField_vk.Device,
+	timelineWait: #soa[]vkField_vk.WaitSemaphore,
+	hasTransferQueue: bool,
+	totalScatterCommands: int,
+	scatterComputeStartValue: u64,
+	progressStopwatch: time.Stopwatch,
+	lastProgressLogTime: time.Duration,
+) -> (
+	commandBuffer: vkField_vk.CommandBuffer,
+	updatedLastProgressLogTime: time.Duration,
+	result: vk.Result,
+) {
+	windowComputeTimelineValue := simulator.computeTimelineValue
+	timelineWait.value[0] = windowComputeTimelineValue
+	vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
+
+	updatedLastProgressLogTime = lastProgressLogTime
+	completedTimelineValue, timelineValueOk := vkField_vk.get_timeline_value(device, simulator.computeTimeline)
+	if timelineValueOk {
+		completedCommands := min(int(max(completedTimelineValue, scatterComputeStartValue) - scatterComputeStartValue), totalScatterCommands)
+		fraction := f64(completedCommands) / f64(totalScatterCommands)
+		elapsedDuration := time.stopwatch_duration(progressStopwatch)
+		if elapsedDuration >= VULKAN_PROGRESS_LOG_DELAY_THRESHOLD &&
+		   (updatedLastProgressLogTime == 0 || elapsedDuration - updatedLastProgressLogTime >= VULKAN_PROGRESS_LOG_INTERVAL) {
+			updatedLastProgressLogTime = elapsedDuration
+			percentage := fraction * 100.0
+			if fraction > 0 {
+				estimatedTotalDuration := time.Duration(f64(elapsedDuration) / fraction)
+				estimatedRemainingDuration := max(estimatedTotalDuration - elapsedDuration, time.Duration(0))
+				log.infof(
+					"Vulkan simulation progress: %.1f%%, estimated completion in %v (elapsed: %v, timeline: %d)",
+					percentage,
+					estimatedRemainingDuration,
+					elapsedDuration,
+					completedTimelineValue,
+				)
+			} else {
+				log.infof("Vulkan simulation progress: %.1f%% (elapsed: %v, timeline: %d)", percentage, elapsedDuration, completedTimelineValue)
+			}
+		}
+	}
+	if hasTransferQueue {
+		vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
+	}
+	vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
+	commandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
 	return
 }
 
