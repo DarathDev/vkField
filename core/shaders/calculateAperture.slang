@@ -59,8 +59,18 @@ void main(uint2 GlobalInvocationID: SV_DispatchThreadID, uint threadID: SV_Group
 
 ApertureResponse compute_aperture_response(in Element element, in Scatterer scatterer) {
 
-  float4x4 apertureTransform = mul(rotate(element.normal, float3(0, 0, 1)), translate(element.position, 0));
-  float3 scattererRelativePosition = mul(apertureTransform, float4(scatterer.position, 1)).xyz;
+  float3 scattererRelativePosition = scatterer.position - element.position;
+  float3 rotationAxis = cross(element.normal, float3(0, 0, 1));
+  float rotationCosine = clamp(element.normal.z, -1.f, 1.f);
+  float rotationAxisLengthSquared = dot(rotationAxis, rotationAxis);
+  if (rotationAxisLengthSquared < EPSILON) {
+    if (rotationCosine < 0)
+      scattererRelativePosition = float3(-scattererRelativePosition.x, -scattererRelativePosition.y, scattererRelativePosition.z);
+  } else {
+    scattererRelativePosition =
+        rotationCosine * scattererRelativePosition + cross(rotationAxis, scattererRelativePosition) +
+        (1 - rotationCosine) / rotationAxisLengthSquared * rotationAxis * dot(rotationAxis, scattererRelativePosition);
+  }
   float2 dieProjection = abs(element.size * scattererRelativePosition.xy);
   float distance = sqrt(dot(scattererRelativePosition, scattererRelativePosition));
 

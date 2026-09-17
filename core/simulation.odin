@@ -180,6 +180,7 @@ plan_simulation :: proc(
 	case vkSimulator:
 		assert(settings.gpuSettings.backend == .Vulkan, "Only the Vulkan GPU backend is implemented")
 	}
+	normalize_element_normals(elements)
 	for transmission in transmissions {
 		for element in transmission.elements {
 			check(element.index >= 0 && element.index < i32(len(elements)))
@@ -241,6 +242,15 @@ response_length :: proc(responses: $T, index: u16) -> i32 {
 	if index == 0 do return 1
 	response := responses[int(index) - 1]
 	return max(i32(1), i32(len(response)))
+}
+
+normalize_element_normals :: proc(elements: #soa[]RectangularElement) {
+	for elementIndex in 0 ..< len(elements) {
+		normal := elements.normal[elementIndex]
+		normalLength := linalg.length(normal)
+		assert(normalLength > linalg.F32_EPSILON, "Element normal must have non-zero length")
+		elements.normal[elementIndex] = normal / normalLength
+	}
 }
 
 plan_scatterer_batching :: proc(
