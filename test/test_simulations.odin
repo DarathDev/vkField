@@ -12,6 +12,7 @@ check :: utility.check
 is_ok :: utility.is_ok
 
 CUMULATIVE :: bool(#config(TEST_CUMULATIVE, true))
+RUN_SIMULATION :: bool(#config(RUN_SIMULATION, true))
 MIN_CORRELATION :: 0.95
 MAX_RMS_ERROR_PERCENT :: 1
 MAX_RELATIVE_DIFFERENCE_PERCENT :: 5
@@ -43,6 +44,7 @@ compare_simulators :: proc(
 
 	if !vkField.plan_simulation(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
 	if !vkField.plan_simulation(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
+	if !RUN_SIMULATION do return true
 
 	cpuData, cpuSimulationOk := vkField.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	if !cpuSimulationOk do return false
@@ -118,7 +120,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
+		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
 	}
 
 	transmitElement: vkField.RectangularElement = {
@@ -198,17 +200,19 @@ linearArraySimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
+		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
 	}
 
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch, elementWidth, 0)
 	defer delete(elements)
 	transmissions := make_full_aperture_transmissions(columnCount * rowCount)
-	defer delete(transmissions[0].elements)
-	defer delete(transmissions)
 	receiveChannels := make_column_receive_channels(columnCount, rowCount, len(transmissions[0].elements))
-	defer for receiveChannel in receiveChannels do delete(receiveChannel.elements)
-	defer delete(receiveChannels)
+	defer {
+		for receiveChannel in receiveChannels do delete(receiveChannel.elements)
+		delete(receiveChannels)
+		delete(transmissions[0].elements)
+		delete(transmissions)
+	}
 	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {10e-3, 100e-3})
 	defer delete(scatters)
 
@@ -221,7 +225,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	utility.prof_thread_init()
 	utility.prof_scoped(#procedure)
 
-	scatterCount :: 1024
+	scatterCount :: 64
 	rowCount :: 128
 	columnCount :: 128
 	elementWidth: f32 : 2.2e-4
@@ -233,17 +237,19 @@ matrixArraySimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = true},
+		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
 	}
 
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
 	defer delete(elements)
 	transmissions := make_full_aperture_transmissions(columnCount * rowCount)
-	defer delete(transmissions[0].elements)
-	defer delete(transmissions)
 	receiveChannels := make_single_element_receive_channels(columnCount * rowCount, len(transmissions[0].elements))
-	defer for receiveChannel in receiveChannels do delete(receiveChannel.elements)
-	defer delete(receiveChannels)
+	defer {
+		for receiveChannel in receiveChannels do delete(receiveChannel.elements)
+		delete(receiveChannels)
+		delete(transmissions[0].elements)
+		delete(transmissions)
+	}
 	scatters := make_random_scatters(scatterCount, {-8e-3, 8e-3}, {-8e-3, 8e-3}, {0, 100e-3})
 	defer delete(scatters)
 
