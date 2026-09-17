@@ -1431,8 +1431,8 @@ destroy_buffer :: proc(device: Device, buffer: Buffer) {
 }
 
 release_buffer :: proc(device: Device, buffer: Buffer) {
-	free_memory(device, buffer.memory)
 	destroy_buffer(device, buffer)
+	free_memory(device, buffer.memory)
 }
 
 @(require_results)

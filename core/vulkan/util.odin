@@ -449,7 +449,7 @@ get_image_mapped_data :: proc(image: Image) -> []byte {
 
 get_timeline_value :: proc(device: Device, semaphore: TimelineSemaphore, loc := #caller_location) -> (value: u64, bool := true) {
 	vkField_util.is_ok(vkField_util.check(vk.GetSemaphoreCounterValue(device.device, auto_cast semaphore, &value), loc = loc)) or_return
-	assert(value != ~{})
+	assert(value != ~{}, "Typically signifies a Silent Device Loss, such as from a TDR")
 	return
 }
 

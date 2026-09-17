@@ -22,7 +22,7 @@ VK_SHADER_OBJECT_LAYER_NAME :: "VK_LAYER_KHRONOS_shader_object"
 
 PRESENT_SUBCAPABILITIES: InstanceCapabilities : {.PresentWin32, .PresentMetal, .PresentXcb, .PresentXLib, .PresentWayland}
 
-DEVICE_FEATURE_EXTENSIONS: [DeviceCapability][]cstring : #partial{
+DEVICE_FEATURE_EXTENSIONS: [DeviceCapability][]string : #partial{
 	.AtomicAddFloat32Buffer = {vk.EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME},
 	.Swapchain = {vk.KHR_SWAPCHAIN_EXTENSION_NAME},
 	.SwapchainMaintenance = {vk.EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME},
@@ -187,11 +187,10 @@ deduce_device_capabilities :: proc(features2: vk.PhysicalDeviceFeatures2, extens
 		if feature not_in capabilities {
 			continue
 		}
-		extensionLoop: for extension in featureExtensions[feature] {
-			pExtension := strings.clone_from_cstring_bounded(extension, vk.MAX_EXTENSION_NAME_SIZE, context.temp_allocator)
-			for &extension in extensions {
-				pDeviceExtension := byte_arr_str(&extension.extensionName)
-				if strings.compare(pExtension, pDeviceExtension) == 0 {
+		extensionLoop: for requiredExtension in featureExtensions[feature] {
+			for &availableExtension in extensions {
+				pDeviceExtension := byte_arr_str(&availableExtension.extensionName)
+				if strings.compare(requiredExtension, pDeviceExtension) == 0 {
 					continue extensionLoop
 				}
 			}
@@ -388,7 +387,7 @@ add_capability_extensions :: proc(extensions: ^[dynamic]cstring, capabilities: D
 	featureExtensions := DEVICE_FEATURE_EXTENSIONS
 	for feature in capabilities {
 		for extension in featureExtensions[feature] {
-			append(extensions, extension)
+			append(extensions, strings.clone_to_cstring(extension, context.temp_allocator))
 		}
 	}
 }
