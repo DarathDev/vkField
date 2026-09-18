@@ -12,7 +12,10 @@ check :: utility.check
 is_ok :: utility.is_ok
 
 CUMULATIVE :: bool(#config(TEST_CUMULATIVE, true))
-RUN_SIMULATION :: bool(#config(RUN_SIMULATION, true))
+RUN_SIMULATION :: bool(#config(TEST_RUN_SIMULATION, true))
+RUN_ONE_RECT :: bool(#config(TEST_RUN_ONE_RECT, true))
+RUN_LINEAR :: bool(#config(TEST_RUN_LINEAR, true))
+RUN_MATRIX :: bool(#config(TEST_RUN_MATRIX, true))
 MIN_CORRELATION :: 0.95
 MAX_RMS_ERROR_PERCENT :: 1
 MAX_RELATIVE_DIFFERENCE_PERCENT :: 5
@@ -21,19 +24,27 @@ main :: proc() {
 	context.logger = log.create_console_logger()
 	defer log.destroy_console_logger(context.logger)
 
-	oneRectSimulation()
-	linearArraySimulation()
-	matrixArraySimulation()
+	if RUN_ONE_RECT do oneRectSimulation()
+	if RUN_LINEAR do linearArraySimulation()
+	if RUN_MATRIX do matrixArraySimulation()
 }
 
 @(test)
 oneRectSimulationTest :: proc(t: ^testing.T) {
+	if !RUN_ONE_RECT do return
 	_ = utility.expect(t, oneRectSimulation())
 }
 
 @(test)
 linearArraySimulationTest :: proc(t: ^testing.T) {
+	if !RUN_LINEAR do return
 	_ = utility.expect(t, linearArraySimulation())
+}
+
+@(test)
+matrixArraySimulationTest :: proc(t: ^testing.T) {
+	if !RUN_MATRIX do return
+	_ = utility.expect(t, matrixArraySimulation())
 }
 
 @(test)
@@ -54,11 +65,6 @@ temporalResponseTest :: proc(t: ^testing.T) {
 		}
 	}
 	_ = utility.expect(t, passed)
-}
-
-// @(test)
-matrixArraySimulationTest :: proc(t: ^testing.T) {
-	_ = utility.expect(t, matrixArraySimulation())
 }
 
 compare_simulators :: proc(
