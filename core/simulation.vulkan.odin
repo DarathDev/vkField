@@ -500,7 +500,7 @@ plan_vulkan_simulator :: proc(
 		Cumulative            = settings.cumulative,
 	}
 
-	measAperWorkgroupSize: [2]u32 = {64, 1}
+	measAperWorkgroupSize: [2]u32 = {1, 64}
 	assert(measAperWorkgroupSize.x * measAperWorkgroupSize.y <= maxComputeWorkgroupInvocations)
 
 	measAperSpecTx: vkMeasAperSpecConstants = {
