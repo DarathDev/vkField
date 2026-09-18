@@ -286,6 +286,7 @@ PhysicalDevice :: struct {
 	name:             string,
 	physicalDevice:   vk.PhysicalDevice,
 	properties:       vk.PhysicalDeviceProperties,
+	maxBufferSize:    vk.DeviceSize,
 	capabilities:     DeviceCapabilities,
 	queueFamilies:    []QueueFamily,
 	memoryProperties: vk.PhysicalDeviceMemoryProperties,
@@ -310,6 +311,15 @@ get_physical_devices :: proc(instance: Instance, allocator := context.allocator)
 
 	for &device in devices {
 		vk.GetPhysicalDeviceProperties(device.physicalDevice, &device.properties)
+		maintenance4Properties := vk.PhysicalDeviceMaintenance4Properties {
+			sType = .PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES,
+		}
+		properties2 := vk.PhysicalDeviceProperties2 {
+			sType = .PHYSICAL_DEVICE_PROPERTIES_2,
+			pNext = &maintenance4Properties,
+		}
+		vk.GetPhysicalDeviceProperties2(device.physicalDevice, &properties2)
+		device.maxBufferSize = maintenance4Properties.maxBufferSize
 		device.name = strings.clone_from_cstring_bounded(cast(cstring)&device.properties.deviceName[0], vk.MAX_PHYSICAL_DEVICE_NAME_SIZE, allocator)
 		queueFamilyCount: u32
 		vk.GetPhysicalDeviceQueueFamilyProperties(device.physicalDevice, &queueFamilyCount, nil)
