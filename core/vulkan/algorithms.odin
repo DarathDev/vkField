@@ -904,6 +904,20 @@ cmd_end :: proc(commandBuffer: CommandBuffer) -> vk.Result {
 	return vk.EndCommandBuffer(commandBuffer.commandBuffer)
 }
 
+cmd_begin_label :: proc(commandBuffer: CommandBuffer, label: string, color: [4]f32 = {0, 0, 0, 0}) {
+	if !commandBuffer.debugUtils do return
+	labelInfo: vk.DebugUtilsLabelEXT = {
+		sType      = .DEBUG_UTILS_LABEL_EXT,
+		pLabelName = strings.clone_to_cstring(label, context.temp_allocator),
+		color      = color,
+	}
+	vk.CmdBeginDebugUtilsLabelEXT(commandBuffer.commandBuffer, &labelInfo)
+}
+
+cmd_end_label :: proc(commandBuffer: CommandBuffer) {
+	if commandBuffer.debugUtils do vk.CmdEndDebugUtilsLabelEXT(commandBuffer.commandBuffer)
+}
+
 SemaphoreBarrier :: struct {
 	semaphore: Semaphore,
 	value:     u64,

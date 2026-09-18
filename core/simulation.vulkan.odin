@@ -712,6 +712,7 @@ simulate_vulkan :: proc(
 			if hasTransferQueue {
 				transferCommandBuffer := transferCommandBuffers[commandBufferIndex]
 				vkField_vk.cmd_begin(transferCommandBuffer, true) or_return
+				vkField_vk.cmd_begin_label(transferCommandBuffer, "Scatter Upload")
 				vkField_vk.cmd_pipeline_barrier(
 					transferCommandBuffer,
 					{},
@@ -745,6 +746,7 @@ simulate_vulkan :: proc(
 						},
 					)
 				}
+				vkField_vk.cmd_end_label(transferCommandBuffer)
 				vkField_vk.cmd_end(transferCommandBuffer) or_return
 				simulator.transferTimelineValue += 1
 				vkField_vk.queue_submit(
@@ -757,6 +759,7 @@ simulate_vulkan :: proc(
 
 			commandBuffer = computeCommandBuffer
 			vkField_vk.cmd_begin(commandBuffer, true) or_return
+			vkField_vk.cmd_begin_label(commandBuffer, "Scatter Batch")
 			if !hasTransferQueue {
 				vkField_vk.cmd_pipeline_barrier(
 					commandBuffer,
@@ -847,6 +850,7 @@ simulate_vulkan :: proc(
 					)
 				}
 
+				vkField_vk.cmd_begin_label(commandBuffer, "Calculate Aperture")
 				dispatch_vk_calculate_aperture(
 					commandBuffer,
 					simulator,
@@ -858,6 +862,7 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
+				vkField_vk.cmd_end_label(commandBuffer)
 				vkField_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
@@ -874,6 +879,7 @@ simulate_vulkan :: proc(
 					},
 					{},
 				)
+				vkField_vk.cmd_begin_label(commandBuffer, "Measure Aperture")
 				dispatch_vk_measure_aperture(
 					commandBuffer,
 					simulator,
@@ -886,6 +892,7 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
+				vkField_vk.cmd_end_label(commandBuffer)
 				vkField_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
@@ -902,6 +909,7 @@ simulate_vulkan :: proc(
 					},
 					{},
 				)
+				vkField_vk.cmd_begin_label(commandBuffer, "Coalesce Aperture")
 				dispatch_vk_coalesce_aperture(
 					commandBuffer,
 					simulator,
@@ -914,6 +922,7 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
+				vkField_vk.cmd_end_label(commandBuffer)
 				vkField_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
@@ -930,6 +939,7 @@ simulate_vulkan :: proc(
 					},
 					{},
 				)
+				vkField_vk.cmd_begin_label(commandBuffer, "Pulse Echo Convolution")
 				dispatch_vk_pulse_echo_convolution(
 					commandBuffer,
 					simulator,
@@ -943,8 +953,10 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
+				vkField_vk.cmd_end_label(commandBuffer)
 			}
 
+			vkField_vk.cmd_end_label(commandBuffer)
 			vkField_vk.cmd_end(commandBuffer) or_return
 			scatterComputeWaits: []vkField_vk.SemaphoreBarrier
 			if hasTransferQueue do scatterComputeWaits = {{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.COMPUTE_SHADER}}}
@@ -982,6 +994,7 @@ simulate_vulkan :: proc(
 		hasTransferQueue,
 	) or_return
 	vkField_vk.cmd_begin(commandBuffer, true) or_return
+	vkField_vk.cmd_begin_label(commandBuffer, "Readback Response")
 	vkField_vk.cmd_pipeline_barrier(
 		commandBuffer,
 		{},
@@ -1006,6 +1019,7 @@ simulate_vulkan :: proc(
 	} else {
 		downloadBuffer = resources.responseBuffer.main
 	}
+	vkField_vk.cmd_end_label(commandBuffer)
 	vkField_vk.cmd_end(commandBuffer) or_return
 	simulator.computeTimelineValue += 1
 	vkField_vk.queue_submit(
@@ -1070,8 +1084,10 @@ prepare_vk_simulation :: proc(
 	if hasTransferQueue {
 		transferCommandBuffer := vkField_vk.get_command_buffer(device, &simulator.transferCommandPool) or_return
 		vkField_vk.cmd_begin(transferCommandBuffer, true) or_return
+		vkField_vk.cmd_begin_label(transferCommandBuffer, "Initial Upload")
 		vkField_vk.cmd_upload(transferCommandBuffer, initialDataBuffer, resources.dataBuffer.main, resources.dataBuffer.staging.? or_else {})
 		vkField_vk.cmd_upload(transferCommandBuffer, initialTemporalBuffer, resources.temporalBuffer.main, resources.temporalBuffer.staging.? or_else {})
+		vkField_vk.cmd_end_label(transferCommandBuffer)
 		vkField_vk.cmd_end(transferCommandBuffer) or_return
 		simulator.transferTimelineValue += 1
 		vkField_vk.queue_submit(
@@ -1083,6 +1099,7 @@ prepare_vk_simulation :: proc(
 	}
 
 	vkField_vk.cmd_begin(commandBuffer, true) or_return
+	vkField_vk.cmd_begin_label(commandBuffer, "Initialize Buffers")
 	vkField_vk.cmd_clear_buffer(commandBuffer, resources.responseBuffer.main)
 	if !hasTransferQueue {
 		vkField_vk.cmd_upload(commandBuffer, initialDataBuffer, resources.dataBuffer.main, resources.dataBuffer.staging.? or_else {})
@@ -1122,6 +1139,7 @@ prepare_vk_simulation :: proc(
 		},
 		{},
 	)
+	vkField_vk.cmd_end_label(commandBuffer)
 	vkField_vk.cmd_end(commandBuffer) or_return
 	computeWaits: []vkField_vk.SemaphoreBarrier
 	if hasTransferQueue {
@@ -1166,6 +1184,7 @@ run_vk_temporal_pass :: proc(
 	temporalShader := resources.temporalShader
 	maxSampleChunkSize: i32 = 1024
 	vkField_vk.cmd_begin(commandBuffer, true) or_return
+	vkField_vk.cmd_begin_label(commandBuffer, "Temporal Response")
 	vkField_vk.cmd_pipeline_barrier(
 		commandBuffer,
 		{},
@@ -1238,6 +1257,7 @@ run_vk_temporal_pass :: proc(
 		resources.responseBuffer.main,
 		{{sType = .BUFFER_COPY_2, srcOffset = 0, dstOffset = 0, size = resources.temporalOutputBuffer.size}},
 	)
+	vkField_vk.cmd_end_label(commandBuffer)
 	vkField_vk.cmd_end(commandBuffer) or_return
 	simulator.computeTimelineValue += 1
 	vkField_vk.queue_submit(

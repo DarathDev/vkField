@@ -821,6 +821,7 @@ CommandPool :: struct {
 CommandBuffer :: struct {
 	commandBuffer:    vk.CommandBuffer,
 	queueFamilyIndex: u32,
+	debugUtils:       bool,
 }
 
 create_command_pool :: proc(
@@ -857,6 +858,7 @@ get_command_buffer :: proc(device: Device, commandPool: ^CommandPool, label := "
 	commandBuffer = {
 		commandBuffer    = cBuffer,
 		queueFamilyIndex = commandPool.queueFamilyIndex,
+		debugUtils       = .DebugUtils in device.instanceCapabilities,
 	}
 	if len(label) > 0 {
 		name(device, cBuffer, label)
@@ -882,6 +884,7 @@ get_command_buffers :: proc(
 		commandBuffer = {
 			commandBuffer    = cBuffers[index],
 			queueFamilyIndex = commandPool.queueFamilyIndex,
+			debugUtils       = .DebugUtils in device.instanceCapabilities,
 		}
 		if len(label) > 0 {
 			name(device, cBuffers[index], fmt.tprintf("%s (%d)", label, index))
