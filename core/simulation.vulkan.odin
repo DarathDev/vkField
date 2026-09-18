@@ -378,10 +378,7 @@ plan_vulkan_simulator :: proc(
 	assert(pulseEchoSharedMemory <= maxComputeSharedMemorySize, "Pulse echo convolution shared memory exceeds device maxComputeSharedMemorySize")
 
 	maxStorageBufferRange := u32(limits.maxStorageBufferRange)
-	maxBufferLimit: u32 = maxStorageBufferRange
-	if settings.gpuSettings.dispatchWorkLimit > 0 {
-		maxBufferLimit = min(maxBufferLimit, u32(settings.gpuSettings.dispatchWorkLimit))
-	}
+	maxBufferLimit := u32(simulator.device.physicalDevice.maxBufferSize)
 
 	elementCount := u32(len(elements))
 	transmissionCount := u32(len(transmissions))
@@ -417,7 +414,7 @@ plan_vulkan_simulator :: proc(
 	log.infof(
 		"Vulkan scatter batch plan: scatters=%d, elements=%d, transmissions=%d, receiveChannels=%d, apertureSamples=%d, " +
 		"sharedMemory=%M/%M bytes, fixedBuffer=%M bytes, bytesPerScatterer=%M, bufferLimit=%M bytes, " +
-		"physicalStorageLimit=%M bytes, dispatchWorkLimit=%M bytes, bufferBatchLimit=%d, targetBatch=%d, finalBatch=%d",
+		"physicalStorageLimit=%M bytes, bufferBatchLimit=%d, targetBatch=%d, finalBatch=%d",
 		scatterCount,
 		elementCount,
 		transmissionCount,
@@ -429,7 +426,6 @@ plan_vulkan_simulator :: proc(
 		bytesPerScatterer,
 		maxBufferLimit,
 		maxStorageBufferRange,
-		settings.gpuSettings.dispatchWorkLimit,
 		maxBatchFromBuffer,
 		targetBatchSize,
 		simulator.info.scattererBatchSize,

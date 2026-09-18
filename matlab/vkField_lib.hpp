@@ -46,7 +46,6 @@ struct CpuSettings {
 
 struct GpuSettings {
 	GpuBackend backend;
-	i32 dispatchWorkLimit;
 	u32 enableDriverDebugMessages;
 };
 

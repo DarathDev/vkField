@@ -250,8 +250,6 @@ public:
 		else {
 			throw std::runtime_error("Unsupported GPU backend");
 		}
-		settings.gpuSettings.dispatchWorkLimit =
-			(i32)matlabPtr->getProperty(mxGpuSettings, "DispatchWorkLimit")[0];
 		settings.gpuSettings.enableDriverDebugMessages =
 			matlabPtr->getProperty(mxGpuSettings, "EnableDriverDebugMessages")[0] ? 1u : 0u;
 

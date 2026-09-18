@@ -164,7 +164,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
+		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
 	}
 
 	transmitElement: vkField.RectangularElement = {
@@ -244,7 +244,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
+		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
 	}
 
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch, elementWidth, 0)
@@ -281,7 +281,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {dispatchWorkLimit = 1 << 24, enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
+		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
 	}
 
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)
