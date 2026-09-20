@@ -21,12 +21,40 @@ odin run . -- -lib -matlab
 
 Note: MATLAB will crash if a debug trap is hit and no debugger is attached.
 
+The build program accepts the following options:
+
+| Option | Description |
+| --- | --- |
+| `-lib` or `-l` | Build the Ekhos static library (the default). |
+| `-test`, `-tests`, or `-t` | Build the test executable. |
+| `-debug` or `-d` | Build with debug information and runtime checks. |
+| `-release` or `-r` | Build an optimized release. |
+| `-matlab` | Also copy the library to `matlab/EkhosLib.a`. |
+| `-profile` | Enable profiling instrumentation. |
+| `-asan` | Enable AddressSanitizer in debug builds. |
+| `-no-break` | Disable debugger breakpoints from the messenger. |
+
+For example, to build an optimized library for MATLAB:
+
+```shell
+odin run . -- -release -lib -matlab
+```
+
 ## Testing
 
 ```shell
 odin run . -- -test
 ./bin/release/ekhosTests
 ```
+
+To compare CPU and Vulkan GPU simulation times for the same scenarios, build and run the benchmark mode:
+
+```shell
+odin run . -- -test -release -benchmark
+./bin/release/ekhosTests
+```
+
+Each benchmark warms up both backends, then reports average and minimum simulation time plus the GPU speedup. Set `BENCHMARK_ITERATIONS` in `test/test_simulations.odin` to change the sample count.
 
 ## Citations
 
