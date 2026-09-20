@@ -85,7 +85,7 @@ for arrayKind = ["linear", "matrix"]
                             arrayKind, rowCount, columnCount, scatterPositions, scatterAmplitudes, ...
                             receiveGroupSize, transmissionCount, fs, c, impulseResponse, excitation);
                         timer = tic();
-                        vkData = ekhosMex(simulation);
+                        vkData = simulation.call();
                         wallTime = toc(timer);
                         vkData = double(vkData);
                         if ismatrix(vkData)

@@ -36,7 +36,7 @@ classdef Simulation < handle
             arguments
                 simulation(1,1) ekhos.Simulation
             end
-            Ekhos.LoadLibraries();
+            ekhos.LoadLibraries();
             pulseEcho = ekhosMex(simulation);
         end
     end

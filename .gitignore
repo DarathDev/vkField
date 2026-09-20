@@ -27,6 +27,7 @@ tmp/
 *.dylib
 *.dll
 *.mexw64*
+*.mexa64*
 
 # Fortran module files
 *.mod
@@ -54,7 +55,7 @@ bin/
 lib/
 
 # fieldII
-+fieldII/
+*+fieldII/
 
 # Render Doc Captures
 *.rdc
@@ -71,3 +72,7 @@ lib/
 
 # Log Files
 *.log
+
+# Build Executable
+build
+build.exe

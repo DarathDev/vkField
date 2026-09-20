@@ -129,7 +129,7 @@ for eventIndex = 1:transmitCount
     simulator.Transmissions = sequenceTransmissions(eventIndex);
     receive = sequenceReceiveChannels(eventIndex);
     simulator.ReceiveChannels = receive;
-    vkPulseEcho{eventIndex} = ekhosMex(simulator);
+    vkPulseEcho{eventIndex} = simulator.call();
     vkStartTime(eventIndex) = simulator.StartTime;
     vkEndTime(eventIndex) = vkStartTime(eventIndex) ...
         + size(vkPulseEcho{eventIndex}, 1) / double(fs);

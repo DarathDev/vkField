@@ -60,7 +60,7 @@ data = fieldII.xdc_get(rTh, 'rect');
 
 %% Derived Values for Manual Simulation
 
-addpath("matlab\")
+addpath(fullfile("matlab"))
 
 simulator = ekhos.Simulation();
 simulator.SamplingFrequency = fs;
@@ -339,8 +339,7 @@ manualCumConvRf = conv(manualCumConvRf, single(excitation))*single(dt);
 
 %% Ekhos
 
-mex("matlab\ekhosLib.cpp", "matlab\ekhosLib.lib", "-g", "-R2018a", "-output", "matlab\ekhosMex");
-pulseEcho = ekhosMex(simulator);
+pulseEcho = simulator.call();
 vkStartTime = simulator.StartTime;
 
 pulseEcho = double(pulseEcho) * dt;

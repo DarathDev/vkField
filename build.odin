@@ -177,6 +177,8 @@ build_lib :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 	append(&odinCmd, ODIN_CMD, ODIN_BUILD_ARG, EKHOS_SRC_DIR)
 	append(&odinCmd, ..odin_options_to_args(options[:]))
 	assert(assert(run_cmd(odinCmd[:])) == 0)
+	pffftObjectPath := assume(os.join_path({TMP_DIRECTORY + "pffft/", assume(os.join_filename("pffft", get_cpp_object_extension(CPP_COMPILER_KIND), context.temp_allocator))}, context.allocator))
+	append_object_to_static_library(CPP_COMPILER_KIND, libraryOutPath, pffftObjectPath) or_return
 
 	if EKHOS_MATLAB {
 		when ODIN_OS == .Windows {
@@ -230,6 +232,21 @@ build_test :: proc(options: ^[dynamic]OdinBuildOption) -> (ok := true) {
 PFFFT_DIRECTORY :: EXTERN_DIRECTORY + "pffft/"
 PFFFT_SOURCE :: PFFFT_DIRECTORY + "pffft.c"
 
+append_object_to_static_library :: proc(compilerKind: CompilerKind, libraryPath, objectPath: string) -> (ok := true) {
+	if compilerKind == .MSVC {
+		combinedLibraryPath := fmt.aprintf("%s.combined", libraryPath)
+		command := []string{"lib", fmt.aprintf("/OUT:%s", combinedLibraryPath), libraryPath, objectPath}
+		assert(assert(run_cmd(command)) == 0)
+		assert(os.copy_file(libraryPath, combinedLibraryPath))
+		return
+	}
+
+	archiverPath := get_cpp_static_archiver(compilerKind)
+	command := []string{archiverPath, "rcs", libraryPath, objectPath}
+	assert(assert(run_cmd(command)) == 0)
+	return
+}
+
 build_pffft :: proc() -> (ok := true) {
 	build_log(os.stdout, .Info, "Building PFFFT")
 	clone_required_submodules() or_return
@@ -239,7 +256,7 @@ build_pffft :: proc() -> (ok := true) {
 		compilerPath      = compilerPath,
 		outputType        = .ObjectFiles,
 		sourcePaths       = {PFFFT_SOURCE},
-		outputPath        = assume(os.join_path({tmpDirectory, "pffft.o"}, context.temp_allocator)),
+		outputPath        = assume(os.join_path({tmpDirectory, assume(os.join_filename("pffft", get_cpp_object_extension(compilerKind), context.temp_allocator))}, context.temp_allocator)),
 		optimizationLevel = .Debug,
 		fastMath          = false,
 		debug             = EKHOS_BUILD_MODE == "debug",

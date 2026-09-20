@@ -115,9 +115,8 @@ simulator.Scatters.Positions = single(scatterPosition);
 simulator.Scatters.Amplitudes = single(scatterAmplitude);
 
 
-mex("matlab\ekhosLib.cpp", "matlab\ekhosLib.lib", "-g", "-R2018a", "-output", "matlab\ekhosMex");
 vkTimer = tic();
-pulseEcho = ekhosMex(simulator);
+pulseEcho = simulator.call();
 vkTime = toc(vkTimer);
 
 

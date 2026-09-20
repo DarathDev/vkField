@@ -242,7 +242,7 @@ simulation.Scatters = ekhos.ScatterSet();
 simulation.Scatters.Count = uint32(1);
 simulation.Scatters.Positions = single(scatterPosition);
 simulation.Scatters.Amplitudes = single(1);
-data = squeeze(double(ekhosMex(simulation)));
+data = squeeze(double(simulation.call()));
 simulatorLabel = 'CPU';
 if simulatorType == ekhos.SimulatorType.GPU
     simulatorLabel = 'GPU';

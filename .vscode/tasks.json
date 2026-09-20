@@ -14,6 +14,14 @@
                     "-debug"
                 ]
             },
+            "linux": {
+                "args": [
+                    "build",
+                    ".",
+                    "-out:build",
+                    "-debug"
+                ]
+            },
             "problemMatcher": [
                 "$odin"
             ]
@@ -21,6 +29,9 @@
         {
             "label": "Build Tests",
             "command": "build.exe",
+            "linux": {
+                "command": "./build"
+            },
             "args": [
                 "-test",
                 "-debug",
@@ -35,6 +46,9 @@
         {
             "label": "Build Tests (Profile)",
             "command": "build.exe",
+            "linux": {
+                "command": "./build"
+            },
             "args": [
                 "-test",
                 "-release",

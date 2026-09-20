@@ -105,7 +105,7 @@ for resultIndex = 1:numel(scatterCounts)
         simulation.Scatters.Positions = single(scatterPositions);
         simulation.Scatters.Amplitudes = single(scatterAmplitudes);
 
-        vkData = ekhosMex(simulation);
+        vkData = simulation.call();
         vkData = squeeze(double(vkData(:, :, 1))) * plotScale;
         vkTimes = double(simulation.StartTime) + (0:size(vkData, 1) - 1) / fs;
         [fieldAligned, vkAligned, commonTimes] = align_signal_union(vkData, vkTimes, fieldData, fieldTimes, fs);
