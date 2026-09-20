@@ -1,11 +1,11 @@
 package vkField_build
 
 import "base:runtime"
-import util "core/utility"
 import "core:fmt"
 import "core:log"
 import "core:os"
 import si "core:sys/info"
+import util "src/utility"
 
 when ODIN_DEBUG { VKFIELD_DEFAULT_BUILD_MODE :: "debug" } else { VKFIELD_DEFAULT_BUILD_MODE :: "release" }
 VKFIELD_BUILD_MODE: string
@@ -30,12 +30,12 @@ VKFIELD_ADDRESS_SANITIZER := #config(ADDRESS_SANITIZER, true)
 
 LOG_DEBUG := #config(LOG_DEBUG, false)
 
-VKFIELD_SRC_DIR := "core"
+VKFIELD_SRC_DIR := "src"
 MATLAB_DIR := "matlab"
 VKFIELD_TEST_DIR := "test"
 VKFIELD_TEST_EXE_TYPE := #config(TEST_EXE_TYPE, "test") // "test" or "exe"
 
-VKFIELD_COLLECTIONS: []OdinCollection = {{name = "vkField", path = "core"}, {name = "import", path = IMPORT_DIRECTORY}}
+VKFIELD_COLLECTIONS: []OdinCollection = {{name = "vkField", path = "src"}, {name = "import", path = IMPORT_DIRECTORY}}
 VKFIELD_ODIN_BUILD_OPTIONS: []OdinBuildOption = {}
 VKFIELD_ODIN_RELEASE_OPTIONS: []OdinBuildOption = {{flag = "o", value = {"speed"}}}
 VKFIELD_ODIN_DEBUG_OPTIONS: []OdinBuildOption = {{flag = "debug"}}

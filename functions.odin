@@ -1,11 +1,11 @@
 package vkField_build
 
 import "base:runtime"
-import util "core/utility"
 import "core:fmt"
 import "core:os"
 import "core:slice"
 import "core:strings"
+import util "src/utility"
 
 @(private = "file")
 is_ok :: util.is_ok

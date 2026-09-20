@@ -6,7 +6,7 @@ when ODIN_OS == .Windows {
 
 SLANG_LIBRARIES: []string = {"slang", "slang-compiler", "slang-rt", "gfx"}
 
-SHADER_FOLDER :: "core/shaders/"
+SHADER_FOLDER :: "src/shaders/"
 
 VKFIELD_PULSE_ECHO_SHADERS: []SlangShaderFile = {
 	{path = SHADER_FOLDER + "calculateAperture.slang", outputName = "calculateAperture", type = .Compute},
