@@ -44,6 +44,7 @@ EKHOS_ODIN_LIB_OPTIONS: []OdinBuildOption = {{flag = "build-mode", value = {"lib
 
 EKHOS_ODIN_TEST_DEFINES: []OdinDefine = {{name = "ODIN_TEST_THREADS", value = "1"}, {name = "ODIN_TEST_RANDOM_SEED", value = "0xcafebabe"}}
 EKHOS_ODIN_PROFILE_DEFINES: []OdinDefine = {{name = "PROF_MODE", value = "1"}, {name = "ENABLE_RENDERDOC", value = "false"}}
+EKHOS_ODIN_BENCHMARK_DEFINES: []OdinDefine = {{name = "BENCHMARK", value = "true"}}
 
 EKHOS_ODIN_DEBUG_DEFINES: []OdinDefine = {{name = "REQUIRE_RESOURCE_LABELS", value = "false"}}
 
@@ -97,6 +98,9 @@ main :: proc() {
 			EKHOS_MATLAB = true
 		case "-profile":
 			append(&options, ..odin_defines_to_options(EKHOS_ODIN_PROFILE_DEFINES))
+		case "-benchmark":
+			EKHOS_BUILD_TYPE = "test"
+			append(&options, ..odin_defines_to_options(EKHOS_ODIN_BENCHMARK_DEFINES))
 		case "-asan":
 			EKHOS_ADDRESS_SANITIZER = true
 		case "-no-break":

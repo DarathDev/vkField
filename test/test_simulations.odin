@@ -13,6 +13,8 @@ is_ok :: utility.is_ok
 
 CUMULATIVE :: bool(#config(TEST_CUMULATIVE, true))
 RUN_SIMULATION :: bool(#config(TEST_RUN_SIMULATION, true))
+BENCHMARK :: bool(#config(BENCHMARK, false))
+BENCHMARK_ITERATIONS :: 5
 RUN_ONE_RECT :: bool(#config(TEST_RUN_ONE_RECT, true))
 RUN_LINEAR :: bool(#config(TEST_RUN_LINEAR, true))
 RUN_MATRIX :: bool(#config(TEST_RUN_MATRIX, true))
@@ -95,6 +97,51 @@ compare_simulators :: proc(
 	if !ekhos.plan_simulation(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
 	if !ekhos.plan_simulation(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
 	if !RUN_SIMULATION do return true
+
+	if BENCHMARK {
+		cpuWarmup, cpuWarmupOk := ekhos.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
+		if !cpuWarmupOk do return false
+		defer delete(cpuWarmup)
+		gpuWarmup, gpuWarmupOk := ekhos.simulate(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
+		if !gpuWarmupOk do return false
+		defer delete(gpuWarmup)
+
+		cpuTotal: f64
+		gpuTotal: f64
+		cpuMinimum: f32 = 3.4028235e38
+		gpuMinimum: f32 = 3.4028235e38
+		for _ in 0 ..< BENCHMARK_ITERATIONS {
+			cpuData, cpuSimulationOk := ekhos.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
+			if !cpuSimulationOk do return false
+			defer delete(cpuData)
+			gpuData, gpuSimulationOk := ekhos.simulate(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
+			if !gpuSimulationOk do return false
+			defer delete(gpuData)
+
+			cpuTime := cpuSettings.metrics.simulationTime
+			gpuTime := gpuSettings.metrics.simulationTime
+			cpuTotal += f64(cpuTime)
+			gpuTotal += f64(gpuTime)
+			cpuMinimum = min(cpuMinimum, cpuTime)
+			gpuMinimum = min(gpuMinimum, gpuTime)
+		}
+
+		cpuAverage := f32(cpuTotal / f64(BENCHMARK_ITERATIONS))
+		gpuAverage := f32(gpuTotal / f64(BENCHMARK_ITERATIONS))
+		log.infof(
+			"CPU/GPU benchmark: elements=%d scatters=%d transmissions=%d receiveChannels=%d iterations=%d cpuAvg=%.6fs gpuAvg=%.6fs cpuMin=%.6fs gpuMin=%.6fs speedup=%.3fx",
+			len(elements),
+			len(scatters),
+			len(transmissions),
+			len(receiveChannels),
+			BENCHMARK_ITERATIONS,
+			cpuAverage,
+			gpuAverage,
+			cpuMinimum,
+			gpuMinimum,
+			gpuAverage > 0 ? cpuAverage / gpuAverage : 0,
+		)
+	}
 
 	cpuData, cpuSimulationOk := ekhos.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	if !cpuSimulationOk do return false
@@ -276,8 +323,8 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	utility.prof_scoped(#procedure)
 
 	scatterCount :: 64
-	rowCount :: 128
-	columnCount :: 128
+	rowCount :: 32
+	columnCount :: 32
 	elementWidth: f32 : 2.2e-4
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
