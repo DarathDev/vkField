@@ -14,6 +14,9 @@ is_ok :: utility.is_ok
 CUMULATIVE :: bool(#config(TEST_CUMULATIVE, true))
 RUN_SIMULATION :: bool(#config(TEST_RUN_SIMULATION, true))
 BENCHMARK :: bool(#config(BENCHMARK, false))
+BENCHMARK_SCATTER_MULTIPLIER :: int(#config(BENCHMARK_SCATTER_MULTIPLIER, 1))
+LINEAR_SCATTER_COUNT :: int(#config(TEST_LINEAR_SCATTER_COUNT, 16))
+MATRIX_SCATTER_COUNT :: int(#config(TEST_MATRIX_SCATTER_COUNT, 64))
 BENCHMARK_ITERATIONS :: 5
 RUN_ONE_RECT :: bool(#config(TEST_RUN_ONE_RECT, true))
 RUN_LINEAR :: bool(#config(TEST_RUN_LINEAR, true))
@@ -217,7 +220,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
+		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None && !BENCHMARK)},
 	}
 
 	transmitElement: ekhos.RectangularElement = {
@@ -285,7 +288,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 	utility.prof_thread_init()
 	utility.prof_scoped(#procedure)
 
-	scatterCount :: 16
+	scatterCount := LINEAR_SCATTER_COUNT * BENCHMARK_SCATTER_MULTIPLIER
 	rowCount :: 1
 	columnCount :: 128
 	elementWidth: f32 : 2.2e-4
@@ -297,7 +300,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
+		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None && !BENCHMARK)},
 	}
 
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch, elementWidth, 0)
@@ -322,7 +325,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	utility.prof_thread_init()
 	utility.prof_scoped(#procedure)
 
-	scatterCount :: 64
+	scatterCount := MATRIX_SCATTER_COUNT * BENCHMARK_SCATTER_MULTIPLIER
 	rowCount :: 32
 	columnCount :: 32
 	elementWidth: f32 : 2.2e-4
@@ -334,7 +337,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
 		cpuSettings = {threadCount = 1},
-		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
+		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None && !BENCHMARK)},
 	}
 
 	elements := make_transmit_and_receive_grid_elements(columnCount, rowCount, elementPitch * [2]f32{1, 1}, elementWidth * [2]f32{1, 1}, 0)

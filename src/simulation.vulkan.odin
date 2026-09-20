@@ -25,7 +25,7 @@ assert :: ekhos_util.assert
 assume :: ekhos_util.assume
 
 MAX_FRAMES_IN_FLIGHT :: 2
-SCATTER_UPLOAD_WINDOW_SIZE :: 16 * runtime.Megabyte
+SCATTER_UPLOAD_WINDOW_SIZE :: int(#config(SCATTER_UPLOAD_WINDOW_KB, 16 * 1024)) * runtime.Kilobyte
 SCATTER_BATCHES_PER_COMMAND_BUFFER :: 2
 GPU_CALC_ELEMENT_CHUNK_SIZE :: 256
 GPU_ELEMENT_SET_CHUNK_SIZE :: 1024
@@ -35,6 +35,7 @@ VULKAN_PROGRESS_LOG_DELAY_THRESHOLD :: 20.0 * time.Second
 VULKAN_PROGRESS_LOG_INTERVAL :: 20.0 * time.Second
 
 DISPATCH_TIMEOUT :: 1000 * time.Second
+GPU_STAGE_TIMING :: bool(#config(GPU_STAGE_TIMING, false))
 
 SHADER_COMPUTE_CALCULATE_APERTURE :: #load("shaders/calculateAperture.spv")
 SHADER_COMPUTE_MEASURE_APERTURE :: #load("shaders/measureAperture.spv")
@@ -451,7 +452,9 @@ plan_vulkan_simulator :: proc(
 	vkDataBuffer := check(prepare_stream(device, auto_cast dataBufferHeader.totalSize, sharedQueueFamilyIndices)) or_return
 	scatterBufferSize := max(size_of(Scatter), min(int(SCATTER_UPLOAD_WINDOW_SIZE), max(1, len(scatters) * size_of(Scatter))))
 	scatterUploadCapacity := max(1, scatterBufferSize / size_of(Scatter))
-	scatterBufferCount := min(MAX_FRAMES_IN_FLIGHT, max(1, (len(scatters) + scatterUploadCapacity - 1) / scatterUploadCapacity))
+	// Keep one upload buffer per in-flight command slot. A single large scatter
+	// buffer can otherwise be overwritten while earlier copies still execute.
+	scatterBufferCount := min(MAX_FRAMES_IN_FLIGHT, max(2, (len(scatters) + scatterUploadCapacity - 1) / scatterUploadCapacity))
 	scatterBuffers: [dynamic; MAX_FRAMES_IN_FLIGHT]ekhos_vk.Buffer
 	for _ in 0 ..< scatterBufferCount {
 		scatterBuffer := check(prepare_scatter_buffer(device, auto_cast scatterBufferSize)) or_return
@@ -662,6 +665,10 @@ simulate_vulkan :: proc(
 
 	commandBuffer, timelineWait, hasTransferQueue := prepare_vk_simulation(simulator, resources, initialDataBuffer, initialTemporalBuffer) or_return
 	transferQueue, _ := simulator.transferQueue.?
+	stageStopwatch: time.Stopwatch
+	when GPU_STAGE_TIMING {
+		time.stopwatch_start(&stageStopwatch)
+	}
 
 	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
 
@@ -980,6 +987,11 @@ simulate_vulkan :: proc(
 			lastProgressLogTime,
 		) or_return
 	}
+	when GPU_STAGE_TIMING {
+		time.stopwatch_stop(&stageStopwatch)
+		log.infof("Vulkan GPU stage: scatter=%.6fs", time.duration_seconds(time.stopwatch_duration(stageStopwatch)))
+		time.stopwatch_start(&stageStopwatch)
+	}
 
 	commandBuffer = run_vk_temporal_pass(
 		simulator,
@@ -993,6 +1005,11 @@ simulate_vulkan :: proc(
 		timelineWait,
 		hasTransferQueue,
 	) or_return
+	when GPU_STAGE_TIMING {
+		time.stopwatch_stop(&stageStopwatch)
+		log.infof("Vulkan GPU stage: temporal=%.6fs", time.duration_seconds(time.stopwatch_duration(stageStopwatch)))
+		time.stopwatch_start(&stageStopwatch)
+	}
 	ekhos_vk.cmd_begin(commandBuffer, true) or_return
 	ekhos_vk.cmd_begin_label(commandBuffer, "Readback Response")
 	ekhos_vk.cmd_pipeline_barrier(
@@ -1031,7 +1048,10 @@ simulate_vulkan :: proc(
 	timelineWait.value[0] = simulator.computeTimelineValue
 	check(ekhos_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
 	ekhos_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
-	vk.DeviceWaitIdle(device.device) or_return
+	when GPU_STAGE_TIMING {
+		time.stopwatch_stop(&stageStopwatch)
+		log.infof("Vulkan GPU stage: readback=%.6fs", time.duration_seconds(time.stopwatch_duration(stageStopwatch)))
+	}
 	return
 }
 

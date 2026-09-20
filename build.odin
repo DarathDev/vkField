@@ -101,6 +101,8 @@ main :: proc() {
 		case "-benchmark":
 			EKHOS_BUILD_TYPE = "test"
 			append(&options, ..odin_defines_to_options(EKHOS_ODIN_BENCHMARK_DEFINES))
+		case "-gpu-stage-timing":
+			append(&options, OdinBuildOption{flag = "define", value = {"GPU_STAGE_TIMING=true"}})
 		case "-asan":
 			EKHOS_ADDRESS_SANITIZER = true
 		case "-no-break":
