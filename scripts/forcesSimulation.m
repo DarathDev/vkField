@@ -1,14 +1,15 @@
 scriptDirectory = fileparts(mfilename("fullpath"));
 repoDirectory = fileparts(scriptDirectory);
 addpath(repoDirectory);
+addpath(scriptDirectory);
 addpath(fullfile(repoDirectory, "matlab"));
 addpath(fullfile(repoDirectory, "extern", "ornot", "matlab"));
 ornot.LoadLibraries();
 
 plotting = true;
-useMatrixArray = false;
+plotGeometry = false;
 
-fs = single(100e6);
+fs = single(50e6);
 c = single(1540);
 fc = single(5e6);
 cycleCount = 2;
@@ -19,7 +20,7 @@ columnCount = 32;
 elementWidth = single([2.2e-4, 2.2e-4]);
 elementKerf = single([3e-5, 3e-5]);
 
-[scatterX, scatterZ] = meshgrid(linspace(-8e-3, 8e-3, 8), linspace(20e-3, 100e-3, 20));
+[scatterX, scatterZ] = meshgrid(5e-3, linspace(20e-3, 100e-3, 20));
 scatterCount = numel(scatterX);
 scatterPosition = [
     scatterX(:).';
@@ -61,31 +62,9 @@ fieldII.field_init(-1);
 fieldII.set_field('c', double(c));
 fieldII.set_field('fs', double(fs));
 
-tTh = fieldII.xdc_2d_array(columnCount, rowCount, double(elementWidth(2)), ...
-    double(elementWidth(1)), double(elementKerf(2)), double(elementKerf(1)), ...
-    ones(columnCount, rowCount)', 1, 1, [0, 0, 1e10]);
-
+tTh = createFieldIILinearArray(array, receiveOrientation);
 receiveLineCount = double(array.ElementCount(int32(receiveOrientation)));
-if useMatrixArray
-    rTh = fieldII.xdc_2d_array(columnCount, rowCount, double(elementWidth(2)), ...
-        double(elementWidth(1)), double(elementKerf(2)), double(elementKerf(1)), ...
-        ones(columnCount, rowCount)', 1, 1, [0, 0, 1e10]);
-else
-    receiveLineLength = double(array.ElementCount(int32(transmitOrientation)));
-    if receiveOrientation == ZBP.RCAOrientation.Columns
-        receiveElementWidth = double(elementWidth(2));
-        receiveElementHeight = double(receiveLineLength * elementWidth(1) ...
-            + (receiveLineLength - 1) * elementKerf(1));
-        receiveKerf = double(elementKerf(2));
-    else
-        receiveElementWidth = double(elementWidth(1));
-        receiveElementHeight = double(receiveLineLength * elementWidth(2) ...
-            + (receiveLineLength - 1) * elementKerf(2));
-        receiveKerf = double(elementKerf(1));
-    end
-    rTh = fieldII.xdc_linear_array(receiveLineCount, receiveElementWidth, ...
-        receiveElementHeight, receiveKerf, 1, receiveLineLength, [0, 0, 1e10]);
-end
+rTh = createFieldIILinearArray(array, receiveOrientation);
 fieldII.xdc_impulse(tTh, double(impulseResponse));
 fieldII.xdc_impulse(rTh, double(impulseResponse));
 fieldII.xdc_excitation(tTh, double(excitation));
@@ -94,24 +73,12 @@ fieldIIStartTime = zeros(transmitCount, 1);
 fieldIIEndTime = zeros(transmitCount, 1);
 fieldIITimer = tic();
 for eventIndex = 1:transmitCount
-    if useMatrixArray
-        [isActive, fieldIIScatterPosition] = updateFieldIIMatrixArray(tTh, rTh, array, biasPattern(eventIndex, :), ...
-            transmitApodization(eventIndex, :), transmitDelays(eventIndex, :), ...
-            receiveApodization(eventIndex, :), scatterPosition);
-    else
-        [isActive, fieldIIScatterPosition] = updateFieldIILinearArray(tTh, rTh, array, biasPattern(eventIndex, :), ...
-            transmitApodization(eventIndex, :), transmitDelays(eventIndex, :), ...
-            receiveApodization(eventIndex, :), receiveOrientation, scatterPosition);
-    end
+    [isActive, fieldIIScatterPosition] = updateFieldIILinearArray(tTh, rTh, array, biasPattern(eventIndex, :), ...
+        transmitApodization(eventIndex, :), transmitDelays(eventIndex, :), ...
+        receiveApodization(eventIndex, :), receiveOrientation, scatterPosition);
     if isActive
         [fieldIIRf{eventIndex}, fieldIIStartTime(eventIndex)] = ...
             fieldII.calc_scat_multi(tTh, rTh, fieldIIScatterPosition', double(scatterAmplitude));
-        if useMatrixArray
-            fieldIIRf{eventIndex} = sum(reshape(fieldIIRf{eventIndex}, ...
-                size(fieldIIRf{eventIndex}, 1), rowCount, columnCount), 2);
-            fieldIIRf{eventIndex} = reshape(fieldIIRf{eventIndex}, ...
-                size(fieldIIRf{eventIndex}, 1), columnCount);
-        end
         fieldIIEndTime(eventIndex) = fieldIIStartTime(eventIndex) ...
             + size(fieldIIRf{eventIndex}, 1) / double(fs);
     end
@@ -138,17 +105,17 @@ simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 simulator.Impulses = {single(impulseResponse)};
 simulator.Excitations = {single(excitation)};
-tData = fieldII.xdc_get(tTh, 'rect');
+fieldIITransmitElements = fieldIIArrayToVkFieldArray(tTh);
+fieldIIReceiveElements = fieldIIArrayToVkFieldArray(rTh);
 [sequenceElements, sequenceTransmissions, sequenceReceiveChannels] = ...
     sequenceToElementSets(array, biasPattern, transmitApodization, transmitDelays, receiveApodization);
-simulator.Elements = vkField.RectangularElementSet();
-transmitElementCount = size(tData, 2);
-simulator.Elements.Count = uint32(transmitElementCount + sequenceElements.Count);
-simulator.Elements.Positions = single([tData(8:10, :), sequenceElements.Positions]);
-simulator.Elements.Normals = single([tangentsToNormals(tData(8:10, :)), sequenceElements.Normals]);
-simulator.Elements.Sizes = single([tData(3:4, :), sequenceElements.Sizes]);
-simulator.Elements.Apodizations = single([tData(5, :), sequenceElements.Apodizations]);
-simulator.Elements.Delays = single([tData(23, :), sequenceElements.Delays]);
+simulator.Elements = sequenceElements;
+if plotting && plotGeometry
+    plot_element_geometry(fieldIITransmitElements, fieldIIReceiveElements, ...
+        sequenceElements.Positions, sequenceElements.Sizes, ...
+        sequenceElements.Positions, sequenceElements.Sizes, ...
+        'FORCES physical elements');
+end
 simulator.Scatters = vkField.ScatterSet();
 simulator.Scatters.Count = uint32(scatterCount);
 simulator.Scatters.Positions = single(scatterPosition);
@@ -161,7 +128,6 @@ vkEndTime = zeros(transmitCount, 1);
 for eventIndex = 1:transmitCount
     simulator.Transmissions = sequenceTransmissions(eventIndex);
     receive = sequenceReceiveChannels(eventIndex);
-    receive.Indices = receive.Indices + int32(transmitElementCount);
     simulator.ReceiveChannels = receive;
     vkPulseEcho{eventIndex} = vkField_mex(simulator);
     vkStartTime(eventIndex) = simulator.StartTime;
@@ -184,6 +150,13 @@ fprintf("Simulation speed-up == %.3fx\n", fieldIITime / vkTime);
 
 fieldIIData = stackEventData(fieldIIRf);
 vkData = stackEventData(vkPulseEcho);
+responseSampleCount = min(size(fieldIIData, 1), size(vkData, 1));
+responseChannelCount = min(size(fieldIIData, 2), size(vkData, 2));
+responseMetrics = signal_metrics( ...
+    vkData(1:responseSampleCount, 1:responseChannelCount), ...
+    fieldIIData(1:responseSampleCount, 1:responseChannelCount));
+fprintf("Field II/vkField response correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
+    responseMetrics.correlation, responseMetrics.rmsErrorPercent, responseMetrics.peakRatio);
 
 fieldIIBp = bp;
 fieldIIBp.raw_data_dimension = uint32([size(fieldIIData, 1), receiveLineCount, 1, 1]);
@@ -241,21 +214,25 @@ fprintf("vkField beamform time == %.6f s\n", vkBeamformTime);
 if plotting
     imageX = linspace(xRange(1), xRange(2), size(fieldIIImage{1}, 1));
     imageZ = linspace(zRange(1), zRange(2), size(fieldIIImage{1}, 2));
+    fieldIIImageDb = 20*log10(abs(fieldIIImage{1}) / max(abs(fieldIIImage{1}), [], 'all'));
+    vkImageDb = 20*log10(abs(vkImage{1}) / max(abs(vkImage{1}), [], 'all'));
     figure();
     colormap(gray);
     tiledlayout(1, 2, 'TileSpacing', 'none', 'Padding', 'none');
     nexttile();
-    imagesc(imageX * 1e3, imageZ * 1e3, abs(fieldIIImage{1})');
+    imagesc(imageX * 1e3, imageZ * 1e3, fieldIIImageDb');
     axis image;
+    clim([-40, 0]);
     title("Field II FORCES");
-    xlabel("x (mm)");
+    xlabel("x (mm), dB");
     ylabel("z (mm)");
     colorbar('westoutside');
     nexttile();
-    imagesc(imageX * 1e3, imageZ * 1e3, abs(vkImage{1})');
+    imagesc(imageX * 1e3, imageZ * 1e3, vkImageDb');
     axis image;
+    clim([-40, 0]);
     title("vkField FORCES");
-    xlabel("x (mm)");
+    xlabel("x (mm), dB");
     set(gca, 'YColor', 'none');
     colorbar;
 end
@@ -285,9 +262,5 @@ for eventIndex = 1:numel(data)
 end
 end
 
-function normals = tangentsToNormals(tangents)
-normals = [tangents(2, :)./sqrt(1 + tangents(2, :).^2);
-    tangents(1, :)./sqrt(1 + tangents(1, :).^2);
-    sqrt(1 - (tangents(1, :).^2).*(tangents(2, :).^2))./sqrt(1 + tangents(1, :).^2)./sqrt(1 + tangents(2, :).^2)];
-end
+
 

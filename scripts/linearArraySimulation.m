@@ -1,4 +1,5 @@
 addpath("matlab");
+addpath("scripts/color");
 
 plotting = false;
 %% Simulation Settings
@@ -138,12 +139,14 @@ if plotting
 
     im1(1) = imagesc(ax1(1), 1:columnCountR, times*1e6, fullRF);
     im1(1) = imagesc(ax1(2), 1:columnCountR, vkTimes*1e6, pulseEcho);
+    colormap(f1, colorcet('L16', 'N', 256));
 
     vw1 = VideoWriter(fullfile("figures", "linearArrayComparison" + ".mp4"), "MPEG-4");
     vw1.FrameRate = 30;
     vw1.open();
 
     f2 = figure(); ax2 = axes(f2); hold(ax2, "on");
+    colororder(ax2, colorcet('L16', 'N', 2));
     for i = 1:size(fullRF, 2)
         hold(ax2, "off");
         p2(1) = plot(ax2, times*1e6, fullRF(:, i), '-'); hold(ax2, "on");

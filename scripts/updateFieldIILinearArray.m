@@ -11,6 +11,8 @@ arguments
     scatterPosition(:, :) double
 end
 
+assert(receiveOrientation == ZBP.RCAOrientation.Columns, "Overlapping linear arrays require column-oriented receive channels");
+
 rowCount = double(array.ElementCount(1));
 columnCount = double(array.ElementCount(2));
 rowElements = 1:rowCount;
@@ -19,21 +21,29 @@ columnElements = rowCount + (1:columnCount);
 biasApodization = biasPattern(rowElements).' - biasPattern(columnElements);
 transmitApodizationGrid = transmitApodization(rowElements).' ...
     + transmitApodization(columnElements);
-physicalApodization = biasApodization .* transmitApodizationGrid;
-physicalDelays = transmitDelays(rowElements).' .* single(transmitApodization(rowElements) ~= 0) ...
-    + transmitDelays(columnElements) .* single(transmitApodization(columnElements) ~= 0);
-isActive = any(transmitApodization ~= 0);
 
 fieldIIScatterPosition = scatterPosition;
-if receiveOrientation == ZBP.RCAOrientation.Columns
-    physicalApodization = fliplr(physicalApodization).';
-    physicalDelays = fliplr(physicalDelays).';
-    fieldIIScatterPosition = [scatterPosition(2, :); -scatterPosition(1, :); scatterPosition(3, :)];
-end
 
-fieldII.xdc_apodization(tTh, 0, double(reshape(physicalApodization.', 1, [])));
-fieldII.xdc_times_focus(tTh, 0, double(reshape(physicalDelays.', 1, [])));
+transmitSubelementApodization = (biasApodization .* transmitApodizationGrid).';
+isActive = any(transmitSubelementApodization ~= 0, 'all');
 
-receiveElements = array.GetElements(receiveOrientation);
-fieldII.xdc_apodization(rTh, 0, double(receiveApodization(receiveElements)));
+transmitDelaysGrid = transmitDelays(rowElements).' .* single(transmitApodization(rowElements) ~= 0).' ...
+    + transmitDelays(columnElements) .* single(transmitApodization(columnElements) ~= 0);
+transmitDelaysGrid = transmitDelaysGrid.';
+
+receiveLineApodization = receiveApodization(columnElements);
+receiveSubelementApodization = biasApodization.' .* repmat(receiveLineApodization, rowCount, 1).';
+
+transmitLineCount = columnCount;
+transmitLines = 1:transmitLineCount;
+
+receiveLineCount = columnCount;
+receiveLines = 1:receiveLineCount;
+
+fieldII.xdc_apodization(tTh, 0, ones(1, transmitLineCount));
+fieldII.ele_apodization(tTh, transmitLines.', double(transmitSubelementApodization));
+fieldII.ele_delay(tTh, transmitLines.', double(transmitDelaysGrid));
+
+fieldII.xdc_apodization(rTh, 0, ones(1, receiveLineCount));
+fieldII.ele_apodization(rTh, receiveLines.', double(receiveSubelementApodization));
 end

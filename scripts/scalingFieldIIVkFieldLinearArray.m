@@ -2,7 +2,9 @@
 scriptDirectory = fileparts(mfilename('fullpath'));
 repositoryDirectory = fileparts(scriptDirectory);
 addpath(repositoryDirectory);
+addpath(scriptDirectory);
 addpath(fullfile(repositoryDirectory, 'matlab'));
+addpath(fullfile(repositoryDirectory, 'scripts', 'color'));
 
 fs = 100e6;
 c = 1540;
@@ -144,7 +146,8 @@ end
 
 if plotting
     plotTimes = plotData.times * 1e6;
-    figure('Name', sprintf('Linear array comparison, %d scatterers', plotScatterCount));
+    comparisonFigure = figure('Name', sprintf('Linear array comparison, %d scatterers', plotScatterCount));
+    colormap(comparisonFigure, colorcet('L16', 'N', 256));
     tiledlayout(1, 3);
     nexttile;
     imagesc(1:columnCount, plotTimes, plotData.field);
@@ -186,6 +189,7 @@ if plotting
                 break;
             end
             nexttile(traceLayout);
+            colororder(colorcet('L16', 'N', 3));
             plot(plotTimes, plotData.field(:, channelIndex), '-', ...
                 plotTimes, plotData.cpu(:, channelIndex), '--', ...
                 plotTimes, plotData.gpu(:, channelIndex), ':');
@@ -208,42 +212,8 @@ if plotting
 end
 
 function metrics = compareSignals(actual, reference)
-difference = actual - reference;
+metrics = signal_metrics(actual, reference);
 metrics.aligned = actual;
-referenceNorm = norm(reference(:));
-actualNorm = norm(actual(:));
-referenceEnergy = mean(reference.^2, 'all');
-referencePeak = max(abs(reference), [], 'all');
-differenceEnergy = mean(difference.^2, 'all');
-actualPeak = max(abs(actual), [], 'all');
-
-maxErr = max(abs(difference), [], 'all');
-metrics.maxRelativeDifference = (maxErr / max(referencePeak, eps('double'))) * 100;
-metrics.rmsErrorPercent = (norm(difference(:)) / max(referenceNorm, eps('double'))) * 100;
-
-if referenceEnergy == 0
-    if differenceEnergy == 0
-        metrics.differenceEnergyRatio = 0;
-    else
-        metrics.differenceEnergyRatio = Inf;
-    end
-else
-    metrics.differenceEnergyRatio = differenceEnergy / referenceEnergy;
-end
-if referencePeak == 0
-    if actualPeak == 0
-        metrics.peakRatio = 0;
-    else
-        metrics.peakRatio = Inf;
-    end
-else
-    metrics.peakRatio = actualPeak / referencePeak;
-end
-if actualNorm == 0 || referenceNorm == 0
-    metrics.correlation = 0;
-else
-    metrics.correlation = dot(actual(:), reference(:)) / (actualNorm * referenceNorm);
-end
 end
 
 function filtered = applyResponseFilters(data, impulseResponse, excitation, dt)

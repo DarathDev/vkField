@@ -1,3 +1,5 @@
+addpath("scripts/color");
+
 plotting = true;
 %% Simulation Settings
 fs = 100e6;
@@ -14,15 +16,15 @@ dieKerf = 3e-5;
 fc = 5e6;
 cycleCount = 2;
 
-impulseResponse = GetImpulseResponse(fc, fs);
-% impulseResponse = 1;
-excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
-% excitation = 1;
+% impulseResponse = GetImpulseResponse(fc, fs);
+impulseResponse = 1;
+% excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
+excitation = 1;
 
-% scatterPosition = [0, 0, 20e-3]*1;
+scatterPosition = [0, 0, 20e-3]*1;
 % scatterPosition = [0, 5e-3, 20e-3]*1;
 % scatterPosition = [5e-3, 5e-3, 20e-3]*1;
-scatterPosition = [10e-3, 5e-3, 20e-3]*1;
+% scatterPosition = [10e-3, 5e-3, 20e-3]*1;
 
 diePositionT = [0, 0, 0]*1e-3;
 diePositionR = [0, 0, 0]*1e-3;
@@ -63,7 +65,7 @@ addpath("matlab\")
 simulator = vkField.Simulation();
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
-simulator.Cumulative = false;
+simulator.Cumulative = true;
 simulator.SimulatorType = vkField.SimulatorType.CPU;
 simulator.Impulses = {single(impulseResponse)};
 simulator.Excitations = {single(excitation)};
@@ -350,6 +352,7 @@ manTimes = vkStartTime + (0:(size(manualCumConvRf, 2)-1))/fs;
 if plotting
 
     f1 = figure(); ax1 = axes(); hold(ax1, "on");
+    colororder(ax1, colorcet('L16', 'N', 6));
     p1(1) = plot(ax1, times*1e6, fullRF, '-');
     p1(2) = plot(ax1, fraunTimes*1e6, fraun, '-');
     p1(3) = plot(ax1, manTimes*1e6, manualConvRf, '-');

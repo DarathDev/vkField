@@ -2,24 +2,31 @@
 scriptDirectory = fileparts(mfilename('fullpath'));
 repositoryDirectory = fileparts(scriptDirectory);
 addpath(repositoryDirectory);
+addpath(scriptDirectory);
 addpath(fullfile(repositoryDirectory, 'matlab'));
+addpath(fullfile(repositoryDirectory, 'scripts', 'color'));
 
 fs = 100e6;
 c = 1540;
 fc = 5e6;
 cycleCount = 2;
 dt = 1 / fs;
-impulseResponse = GetImpulseResponse(single(fc), single(fs));
-excitation = sin(2 * pi * (0:dt:cycleCount / fc) * fc);
+% impulseResponse = GetImpulseResponse(single(fc), single(fs));
+% excitation = sin(2 * pi * (0:dt:cycleCount / fc) * fc);
+impulseResponse = 1;
+excitation = 1;
 % impulseResponse = 1;
 % excitation = 1;
 rectangleSize = [2.2e-4; 2.2e-4];
-caseCount = 32;
+caseCount = 64;
 plotting = true;
 plotCorrelationThreshold = 0.99;
 originApertures = true;
 geometryTolerance = 1e-9;
 angleTolerance = 1e-6;
+
+scatterRangeMin = [-25e-3; -25e-3; 10e-3];
+scatterRangeMax = [25e-3; 25e-3; 100e-3];
 
 % Fixed seed makes every reported case reproducible.
 rng(1, 'twister');
@@ -34,10 +41,15 @@ results = repmat(struct( ...
     'transmitPosition', zeros(3, 1), ...
     'receivePosition', zeros(3, 1), ...
     'transmitEuler', zeros(3, 1), ...
-    'receiveEuler', zeros(3, 1)), 1, caseCount);
+    'receiveEuler', zeros(3, 1), ...
+    'fieldCpuRmsErrorPercent', 0, ...
+    'compareTimes', [], ...
+    'fieldAligned', [], ...
+    'cpuAligned', [], ...
+    'gpuAligned', []), 1, caseCount);
 
 for caseIndex = 1:caseCount
-    scatterPosition = random_position([-8e-3; -8e-3; 10e-3], [8e-3; 8e-3; 100e-3]);
+    scatterPosition = random_position(scatterRangeMin, scatterRangeMax);
     if originApertures
         transmitPosition = [0; 0; 0];
         receivePosition = [0; 0; 0];
@@ -109,6 +121,11 @@ for caseIndex = 1:caseCount
     results(caseIndex).transmitEuler = transmitEuler;
     results(caseIndex).receiveEuler = receiveEuler;
     results(caseIndex).cpuGpuMaxRelativeDifference = cpuGpuMetrics.maxRelativeDifference;
+    results(caseIndex).fieldCpuRmsErrorPercent = fieldCpuMetrics.rmsErrorPercent;
+    results(caseIndex).compareTimes = compareTimes;
+    results(caseIndex).fieldAligned = fieldAligned;
+    results(caseIndex).cpuAligned = cpuAligned;
+    results(caseIndex).gpuAligned = gpuAligned;
     fprintf(['  FieldII/CPU energyRatio=%.4g peakRatio=%.4g corr=%.6f maxRelDiff=%.2f%% rmsErr=%.2f%%\n'], ...
         fieldCpuMetrics.differenceEnergyRatio, fieldCpuMetrics.peakRatio, fieldCpuMetrics.correlation, ...
         fieldCpuMetrics.maxRelativeDifference, fieldCpuMetrics.rmsErrorPercent);
@@ -127,6 +144,66 @@ for caseIndex = 1:caseCount
 end
 
 fprintf('Completed %d reproducible one-rectangle cases.\n', caseCount);
+plot_scatter_errors(results, rectangleSize);
+plot_rms_error_histogram(results);
+[~, bestCaseIndex] = min([results.fieldCpuRmsErrorPercent]);
+[~, worstCaseIndex] = max([results.fieldCpuRmsErrorPercent]);
+plot_case(results(bestCaseIndex).compareTimes, results(bestCaseIndex).fieldAligned, ...
+    results(bestCaseIndex).cpuAligned, results(bestCaseIndex).gpuAligned, ...
+    results(bestCaseIndex).caseIndex, results(bestCaseIndex).scatterPosition, ...
+    results(bestCaseIndex).transmitPosition, results(bestCaseIndex).receivePosition, ...
+    results(bestCaseIndex).transmitEuler, results(bestCaseIndex).receiveEuler);
+plot_case(results(worstCaseIndex).compareTimes, results(worstCaseIndex).fieldAligned, ...
+    results(worstCaseIndex).cpuAligned, results(worstCaseIndex).gpuAligned, ...
+    results(worstCaseIndex).caseIndex, results(worstCaseIndex).scatterPosition, ...
+    results(worstCaseIndex).transmitPosition, results(worstCaseIndex).receivePosition, ...
+    results(worstCaseIndex).transmitEuler, results(worstCaseIndex).receiveEuler);
+
+function plot_scatter_errors(results, rectangleSize)
+scatterPositions = [results.scatterPosition] * 1e3;
+rmsErrors = [results.fieldCpuRmsErrorPercent];
+rectangleSize = rectangleSize * 1e3;
+
+figure('Name', 'Scatterer RMS errors');
+hold on;
+scatterHandle = scatter3(scatterPositions(1, :), scatterPositions(2, :), scatterPositions(3, :), ...
+    64, rmsErrors, 'filled');
+scatterHandle.MarkerFaceAlpha = 0.65;
+scatterHandle.MarkerEdgeColor = 'flat';
+scatterHandle.MarkerEdgeAlpha = 0.9;
+scatterHandle.LineWidth = 0.75;
+patch('Vertices', [-rectangleSize(1) / 2, -rectangleSize(2) / 2, 0; ...
+    -rectangleSize(1) / 2,  rectangleSize(2) / 2, 0; ...
+    rectangleSize(1) / 2,  rectangleSize(2) / 2, 0; ...
+    rectangleSize(1) / 2, -rectangleSize(2) / 2, 0], ...
+    'Faces', [1, 2, 3, 4], ...
+    'FaceColor', [0.35, 0.35, 0.35], ...
+    'FaceAlpha', 0.2, ...
+    'EdgeColor', [0.15, 0.15, 0.15], ...
+    'LineWidth', 1.5);
+axis equal;
+view(3);
+grid on;
+xlabel('Scatterer x (mm)');
+ylabel('Scatterer y (mm)');
+zlabel('Scatterer z (mm)');
+title('Field II/CPU RMS error by scatterer position');
+colormap(colorcet('L08', 'N', 256));
+colorbarHandle = colorbar;
+ylabel(colorbarHandle, 'RMS error (%)');
+end
+
+function plot_rms_error_histogram(results)
+rmsErrors = [results.fieldCpuRmsErrorPercent];
+histogramColorMap = colorcet('L16', 'N', 256);
+
+figure('Name', 'RMS error histogram');
+histogram(rmsErrors, 'FaceColor', histogramColorMap(round(size(histogramColorMap, 1) * 0.65), :));
+grid on;
+xlabel('Field II/CPU RMS error (%)');
+ylabel('Case count');
+title('Distribution of Field II/CPU RMS errors');
+end
 
 function [data, startTime] = run_vkfield(simulatorType, positions, normals, sizes, apodizations, delays, scatterPosition, fs, c, impulseResponse, excitation)
 simulation = vkField.Simulation();
@@ -221,28 +298,6 @@ if wasVector
 end
 end
 
-function metrics = signal_metrics(actual, reference)
-difference = actual - reference;
-referenceNorm = norm(reference(:));
-actualNorm = norm(actual(:));
-referencePeak = max(abs(reference), [], 'all');
-actualPeak = max(abs(actual), [], 'all');
-referenceEnergy = mean(reference.^2, 'all');
-differenceEnergy = mean(difference.^2, 'all');
-
-maxDiff = max(abs(difference), [], 'all');
-metrics.maxRelativeDifference = (maxDiff / max(referencePeak, eps('double'))) * 100;
-metrics.differenceEnergyRatio = differenceEnergy / max(referenceEnergy, eps('double'));
-metrics.relativeL2 = norm(difference(:)) / max(referenceNorm, eps('double'));
-metrics.rmsErrorPercent = metrics.relativeL2 * 100;
-metrics.peakRatio = actualPeak / max(referencePeak, eps('double'));
-if actualNorm == 0 || referenceNorm == 0
-    metrics.correlation = 0;
-else
-    metrics.correlation = dot(actual(:), reference(:)) / (actualNorm * referenceNorm);
-end
-end
-
 function validate_fieldii_rectangle(rectData, expectedPosition, expectedFrame, expectedSize, tolerance, angleTolerance)
 actualPosition = rectData(8:10, 1);
 actualCorners = reshape(rectData(11:22, 1), 4, 3)';
@@ -295,6 +350,7 @@ gpuData = gpuData(1:sampleCount);
 fprintf('plot case=%d peak FieldII=%e CPU=%e GPU=%e\n', caseIndex, ...
     max(abs(fieldData)), max(abs(cpuData)), max(abs(gpuData)));
 figure('Name', sprintf('One rectangle case %d', caseIndex));
+colororder(colorcet('L16', 'N', 4));
 plotHandles = plot(times * 1e6, fieldData, '-', times * 1e6, cpuData, '--', times * 1e6, gpuData, ':');
 plotHandles(1).LineWidth = 4*3.0;
 plotHandles(2).LineWidth = 4*2.0;

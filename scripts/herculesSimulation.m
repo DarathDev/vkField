@@ -1,12 +1,14 @@
 scriptDirectory = fileparts(mfilename("fullpath"));
 repoDirectory = fileparts(scriptDirectory);
 addpath(repoDirectory);
+addpath(scriptDirectory);
 addpath(fullfile(repoDirectory, "matlab"));
 addpath(fullfile(repoDirectory, "extern", "ornot", "matlab"));
 ornot.LoadLibraries();
 
 plotting = true;
-useMatrixArray = false;
+plotVolume = true;
+plotGeometry = false;
 
 fs = single(100e6);
 c = single(1540);
@@ -18,7 +20,7 @@ columnCount = 32;
 elementWidth = single([2.2e-4, 2.2e-4]);
 elementKerf = single([3e-5, 3e-5]);
 
-[scatterX, scatterZ] = meshgrid(linspace(-8e-3, 8e-3, 8), linspace(20e-3, 100e-3, 20));
+[scatterX, scatterZ] = meshgrid(0, linspace(20e-3, 100e-3, 20));
 scatterCount = numel(scatterX);
 scatterPosition = [
     scatterX(:).';
@@ -45,6 +47,7 @@ herculesParameters.transmit_focus = transmitFocus;
 
 [biasPattern, transmitApodization, transmitDelays, receiveApodization, bp] ...
     = tobe.createHerculesSequence(array, herculesParameters, c);
+bp.transducer_element_pitch = array.Pitch([2, 1]);
 emissionParameters = ZBP.EmissionSineParameters();
 emissionParameters.cycles = cycleCount;
 emissionParameters.frequency = fc;
@@ -60,31 +63,9 @@ fieldII.field_init(-1);
 fieldII.set_field('c', double(c));
 fieldII.set_field('fs', double(fs));
 
-tTh = fieldII.xdc_2d_array(columnCount, rowCount, double(elementWidth(2)), ...
-    double(elementWidth(1)), double(elementKerf(2)), double(elementKerf(1)), ...
-    ones(columnCount, rowCount)', 1, 1, [0, 0, 1e10]);
-
+tTh = createFieldIILinearArray(array, receiveOrientation);
 receiveLineCount = double(array.ElementCount(int32(receiveOrientation)));
-if useMatrixArray
-    rTh = fieldII.xdc_2d_array(columnCount, rowCount, double(elementWidth(2)), ...
-        double(elementWidth(1)), double(elementKerf(2)), double(elementKerf(1)), ...
-        ones(columnCount, rowCount)', 1, 1, [0, 0, 1e10]);
-else
-    receiveLineLength = double(array.ElementCount(int32(transmitOrientation)));
-    if receiveOrientation == ZBP.RCAOrientation.Columns
-        receiveElementWidth = double(elementWidth(2));
-        receiveElementHeight = double(receiveLineLength * elementWidth(1) ...
-            + (receiveLineLength - 1) * elementKerf(1));
-        receiveKerf = double(elementKerf(2));
-    else
-        receiveElementWidth = double(elementWidth(1));
-        receiveElementHeight = double(receiveLineLength * elementWidth(2) ...
-            + (receiveLineLength - 1) * elementKerf(2));
-        receiveKerf = double(elementKerf(1));
-    end
-    rTh = fieldII.xdc_linear_array(receiveLineCount, receiveElementWidth, ...
-        receiveElementHeight, receiveKerf, 1, receiveLineLength, [0, 0, 1e10]);
-end
+rTh = createFieldIILinearArray(array, receiveOrientation);
 fieldII.xdc_impulse(tTh, double(impulseResponse));
 fieldII.xdc_impulse(rTh, double(impulseResponse));
 fieldII.xdc_excitation(tTh, double(excitation));
@@ -93,24 +74,12 @@ fieldIIStartTime = zeros(transmitCount, 1);
 fieldIIEndTime = zeros(transmitCount, 1);
 fieldIITimer = tic();
 for eventIndex = 1:transmitCount
-    if useMatrixArray
-        [isActive, fieldIIScatterPosition] = updateFieldIIMatrixArray(tTh, rTh, array, biasPattern(eventIndex, :), ...
-            transmitApodization(eventIndex, :), transmitDelays(eventIndex, :), ...
-            receiveApodization(eventIndex, :), scatterPosition);
-    else
-        [isActive, fieldIIScatterPosition] = updateFieldIILinearArray(tTh, rTh, array, biasPattern(eventIndex, :), ...
-            transmitApodization(eventIndex, :), transmitDelays(eventIndex, :), ...
-            receiveApodization(eventIndex, :), receiveOrientation, scatterPosition);
-    end
+    [isActive, fieldIIScatterPosition] = updateFieldIILinearArray(tTh, rTh, array, biasPattern(eventIndex, :), ...
+        transmitApodization(eventIndex, :), transmitDelays(eventIndex, :), ...
+        receiveApodization(eventIndex, :), receiveOrientation, scatterPosition);
     if isActive
         [fieldIIRf{eventIndex}, fieldIIStartTime(eventIndex)] = ...
             fieldII.calc_scat_multi(tTh, rTh, fieldIIScatterPosition', double(scatterAmplitude));
-        if useMatrixArray
-            fieldIIRf{eventIndex} = sum(reshape(fieldIIRf{eventIndex}, ...
-                size(fieldIIRf{eventIndex}, 1), rowCount, columnCount), 2);
-            fieldIIRf{eventIndex} = reshape(fieldIIRf{eventIndex}, ...
-                size(fieldIIRf{eventIndex}, 1), columnCount);
-        end
         fieldIIEndTime(eventIndex) = fieldIIStartTime(eventIndex) ...
             + size(fieldIIRf{eventIndex}, 1) / double(fs);
     end
@@ -131,23 +100,23 @@ fieldIITime = toc(fieldIITimer);
 
 %% vkField Simulation
 simulator = vkField.Simulation();
-simulator.Cumulative = true;
+simulator.Cumulative = false;
 simulator.SimulatorType = vkField.SimulatorType.CPU;
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 simulator.Impulses = {single(impulseResponse)};
 simulator.Excitations = {single(excitation)};
-tData = fieldII.xdc_get(tTh, 'rect');
+fieldIITransmitElements = fieldIIArrayToVkFieldArray(tTh);
+fieldIIReceiveElements = fieldIIArrayToVkFieldArray(rTh);
 [sequenceElements, sequenceTransmissions, sequenceReceiveChannels] = ...
     sequenceToElementSets(array, biasPattern, transmitApodization, transmitDelays, receiveApodization);
-simulator.Elements = vkField.RectangularElementSet();
-transmitElementCount = size(tData, 2);
-simulator.Elements.Count = uint32(transmitElementCount + sequenceElements.Count);
-simulator.Elements.Positions = single([tData(8:10, :), sequenceElements.Positions]);
-simulator.Elements.Normals = single([tangentsToNormals(tData(8:10, :)), sequenceElements.Normals]);
-simulator.Elements.Sizes = single([tData(3:4, :), sequenceElements.Sizes]);
-simulator.Elements.Apodizations = single([tData(5, :), sequenceElements.Apodizations]);
-simulator.Elements.Delays = single([tData(23, :), sequenceElements.Delays]);
+simulator.Elements = sequenceElements;
+if plotting && plotGeometry
+    plot_element_geometry(fieldIITransmitElements, fieldIIReceiveElements, ...
+        sequenceElements.Positions, sequenceElements.Sizes, ...
+        sequenceElements.Positions, sequenceElements.Sizes, ...
+        'HERCULES physical elements');
+end
 simulator.Scatters = vkField.ScatterSet();
 simulator.Scatters.Count = uint32(scatterCount);
 simulator.Scatters.Positions = single(scatterPosition);
@@ -160,7 +129,6 @@ vkEndTime = zeros(transmitCount, 1);
 for eventIndex = 1:transmitCount
     simulator.Transmissions = sequenceTransmissions(eventIndex);
     receive = sequenceReceiveChannels(eventIndex);
-    receive.Indices = receive.Indices + int32(transmitElementCount);
     simulator.ReceiveChannels = receive;
     vkPulseEcho{eventIndex} = vkField_mex(simulator);
     vkStartTime(eventIndex) = simulator.StartTime;
@@ -183,8 +151,19 @@ fprintf("Simulation speed-up == %.3fx\n", fieldIITime / vkTime);
 
 fieldIIData = stackEventData(fieldIIRf);
 vkData = stackEventData(vkPulseEcho);
+responseSampleCount = min(size(fieldIIData, 1), size(vkData, 1));
+responseChannelCount = min(size(fieldIIData, 2), size(vkData, 2));
+responseMetrics = signal_metrics( ...
+    vkData(1:responseSampleCount, 1:responseChannelCount), ...
+    fieldIIData(1:responseSampleCount, 1:responseChannelCount));
+fprintf("Field II/vkField response correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
+    responseMetrics.correlation, responseMetrics.rmsErrorPercent, responseMetrics.peakRatio);
 
 fieldIIBp = bp;
+fieldIIBp.transducer_element_pitch = [
+    array.Pitch(2), ...
+    array.GetSize(ZBP.RCAOrientation.Rows) / single(array.ElementCount(1))
+    ];
 fieldIIBp.raw_data_dimension = uint32([size(fieldIIData, 1), receiveLineCount, 1, 1]);
 fieldIIBp.raw_data_kind = ZBP.DataKind.Float32;
 fieldIIBp.raw_data_compression_kind = ZBP.DataCompressionKind.None;
@@ -214,9 +193,11 @@ vkBp.data = single(vkData * (1 / double(fs)) * 1e30);
 
 beamformSettings = ornot.BeamformSettings();
 xRange = [-8, 8] * 1e-3;
+yRange = [-8, 8] * 1e-3;
 zRange = [15, 105] * 1e-3;
-resolution = [512, 1024];
-beamformSettings.regions = ornot.Region.CreateXZPlane(resolution, xRange, zRange);
+volumeResolution = uint16([128, 128, 512]);
+beamformSettings.regions = ornot.Region.CreateAxisAlignedVolume(volumeResolution, ...
+    single(xRange), single(yRange), single(zRange));
 beamformSettings.interpolation_mode = OGLBeamformerInterpolationMode.Cubic;
 beamformSettings.receive_fnumber = 0;
 beamformSettings.coherency_weighting = false;
@@ -238,24 +219,80 @@ fprintf("Field II beamform time == %.6f s\n", fieldIIBeamformTime);
 fprintf("vkField beamform time == %.6f s\n", vkBeamformTime);
 
 if plotting
-    imageX = linspace(xRange(1), xRange(2), size(fieldIIImage{1}, 1));
-    imageZ = linspace(zRange(1), zRange(2), size(fieldIIImage{1}, 2));
+    if plotVolume
+        volumeViewer(abs(vkImage{1}));
+    end
+
+    planeResolution = uint16([128, 512]);
+    xzSettings = ornot.BeamformSettings();
+    xzSettings.regions = ornot.Region.CreateXZPlane(planeResolution, ...
+        single(xRange), single(zRange));
+    xzSettings.interpolation_mode = beamformSettings.interpolation_mode;
+    xzSettings.receive_fnumber = beamformSettings.receive_fnumber;
+    xzSettings.coherency_weighting = beamformSettings.coherency_weighting;
+    xzSettings.decimation_rate = beamformSettings.decimation_rate;
+    xzSettings.compute_stages = beamformSettings.compute_stages;
+
+    yzSettings = ornot.BeamformSettings();
+    yzSettings.regions = ornot.Region.CreateYZPlane(planeResolution, ...
+        single(yRange), single(zRange));
+    yzSettings.interpolation_mode = beamformSettings.interpolation_mode;
+    yzSettings.receive_fnumber = beamformSettings.receive_fnumber;
+    yzSettings.coherency_weighting = beamformSettings.coherency_weighting;
+    yzSettings.decimation_rate = beamformSettings.decimation_rate;
+    yzSettings.compute_stages = beamformSettings.compute_stages;
+
+    fieldIIImageXZ = ornot.beamform(fieldIIBp, xzSettings);
+    vkImageXZ = ornot.beamform(vkBp, xzSettings);
+    fieldIIImageYZ = ornot.beamform(fieldIIBp, yzSettings);
+    vkImageYZ = ornot.beamform(vkBp, yzSettings);
+
+    imageX = linspace(xRange(1), xRange(2), size(fieldIIImageXZ{1}, 1));
+    imageY = linspace(yRange(1), yRange(2), size(fieldIIImageYZ{1}, 1));
+    imageZ = linspace(zRange(1), zRange(2), size(fieldIIImageXZ{1}, 2));
+    fieldIIImageXZDb = 20 * log10(abs(fieldIIImageXZ{1}) / max(abs(fieldIIImageXZ{1}), [], 'all'));
+    vkImageXZDb = 20 * log10(abs(vkImageXZ{1}) / max(abs(vkImageXZ{1}), [], 'all'));
+    fieldIIImageYZDb = 20 * log10(abs(fieldIIImageYZ{1}) / max(abs(fieldIIImageYZ{1}), [], 'all'));
+    vkImageYZDb = 20 * log10(abs(vkImageYZ{1}) / max(abs(vkImageYZ{1}), [], 'all'));
+    xzMetrics = signal_metrics(vkImageXZ{1}, fieldIIImageXZ{1});
+    yzMetrics = signal_metrics(vkImageYZ{1}, fieldIIImageYZ{1});
+    fprintf("HERCULES XZ image correlation == %.6f; YZ image correlation == %.6f\n", ...
+        xzMetrics.correlation, yzMetrics.correlation);
+
     figure();
     colormap(gray);
-    tiledlayout(1, 2, 'TileSpacing', 'none', 'Padding', 'none');
+    tiledlayout(1, 4, 'TileSpacing', 'none', 'Padding', 'none');
     nexttile();
-    imagesc(imageX * 1e3, imageZ * 1e3, abs(fieldIIImage{1})');
+    imagesc(imageX * 1e3, imageZ * 1e3, fieldIIImageXZDb');
     axis image;
-    title("Field II HERCULES");
-    xlabel("x (mm)");
+    clim([-40, 0]);
+    title("Field II HERCULES XZ");
+    xlabel("x (mm), dB");
     ylabel("z (mm)");
-    colorbar('westoutside');
+    colorbar;
     nexttile();
-    imagesc(imageX * 1e3, imageZ * 1e3, abs(vkImage{1})');
+    imagesc(imageX * 1e3, imageZ * 1e3, vkImageXZDb');
     axis image;
-    title("vkField HERCULES");
-    xlabel("x (mm)");
-    set(gca, 'YColor', 'none');
+    clim([-40, 0]);
+    title("vkField HERCULES XZ");
+    xlabel("x (mm), dB");
+    ylabel("z (mm)");
+    colorbar;
+    nexttile();
+    imagesc(imageY * 1e3, imageZ * 1e3, fieldIIImageYZDb');
+    axis image;
+    clim([-40, 0]);
+    title("Field II HERCULES YZ");
+    xlabel("y (mm), dB");
+    ylabel("z (mm)");
+    colorbar;
+    nexttile();
+    imagesc(imageY * 1e3, imageZ * 1e3, vkImageYZDb');
+    axis image;
+    clim([-40, 0]);
+    title("vkField HERCULES YZ");
+    xlabel("y (mm), dB");
+    ylabel("z (mm)");
     colorbar;
 end
 
@@ -284,9 +321,5 @@ for eventIndex = 1:numel(data)
 end
 end
 
-function normals = tangentsToNormals(tangents)
-normals = [tangents(2, :)./sqrt(1 + tangents(2, :).^2);
-    tangents(1, :)./sqrt(1 + tangents(1, :).^2);
-    sqrt(1 - (tangents(1, :).^2).*(tangents(2, :).^2))./sqrt(1 + tangents(1, :).^2)./sqrt(1 + tangents(2, :).^2)];
-end
+
 

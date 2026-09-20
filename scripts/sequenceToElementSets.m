@@ -26,17 +26,17 @@ assert(isequal(size(receiveApodizations), size(biasPattern)), ...
 	"receiveApodizations must have the same size as biasPattern.");
 
 elementWidth = array.GetWidth();
-[columnGrid, rowGrid] = array.GetElementPositionMatrix();
+[xGrid, yGrid] = array.GetElementPositionMatrix();
 
 elements = vkField.RectangularElementSet();
 elements.Count = uint32(elementCount);
 elements.Positions = single([
-	reshape(columnGrid.', 1, []);
-	reshape(rowGrid.', 1, []);
+	reshape(xGrid, 1, []);
+	reshape(yGrid, 1, []);
 	zeros(1, elementCount)
 	]);
 elements.Normals = repmat(single([0; 0; 1]), 1, elementCount);
-elements.Sizes = repmat(single(elementWidth(:)), 1, elementCount);
+elements.Sizes = repmat(single(elementWidth([2, 1]).'), 1, elementCount);
 elements.Apodizations = ones(1, elementCount, 'single');
 elements.Delays = zeros(1, elementCount, 'single');
 
@@ -46,7 +46,9 @@ receiveChannels = createArray(1, eventCount, "vkField.ReceiveChannelSet");
 lineIndices = reshape(1:elementCount, columnCount, rowCount).';
 for eventIndex = 1:eventCount
 	biasApodization = biasPattern(eventIndex, rowElements).'-biasPattern(eventIndex, columnElements);
-	biasApodization = biasApodization * (transmitApodization(eventIndex, rowElements)' + transmitApodization(eventIndex, columnElements));
+	transmitApodizationGrid = transmitApodization(eventIndex, rowElements)' ...
+		+ transmitApodization(eventIndex, columnElements);
+	transmissionApodization = biasApodization .* transmitApodizationGrid;
 
 	transmissionDelay = (transmitDelays(eventIndex, rowElements) .* single(transmitApodization(eventIndex, rowElements) ~= 0))' ...
 		+ (transmitDelays(eventIndex, columnElements) .* single(transmitApodization(eventIndex, columnElements) ~= 0));
@@ -54,7 +56,7 @@ for eventIndex = 1:eventCount
 	transmissions(eventIndex).Count = uint32(1);
 	transmissions(eventIndex).ElementCounts = uint32(elementCount);
 	transmissions(eventIndex).Indices = int32(1:elementCount);
-	transmissions(eventIndex).Apodizations = reshape(biasApodization.', 1, []);
+	transmissions(eventIndex).Apodizations = reshape(transmissionApodization.', 1, []);
 	transmissions(eventIndex).Delays = reshape(transmissionDelay.', 1, []);
 	transmissions(eventIndex).Impulse = uint16(1);
 	transmissions(eventIndex).Excitation = uint16(1);
@@ -75,7 +77,8 @@ for eventIndex = 1:eventCount
 		for rowIndex = rowElements
 			receiveChannels(eventIndex).ElementCounts(channelIndex) = uint32(columnCount);
 			receiveChannels(eventIndex).Indices(elementOffset + (1:columnCount)) = int32(lineIndices(rowIndex, :));
-			receiveChannels(eventIndex).Apodizations(elementOffset + (1:columnCount)) = receiveApodizations(eventIndex, rowIndex);
+			receiveChannels(eventIndex).Apodizations(elementOffset + (1:columnCount)) = ...
+				biasApodization(rowIndex, :) * receiveApodizations(eventIndex, rowIndex);
 			elementOffset = elementOffset + columnCount;
 			channelIndex = channelIndex + 1;
 		end
@@ -84,7 +87,8 @@ for eventIndex = 1:eventCount
 		for columnIndex = 1:columnCount
 			receiveChannels(eventIndex).ElementCounts(channelIndex) = uint32(rowCount);
 			receiveChannels(eventIndex).Indices(elementOffset + (rowElements)) = int32(lineIndices(:, columnIndex));
-			receiveChannels(eventIndex).Apodizations(elementOffset + (rowElements)) = receiveApodizations(eventIndex, rowCount + columnIndex);
+			receiveChannels(eventIndex).Apodizations(elementOffset + (rowElements)) = ...
+				biasApodization(:, columnIndex).' * receiveApodizations(eventIndex, rowCount + columnIndex);
 			elementOffset = elementOffset + rowCount;
 			channelIndex = channelIndex + 1;
 		end
