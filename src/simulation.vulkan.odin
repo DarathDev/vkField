@@ -25,7 +25,7 @@ assert :: ekhos_util.assert
 assume :: ekhos_util.assume
 
 MAX_FRAMES_IN_FLIGHT :: 2
-SCATTER_UPLOAD_WINDOW_SIZE :: int(#config(SCATTER_UPLOAD_WINDOW_KB, 16 * 1024)) * runtime.Kilobyte
+SCATTER_UPLOAD_WINDOW_SIZE :: 16 * runtime.Megabyte
 SCATTER_BATCHES_PER_COMMAND_BUFFER :: 2
 GPU_CALC_ELEMENT_CHUNK_SIZE :: 256
 GPU_ELEMENT_SET_CHUNK_SIZE :: 1024
@@ -164,6 +164,7 @@ vkTemporalSpecConstants :: struct {
 
 vkCalcAperPushData :: struct {
 	elementPositions:      vk.DeviceAddress,
+	scatterers:            vk.DeviceAddress,
 	apertureResponseRects: vk.DeviceAddress,
 	elementOffset:         u32,
 	scattererOffset:       u32,
@@ -450,11 +451,8 @@ plan_vulkan_simulator :: proc(
 	}
 
 	vkDataBuffer := check(prepare_stream(device, auto_cast dataBufferHeader.totalSize, sharedQueueFamilyIndices)) or_return
-	scatterBufferSize := max(size_of(Scatter), min(int(SCATTER_UPLOAD_WINDOW_SIZE), max(1, len(scatters) * size_of(Scatter))))
-	scatterUploadCapacity := max(1, scatterBufferSize / size_of(Scatter))
-	// Keep one upload buffer per in-flight command slot. A single large scatter
-	// buffer can otherwise be overwritten while earlier copies still execute.
-	scatterBufferCount := min(MAX_FRAMES_IN_FLIGHT, max(2, (len(scatters) + scatterUploadCapacity - 1) / scatterUploadCapacity))
+	scatterBufferSize := max(size_of(Scatter), len(scatters) * size_of(Scatter))
+	scatterBufferCount := 1
 	scatterBuffers: [dynamic; MAX_FRAMES_IN_FLIGHT]ekhos_vk.Buffer
 	for _ in 0 ..< scatterBufferCount {
 		scatterBuffer := check(prepare_scatter_buffer(device, auto_cast scatterBufferSize)) or_return
@@ -664,7 +662,6 @@ simulate_vulkan :: proc(
 	)
 
 	commandBuffer, timelineWait, hasTransferQueue := prepare_vk_simulation(simulator, resources, initialDataBuffer, initialTemporalBuffer) or_return
-	transferQueue, _ := simulator.transferQueue.?
 	stageStopwatch: time.Stopwatch
 	when GPU_STAGE_TIMING {
 		time.stopwatch_start(&stageStopwatch)
@@ -675,9 +672,7 @@ simulate_vulkan :: proc(
 	scatterBatchSize := simulator.info.scattererBatchSize
 	dataBufferAddress := ekhos_vk.get_buffer_address(device, resources.dataBuffer.main)
 	header := resources.dataBufferHeader
-	scatterUploadCapacity := int(resources.scatterBuffers[0].size / auto_cast size_of(Scatter))
-	scatterWindowBatchCount := max(1, scatterUploadCapacity / int(scatterBatchSize))
-	scatterWindowSize := scatterWindowBatchCount * int(scatterBatchSize)
+	scatterWindowSize := max(1, len(scatters))
 	totalScatterCommands := 0
 	for progressWindowOffset := 0; progressWindowOffset < len(scatters); progressWindowOffset += scatterWindowSize {
 		progressWindowEnd := min(progressWindowOffset + scatterWindowSize, len(scatters))
@@ -689,7 +684,9 @@ simulate_vulkan :: proc(
 	progressStopwatch: time.Stopwatch
 	time.stopwatch_start(&progressStopwatch)
 	lastProgressLogTime: time.Duration
-	scatterData := slice.to_bytes(scatters)
+	scatterBuffer := resources.scatterBuffers[0]
+	scatterBufferAddress := ekhos_vk.get_buffer_address(device, scatterBuffer)
+	copy(ekhos_vk.get_buffer_mapped_data(scatterBuffer)[:len(scatters) * size_of(Scatter)], slice.to_bytes(scatters))
 	for windowOffset := 0; windowOffset < len(scatters); windowOffset += scatterWindowSize {
 		windowEnd := min(windowOffset + scatterWindowSize, len(scatters))
 		windowBatchCount := (windowEnd - windowOffset + int(scatterBatchSize) - 1) / int(scatterBatchSize)
@@ -697,12 +694,6 @@ simulate_vulkan :: proc(
 		computeCommandBuffers := check(
 			ekhos_vk.get_command_buffers(device, &simulator.computeCommandPool, commandBufferCount, allocator = context.temp_allocator),
 		) or_return
-		transferCommandBuffers: []ekhos_vk.CommandBuffer
-		if hasTransferQueue {
-			transferCommandBuffers = check(
-				ekhos_vk.get_command_buffers(device, &simulator.transferCommandPool, commandBufferCount, allocator = context.temp_allocator),
-			) or_return
-		}
 		slotComputeTimelineValues: [MAX_FRAMES_IN_FLIGHT]u64
 		for computeCommandBuffer, commandBufferIndex in computeCommandBuffers {
 			commandStart := windowOffset + commandBufferIndex * SCATTER_BATCHES_PER_COMMAND_BUFFER * int(scatterBatchSize)
@@ -712,79 +703,23 @@ simulate_vulkan :: proc(
 				timelineWait.value[0] = slotComputeTimelineValues[ringIndex]
 				check(ekhos_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
 			}
-			scatterBuffer := resources.scatterBuffers[ringIndex]
-			windowData := scatterData[commandStart * size_of(Scatter):commandEnd * size_of(Scatter)]
-			copy(ekhos_vk.get_buffer_mapped_data(scatterBuffer)[:len(windowData)], windowData)
-
-			if hasTransferQueue {
-				transferCommandBuffer := transferCommandBuffers[commandBufferIndex]
-				ekhos_vk.cmd_begin(transferCommandBuffer, true) or_return
-				ekhos_vk.cmd_begin_label(transferCommandBuffer, "Scatter Upload")
-				ekhos_vk.cmd_pipeline_barrier(
-					transferCommandBuffer,
-					{},
-					{
-						{
-							buffer = scatterBuffer.buffer,
-							size = scatterBuffer.size,
-							offset = 0,
-							srcStageMask = {.HOST},
-							srcAccessMask = {.HOST_WRITE},
-							dstStageMask = {.TRANSFER},
-							dstAccessMask = {.TRANSFER_READ},
-						},
-					},
-					{},
-				)
-				for transferScatterOffset := commandStart; transferScatterOffset < commandEnd; transferScatterOffset += auto_cast scatterBatchSize {
-					transferScatterBatchEnd := min(transferScatterOffset + auto_cast scatterBatchSize, commandEnd)
-					transferScatterUploadSize: vk.DeviceSize = auto_cast ((transferScatterBatchEnd - transferScatterOffset) * size_of(Scatter))
-					ekhos_vk.cmd_copy_buffer(
-						transferCommandBuffer,
-						scatterBuffer,
-						resources.dataBuffer.main,
-						{
-							{
-								sType = .BUFFER_COPY_2,
-								srcOffset = auto_cast ((transferScatterOffset - commandStart) * size_of(Scatter)),
-								dstOffset = auto_cast header.scatterers,
-								size = transferScatterUploadSize,
-							},
-						},
-					)
-				}
-				ekhos_vk.cmd_end_label(transferCommandBuffer)
-				ekhos_vk.cmd_end(transferCommandBuffer) or_return
-				simulator.transferTimelineValue += 1
-				ekhos_vk.queue_submit(
-					transferQueue,
-					{transferCommandBuffer},
-					{},
-					{{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.TRANSFER}}},
-				) or_return
-			}
-
 			commandBuffer = computeCommandBuffer
 			ekhos_vk.cmd_begin(commandBuffer, true) or_return
 			ekhos_vk.cmd_begin_label(commandBuffer, "Scatter Batch")
-			if !hasTransferQueue {
-				ekhos_vk.cmd_pipeline_barrier(
-					commandBuffer,
-					{},
-					{
-						{
-							buffer = scatterBuffer.buffer,
-							size = scatterBuffer.size,
-							offset = 0,
-							srcStageMask = {.HOST},
-							srcAccessMask = {.HOST_WRITE},
-							dstStageMask = {.TRANSFER},
-							dstAccessMask = {.TRANSFER_READ},
-						},
-					},
-					{},
-				)
-			}
+			ekhos_vk.cmd_pipeline_barrier(
+				commandBuffer,
+				{},
+				{{
+					buffer = scatterBuffer.buffer,
+					size = scatterBuffer.size,
+					offset = 0,
+					srcStageMask = {.HOST},
+					srcAccessMask = {.HOST_WRITE},
+					dstStageMask = {.COMPUTE_SHADER},
+					dstAccessMask = {.SHADER_READ},
+				}},
+				{},
+			)
 			if hasTransferQueue {
 				ekhos_vk.cmd_pipeline_barrier(
 					commandBuffer,
@@ -805,58 +740,6 @@ simulate_vulkan :: proc(
 			}
 
 			for scatterOffset := commandStart; scatterOffset < commandEnd; scatterOffset += auto_cast scatterBatchSize {
-				if scatterOffset > windowOffset && !hasTransferQueue {
-					ekhos_vk.cmd_pipeline_barrier(
-						commandBuffer,
-						{},
-						{
-							{
-								buffer = resources.dataBuffer.main.buffer,
-								size = resources.dataBuffer.main.size,
-								offset = 0,
-								srcStageMask = {.COMPUTE_SHADER},
-								srcAccessMask = {.SHADER_READ, .SHADER_WRITE},
-								dstStageMask = {.TRANSFER},
-								dstAccessMask = {.TRANSFER_WRITE},
-							},
-						},
-						{},
-					)
-				}
-				if !hasTransferQueue {
-					scatterBatchEnd := min(scatterOffset + auto_cast scatterBatchSize, len(scatters))
-					scatterUploadSize: vk.DeviceSize = auto_cast ((scatterBatchEnd - scatterOffset) * size_of(Scatter))
-					ekhos_vk.cmd_copy_buffer(
-						commandBuffer,
-						scatterBuffer,
-						resources.dataBuffer.main,
-						{
-							{
-								sType = .BUFFER_COPY_2,
-								srcOffset = auto_cast ((scatterOffset - commandStart) * size_of(Scatter)),
-								dstOffset = auto_cast header.scatterers,
-								size = scatterUploadSize,
-							},
-						},
-					)
-					ekhos_vk.cmd_pipeline_barrier(
-						commandBuffer,
-						{},
-						{
-							{
-								buffer = resources.dataBuffer.main.buffer,
-								size = resources.dataBuffer.main.size,
-								offset = 0,
-								srcStageMask = {.TRANSFER},
-								srcAccessMask = {.TRANSFER_WRITE},
-								dstStageMask = {.COMPUTE_SHADER},
-								dstAccessMask = {.SHADER_READ, .SHADER_WRITE},
-							},
-						},
-						{},
-					)
-				}
-
 				ekhos_vk.cmd_begin_label(commandBuffer, "Calculate Aperture")
 				dispatch_vk_calculate_aperture(
 					commandBuffer,
@@ -868,6 +751,7 @@ simulate_vulkan :: proc(
 					elements,
 					scatterBatchSize,
 					scatterOffset,
+					scatterBufferAddress,
 				) or_return
 				ekhos_vk.cmd_end_label(commandBuffer)
 				ekhos_vk.cmd_pipeline_barrier(
@@ -1306,6 +1190,7 @@ dispatch_vk_calculate_aperture :: proc(
 	elements: #soa[]RectangularElement,
 	scatterBatchSize: u32,
 	scatterOffset: int,
+	scatterBufferAddress: vk.DeviceAddress,
 ) -> (
 	result: vk.Result,
 ) {
@@ -1320,6 +1205,7 @@ dispatch_vk_calculate_aperture :: proc(
 			shaderStage,
 			vkCalcAperPushData {
 				elementPositions = dataBufferAddress + auto_cast header.elementPositions,
+				scatterers = scatterBufferAddress,
 				apertureResponseRects = dataBufferAddress + auto_cast header.apertureResponseRects,
 				elementOffset = auto_cast elementOffset,
 				scattererOffset = auto_cast scatterOffset,
@@ -1675,7 +1561,7 @@ prepare_temporal_output_buffer :: proc(device: ekhos_vk.Device, size: vk.DeviceS
 }
 
 prepare_scatter_buffer :: proc(device: ekhos_vk.Device, size: vk.DeviceSize) -> (buffer: ekhos_vk.Buffer, result: vk.Result) {
-	buffer = ekhos_vk.create_buffer(device, size, {.TRANSFER_SRC}) or_return
+	buffer = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
 	memoryType, memoryTypeOk := ekhos_vk.find_staging_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer))
 	if !memoryTypeOk {
 		ekhos_vk.destroy_buffer(device, buffer)

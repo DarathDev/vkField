@@ -9,6 +9,7 @@ const uint ScattererWorkgroupSize = 1;
 
 struct CalcAperPushData {
   float3 *elementPositions;
+  Scatterer *scatterers;
   float4 *apertureResponseRects;
   uint elementOffset;
   uint scattererOffset;
@@ -17,7 +18,6 @@ struct CalcAperPushData {
   float2 *getElementSizes() { return (float2 *)((uint64_t)getElementNormals() + (uint64_t)ElementCount * sizeof(float3)); }
   float *getElementApodizations() { return (float *)((uint64_t)getElementSizes() + (uint64_t)ElementCount * sizeof(float2)); }
   float *getElementDelays() { return (float *)((uint64_t)getElementApodizations() + (uint64_t)ElementCount * sizeof(float)); }
-  Scatterer *getScatterers() { return (Scatterer *)((uint64_t)getElementDelays() + (uint64_t)ElementCount * sizeof(float)); }
   float *getApertureResponseScales() {
     return (float *)((uint64_t)apertureResponseRects + (uint64_t)(ElementCount * ScattererBatchCount) * sizeof(float4));
   }
@@ -45,7 +45,7 @@ void main(uint2 GlobalInvocationID: SV_DispatchThreadID, uint threadID: SV_Group
   element.delay = pushData.getElementDelays()[elementInputIndex];
 
   uint scattererInputIndex = scattererIndex;
-  Scatterer scatterer = pushData.getScatterers()[scattererInputIndex];
+  Scatterer scatterer = pushData.scatterers[scattererInputIndex + pushData.scattererOffset];
 
   float dt = 1.f / SamplingFrequency;
 
