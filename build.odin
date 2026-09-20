@@ -232,13 +232,14 @@ PFFFT_SOURCE :: PFFFT_DIRECTORY + "pffft.c"
 
 build_pffft :: proc() -> (ok := true) {
 	build_log(os.stdout, .Info, "Building PFFFT")
+	clone_required_submodules() or_return
 	compilerPath, compilerKind := detect_cpp_compiler() or_return
 	tmpDirectory := TMP_DIRECTORY + "pffft/"
 	compileParameters: CppCompileParameters = {
 		compilerPath      = compilerPath,
 		outputType        = .ObjectFiles,
 		sourcePaths       = {PFFFT_SOURCE},
-		outputPath        = tmpDirectory,
+		outputPath        = assume(os.join_path({tmpDirectory, "pffft.o"}, context.temp_allocator)),
 		optimizationLevel = .Debug,
 		fastMath          = false,
 		debug             = EKHOS_BUILD_MODE == "debug",

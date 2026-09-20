@@ -6,6 +6,10 @@ when ODIN_OS == .Windows {
 
 SLANG_LIBRARIES: []string = {"slang", "slang-compiler", "slang-rt", "gfx"}
 
+EKHOS_REQUIRED_SUBMODULES: []string = {
+	"extern/pffft",
+}
+
 SHADER_FOLDER :: "src/shaders/"
 
 EKHOS_PULSE_ECHO_SHADERS: []SlangShaderFile = {

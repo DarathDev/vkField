@@ -70,7 +70,22 @@ unzip_to_folder :: proc(zip_path, dest_folder: string) -> (ok := true) {
 
 /* ----- GH ----- */
 
+GIT_CMD := "git"
 GH_CMD := "gh"
+
+clone_submodule :: proc(path: string) -> (ok := true) {
+	assert(check_cmd(GIT_CMD), fmt.aprintf("Git Command \"%v\" not found", GIT_CMD))
+	cloneCmd := []string{GIT_CMD, "submodule", "update", "--init", "--", path}
+	exit_code := confirm(run_cmd(cloneCmd)) or_return
+	return exit_code == 0
+}
+
+clone_required_submodules :: proc() -> (ok := true) {
+	for submodule in EKHOS_REQUIRED_SUBMODULES {
+		clone_submodule(submodule) or_return
+	}
+	return
+}
 
 download_release_from_github :: proc(repo, filename: string) -> (ok := true) {
 	gh_args: []CliOptions = {
