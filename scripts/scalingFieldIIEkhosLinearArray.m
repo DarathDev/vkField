@@ -1,4 +1,4 @@
-%% Compare vkField GPU output against Field II ground truth
+%% Compare Ekhos GPU output against Field II ground truth
 scriptDirectory = fileparts(mfilename('fullpath'));
 repositoryDirectory = fileparts(scriptDirectory);
 addpath(repositoryDirectory);
@@ -53,7 +53,7 @@ elementSizes = repmat(single([dieWidth; dieWidth]), 1, elementCount);
 elementApodizations = ones(1, elementCount, 'single');
 elementDelays = zeros(1, elementCount, 'single');
 
-transmit = vkField.TransmissionSet();
+transmit = ekhos.TransmissionSet();
 transmit.Count = uint32(1);
 transmit.ElementCounts = uint32(columnCount);
 transmit.Indices = int32(1:columnCount);
@@ -62,7 +62,7 @@ transmit.Delays = zeros(1, columnCount, 'single');
 transmit.Impulse = ones(1, transmit.Count, 'uint16');
 transmit.Excitation = ones(1, transmit.Count, 'uint16');
 
-receiveChannels = vkField.ReceiveChannelSet();
+receiveChannels = ekhos.ReceiveChannelSet();
 receiveChannels.Count = uint32(columnCount);
 receiveChannels.ElementCounts = repmat(uint32(1), 1, columnCount);
 receiveChannels.Indices = int32(columnCount + (1:columnCount));
@@ -83,15 +83,15 @@ for resultIndex = 1:numel(scatterCounts)
     fieldTimes = fieldStartTime + (0:size(fieldData, 1)-1) / fs;
     fieldTimes = double(fieldTimes);
     results(resultIndex).scatterCount = scatterCount;
-    for simulatorType = [vkField.SimulatorType.CPU, vkField.SimulatorType.GPU]
-        simulation = vkField.Simulation();
+    for simulatorType = [ekhos.SimulatorType.CPU, ekhos.SimulatorType.GPU]
+        simulation = ekhos.Simulation();
         simulation.SimulatorType = simulatorType;
         simulation.Cumulative = true;
         simulation.SamplingFrequency = single(fs);
         simulation.SpeedOfSound = single(c);
         simulation.Impulses = {single(impulseResponse)};
         simulation.Excitations = {single(excitation)};
-        simulation.Elements = vkField.RectangularElementSet();
+        simulation.Elements = ekhos.RectangularElementSet();
         simulation.Elements.Count = uint32(elementCount);
         simulation.Elements.Positions = elementPositions;
         simulation.Elements.Normals = elementNormals;
@@ -100,12 +100,12 @@ for resultIndex = 1:numel(scatterCounts)
         simulation.Elements.Delays = elementDelays;
         simulation.Transmissions = transmit;
         simulation.ReceiveChannels = receiveChannels;
-        simulation.Scatters = vkField.ScatterSet();
+        simulation.Scatters = ekhos.ScatterSet();
         simulation.Scatters.Count = uint32(scatterCount);
         simulation.Scatters.Positions = single(scatterPositions);
         simulation.Scatters.Amplitudes = single(scatterAmplitudes);
 
-        vkData = vkField_mex(simulation);
+        vkData = ekhosMex(simulation);
         vkData = squeeze(double(vkData(:, :, 1))) * plotScale;
         vkTimes = double(simulation.StartTime) + (0:size(vkData, 1) - 1) / fs;
         [fieldAligned, vkAligned, commonTimes] = align_signal_union(vkData, vkTimes, fieldData, fieldTimes, fs);
@@ -114,7 +114,7 @@ for resultIndex = 1:numel(scatterCounts)
         metrics.sampleCount = simulation.SampleCount;
         metrics.times = commonTimes;
 
-        if simulatorType == vkField.SimulatorType.CPU
+        if simulatorType == ekhos.SimulatorType.CPU
             results(resultIndex).cpu = metrics;
         else
             results(resultIndex).gpu = metrics;
@@ -157,12 +157,12 @@ if plotting
     colorbar;
     nexttile;
     imagesc(1:columnCount, plotTimes, plotData.cpu);
-    title('vkField CPU');
+    title('Ekhos CPU');
     xlabel('Receive channel');
     colorbar;
     nexttile;
     imagesc(1:columnCount, plotTimes, plotData.gpu);
-    title('vkField GPU');
+    title('Ekhos GPU');
     xlabel('Receive channel');
     colorbar;
 
@@ -201,7 +201,7 @@ if plotting
                 set(gca, 'XTickLabel', []);
             end
             if tileIndex == 1
-                legend('Field II', 'vkField CPU', 'vkField GPU');
+                legend('Field II', 'Ekhos CPU', 'Ekhos GPU');
             end
         end
         drawnow;

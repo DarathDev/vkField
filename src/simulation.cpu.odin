@@ -1,4 +1,4 @@
-package vkfield
+package ekhos
 
 import "base:intrinsics"
 import "core:log"
@@ -8,7 +8,7 @@ import "core:simd"
 import "core:slice"
 import "core:time"
 import "import:pffft"
-import utility "vkField:utility"
+import utility "ekhos:utility"
 
 assert :: utility.assert
 

@@ -1,4 +1,4 @@
-function elements = fieldIIArrayToVkFieldArray(aperture, apodizations, delays)
+function elements = fieldIIArrayToEkhosArray(aperture, apodizations, delays)
 arguments
     aperture
     apodizations = []
@@ -33,7 +33,7 @@ for elementIndex = 1:elementCount
     normals(:, elementIndex) = single(normal / norm(normal));
 end
 
-elements = vkField.RectangularElementSet();
+elements = ekhos.RectangularElementSet();
 elements.Count = uint32(elementCount);
 elements.Positions = positions;
 elements.Normals = normals;

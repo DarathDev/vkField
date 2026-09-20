@@ -1,4 +1,4 @@
-package vkField_vulkan
+package ekhos_vulkan
 
 import "base:intrinsics"
 import "base:runtime"
@@ -10,12 +10,12 @@ import "core:slice"
 import "core:strings"
 import win32 "core:sys/windows"
 import vk "vendor:vulkan"
-import vkField_util "vkField:utility"
+import ekhos_util "ekhos:utility"
 
 @(private = "file")
-assert :: vkField_util.assert
+assert :: ekhos_util.assert
 @(private = "file")
-check :: vkField_util.check
+check :: ekhos_util.check
 
 REQUIRE_RESOURCE_LABELS :: #config(REQUIRE_RESOURCE_LABELS, ODIN_DEBUG)
 @(thread_local)
@@ -27,9 +27,9 @@ EXCUSE_RESOURCE_LABELS: bool
 
 AppInfo :: struct {
 	appName:              string,
-	appVersion:           vkField_util.SemanticVersion,
+	appVersion:           ekhos_util.SemanticVersion,
 	engineName:           string,
-	engineVersion:        vkField_util.SemanticVersion,
+	engineVersion:        ekhos_util.SemanticVersion,
 	vulkanVersion:        u32,
 	requiredCapabilities: InstanceCapabilities,
 	optionalCapabilities: InstanceCapabilities,

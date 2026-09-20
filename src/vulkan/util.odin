@@ -1,4 +1,4 @@
-package vkField_vulkan
+package ekhos_vulkan
 
 import "base:intrinsics"
 import "base:runtime"
@@ -9,13 +9,13 @@ import "core:slice"
 import "core:strings"
 import "core:time"
 import vk "vendor:vulkan"
-import vkField_util "vkField:utility"
+import ekhos_util "ekhos:utility"
 
 API_VERSION_13 :: vk.API_VERSION_1_3
 
-VKFIELD_VULKAN_INITIALIZED := false
+EKHOS_VULKAN_INITIALIZED := false
 
-MESSENGER_BREAKPOINT :: #config(MESSENGER_BREAKPOINT, vkField_util.VKFIELD_IS_DEBUG)
+MESSENGER_BREAKPOINT :: #config(MESSENGER_BREAKPOINT, ekhos_util.EKHOS_IS_DEBUG)
 
 FILTER_VALIDATION_MESSAGES: []i32 : {}
 
@@ -34,7 +34,7 @@ when ODIN_OS == .Darwin {
 
 @(init)
 initialize :: proc "contextless" () {
-	check :: vkField_util.check
+	check :: ekhos_util.check
 
 	// Source: https://github.com/Capati/odin-vk-bootstrap
 	context = runtime.default_context()
@@ -91,7 +91,7 @@ initialize :: proc "contextless" () {
 	vk.load_proc_addresses_global(vkGetInstanceProcAddr)
 	if !check(vk.CreateInstance != nil, "vulkan function pointers not loaded") do return
 	GLOBAL_MODULE = module
-	VKFIELD_VULKAN_INITIALIZED = true
+	EKHOS_VULKAN_INITIALIZED = true
 }
 
 byte_arr_str :: proc(arr: ^[$N]byte) -> string {
@@ -448,7 +448,7 @@ get_image_mapped_data :: proc(image: Image) -> []byte {
 }
 
 get_timeline_value :: proc(device: Device, semaphore: TimelineSemaphore, loc := #caller_location) -> (value: u64, bool := true) {
-	vkField_util.is_ok(vkField_util.check(vk.GetSemaphoreCounterValue(device.device, auto_cast semaphore, &value), loc = loc)) or_return
+	ekhos_util.is_ok(ekhos_util.check(vk.GetSemaphoreCounterValue(device.device, auto_cast semaphore, &value), loc = loc)) or_return
 	assert(value != ~{}, "Typically signifies a Silent Device Loss, such as from a TDR")
 	return
 }

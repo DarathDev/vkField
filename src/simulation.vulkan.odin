@@ -1,4 +1,4 @@
-package vkfield
+package ekhos
 
 import "base:intrinsics"
 import "base:runtime"
@@ -8,21 +8,21 @@ import "core:math"
 import "core:mem"
 import "core:slice"
 import "core:time"
+import ekhos_util "ekhos:utility"
+import ekhos_vk "ekhos:vulkan"
 import rdoc "import:renderdoc"
 import vk "vendor:vulkan"
-import vkField_util "vkField:utility"
-import vkField_vk "vkField:vulkan"
 
 @(private = "file")
-is_ok :: vkField_util.is_ok
+is_ok :: ekhos_util.is_ok
 @(private = "file")
-confirm :: vkField_util.confirm
+confirm :: ekhos_util.confirm
 @(private = "file")
-check :: vkField_util.check
+check :: ekhos_util.check
 @(private = "file")
-assert :: vkField_util.assert
+assert :: ekhos_util.assert
 @(private = "file")
-assume :: vkField_util.assume
+assume :: ekhos_util.assume
 
 MAX_FRAMES_IN_FLIGHT :: 2
 SCATTER_UPLOAD_WINDOW_SIZE :: 16 * runtime.Megabyte
@@ -59,19 +59,19 @@ vkSimulator :: struct {
 	rdocLib:               dynlib.Library,
 	rdocApi:               rdoc.Api,
 	info:                  vkSimulationInfo,
-	instance:              vkField_vk.Instance,
-	debugUserData:         ^vkField_vk.DebugUserData,
-	debugMessenger:        Maybe(vkField_vk.DebugMessenger),
-	physicalDevices:       #soa[]vkField_vk.PhysicalDevice,
-	device:                vkField_vk.Device,
-	queue:                 vkField_vk.Queue,
-	transferQueue:         Maybe(vkField_vk.Queue),
+	instance:              ekhos_vk.Instance,
+	debugUserData:         ^ekhos_vk.DebugUserData,
+	debugMessenger:        Maybe(ekhos_vk.DebugMessenger),
+	physicalDevices:       #soa[]ekhos_vk.PhysicalDevice,
+	device:                ekhos_vk.Device,
+	queue:                 ekhos_vk.Queue,
+	transferQueue:         Maybe(ekhos_vk.Queue),
 	pipelineLayout:        vk.PipelineLayout,
 	simulationResources:   vkSimulationResources,
-	computeCommandPool:    vkField_vk.CommandPool,
-	transferCommandPool:   vkField_vk.CommandPool,
-	computeTimeline:       vkField_vk.TimelineSemaphore,
-	transferTimeline:      vkField_vk.TimelineSemaphore,
+	computeCommandPool:    ekhos_vk.CommandPool,
+	transferCommandPool:   ekhos_vk.CommandPool,
+	computeTimeline:       ekhos_vk.TimelineSemaphore,
+	transferTimeline:      ekhos_vk.TimelineSemaphore,
 	computeTimelineValue:  u64,
 	transferTimelineValue: u64,
 }
@@ -87,11 +87,11 @@ vkSimulationResources :: union {
 
 vkPulseEchoSimulationResources :: struct {
 	dataBuffer:           vkStagableBuffer,
-	scatterBuffers:       [dynamic; MAX_FRAMES_IN_FLIGHT]vkField_vk.Buffer,
+	scatterBuffers:       [dynamic; MAX_FRAMES_IN_FLIGHT]ekhos_vk.Buffer,
 	dataBufferHeader:     vkDataBufferHeader,
 	responseBuffer:       vkStagableBuffer,
 	temporalBuffer:       vkStagableBuffer,
-	temporalOutputBuffer: vkField_vk.Buffer,
+	temporalOutputBuffer: ekhos_vk.Buffer,
 	calcAperShader:       vk.ShaderEXT,
 	measAperShaderTx:     vk.ShaderEXT,
 	measAperShaderRcv:    vk.ShaderEXT,
@@ -205,8 +205,8 @@ vkTemporalPushData :: struct {
 }
 
 vkStagableBuffer :: struct {
-	main:    vkField_vk.Buffer,
-	staging: Maybe(vkField_vk.Buffer),
+	main:    ekhos_vk.Buffer,
+	staging: Maybe(ekhos_vk.Buffer),
 }
 
 vkDataBufferHeader :: struct {
@@ -236,25 +236,25 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 		if simulator.rdocApi != nil do log.infof("loaded renderdoc %v", simulator.rdocApi)
 	}
 
-	simulator.debugUserData = new(vkField_vk.DebugUserData)
+	simulator.debugUserData = new(ekhos_vk.DebugUserData)
 	simulator.debugUserData.logger = context.logger
 
-	instanceCapabilities: vkField_vk.InstanceCapabilities = {.DebugUtils}
+	instanceCapabilities: ekhos_vk.InstanceCapabilities = {.DebugUtils}
 	if settings.gpuSettings.enableDriverDebugMessages do instanceCapabilities += {.Validation}
 
 	simulator.instance = confirm(
-		vkField_vk.create_instance(
-			{appName = "vkField", vulkanVersion = vk.API_VERSION_1_3, optionalCapabilities = instanceCapabilities},
+		ekhos_vk.create_instance(
+			{appName = "Ekhos", vulkanVersion = vk.API_VERSION_1_3, optionalCapabilities = instanceCapabilities},
 			debugUserData = simulator.debugUserData,
 		),
 	) or_return
 
 	if settings.gpuSettings.enableDriverDebugMessages {
-		simulator.debugMessenger = confirm(vkField_vk.create_debug_messenger(simulator.instance, simulator.debugUserData)) or_return
+		simulator.debugMessenger = confirm(ekhos_vk.create_debug_messenger(simulator.instance, simulator.debugUserData)) or_return
 	}
 
-	simulator.physicalDevices = vkField_vk.get_physical_devices(simulator.instance) or_return
-	requiredCapabilities: vkField_vk.DeviceCapabilities = {
+	simulator.physicalDevices = ekhos_vk.get_physical_devices(simulator.instance) or_return
+	requiredCapabilities: ekhos_vk.DeviceCapabilities = {
 		.Synchronization2,
 		.Maintenance4,
 		.BufferDeviceAddress,
@@ -263,7 +263,7 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 		.ShaderInt64,
 		.TimelineSemaphore,
 	}
-	physicalDevice, physicalDeviceAvailable := vkField_vk.pick_physical_device(
+	physicalDevice, physicalDeviceAvailable := ekhos_vk.pick_physical_device(
 		simulator.instance.instance,
 		simulator.physicalDevices,
 		{requiredCapabilities = requiredCapabilities},
@@ -276,20 +276,20 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 			break
 		}
 	}
-	queueRequests := make([dynamic]vkField_vk.QueueRequest, context.temp_allocator)
+	queueRequests := make([dynamic]ekhos_vk.QueueRequest, context.temp_allocator)
 	append(
 		&queueRequests,
-		vkField_vk.QueueRequest{count = 1, requiredProperties = {.Compute}, preferredProperties = {.Compute}, unpreferredProperties = {.Transfer}},
+		ekhos_vk.QueueRequest{count = 1, requiredProperties = {.Compute}, preferredProperties = {.Compute}, unpreferredProperties = {.Transfer}},
 	)
 	if hasDedicatedTransferQueue {
 		append(
 			&queueRequests,
-			vkField_vk.QueueRequest{count = 1, requiredProperties = {.Transfer}, preferredProperties = {.Transfer}, unpreferredProperties = {.Compute}},
+			ekhos_vk.QueueRequest{count = 1, requiredProperties = {.Transfer}, preferredProperties = {.Transfer}, unpreferredProperties = {.Compute}},
 		)
 	}
-	queues: [][]vkField_vk.Queue
+	queues: [][]ekhos_vk.Queue
 	simulator.device, queues = check(
-		vkField_vk.create_device(
+		ekhos_vk.create_device(
 			simulator.instance,
 			physicalDevice,
 			{requiredCapabilities = requiredCapabilities},
@@ -301,7 +301,7 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 
 	pushConstantSize := max(size_of(vkCalcAperPushData), size_of(vkCoalescePushData), size_of(vkPulseConvPushData), size_of(vkTemporalPushData))
 	simulator.pipelineLayout = check(
-		vkField_vk.create_pipeline_layout(simulator.device, {}, {{stageFlags = {.COMPUTE}, size = auto_cast pushConstantSize, offset = 0}}),
+		ekhos_vk.create_pipeline_layout(simulator.device, {}, {{stageFlags = {.COMPUTE}, size = auto_cast pushConstantSize, offset = 0}}),
 	) or_return
 	simulator.queue = queues[0][0]
 	if hasDedicatedTransferQueue {
@@ -311,13 +311,13 @@ create_vulkan_simulator :: proc(settings: SimulationSettings) -> (simulator: vkS
 		}
 	}
 
-	simulator.computeCommandPool = check(vkField_vk.create_command_pool(simulator.device, simulator.queue, true)) or_return
+	simulator.computeCommandPool = check(ekhos_vk.create_command_pool(simulator.device, simulator.queue, true)) or_return
 	if transferQueue, transferQueueOk := simulator.transferQueue.?; transferQueueOk {
-		simulator.transferCommandPool = check(vkField_vk.create_command_pool(simulator.device, transferQueue, true)) or_return
+		simulator.transferCommandPool = check(ekhos_vk.create_command_pool(simulator.device, transferQueue, true)) or_return
 	}
-	simulator.computeTimeline = check(vkField_vk.create_timeline_semaphore(simulator.device, label = "Compute Timeline")) or_return
+	simulator.computeTimeline = check(ekhos_vk.create_timeline_semaphore(simulator.device, label = "Compute Timeline")) or_return
 	if _, transferQueueOk := simulator.transferQueue.?; transferQueueOk {
-		simulator.transferTimeline = check(vkField_vk.create_timeline_semaphore(simulator.device, label = "Transfer Timeline")) or_return
+		simulator.transferTimeline = check(ekhos_vk.create_timeline_semaphore(simulator.device, label = "Transfer Timeline")) or_return
 	}
 
 	return
@@ -337,21 +337,21 @@ destroy_vulkan_simulator :: proc(simulator: ^vkSimulator) {
 
 	destroy_vulkan_simulator_resources(simulator)
 
-	vkField_vk.destroy_timeline_semaphore(simulator.device, simulator.computeTimeline)
+	ekhos_vk.destroy_timeline_semaphore(simulator.device, simulator.computeTimeline)
 	if _, transferQueueOk := simulator.transferQueue.?; transferQueueOk {
-		vkField_vk.destroy_timeline_semaphore(simulator.device, simulator.transferTimeline)
-		vkField_vk.destroy_command_pool(simulator.device, simulator.transferCommandPool)
+		ekhos_vk.destroy_timeline_semaphore(simulator.device, simulator.transferTimeline)
+		ekhos_vk.destroy_command_pool(simulator.device, simulator.transferCommandPool)
 	}
-	vkField_vk.destroy_command_pool(simulator.device, simulator.computeCommandPool)
+	ekhos_vk.destroy_command_pool(simulator.device, simulator.computeCommandPool)
 
-	vkField_vk.destroy_pipeline_layout(simulator.device, simulator.pipelineLayout)
+	ekhos_vk.destroy_pipeline_layout(simulator.device, simulator.pipelineLayout)
 
-	vkField_vk.destroy_device(&simulator.device)
-	vkField_vk.free_physical_devices(&simulator.physicalDevices)
+	ekhos_vk.destroy_device(&simulator.device)
+	ekhos_vk.free_physical_devices(&simulator.physicalDevices)
 	if debugMessenger, ok := simulator.debugMessenger.?; ok {
-		vkField_vk.destroy_debug_messenger(simulator.instance.instance, &debugMessenger)
+		ekhos_vk.destroy_debug_messenger(simulator.instance.instance, &debugMessenger)
 	}
-	vkField_vk.destroy_instance(&simulator.instance)
+	ekhos_vk.destroy_instance(&simulator.instance)
 	free(simulator.debugUserData)
 	simulator^ = {}
 }
@@ -452,7 +452,7 @@ plan_vulkan_simulator :: proc(
 	scatterBufferSize := max(size_of(Scatter), min(int(SCATTER_UPLOAD_WINDOW_SIZE), max(1, len(scatters) * size_of(Scatter))))
 	scatterUploadCapacity := max(1, scatterBufferSize / size_of(Scatter))
 	scatterBufferCount := min(MAX_FRAMES_IN_FLIGHT, max(1, (len(scatters) + scatterUploadCapacity - 1) / scatterUploadCapacity))
-	scatterBuffers: [dynamic; MAX_FRAMES_IN_FLIGHT]vkField_vk.Buffer
+	scatterBuffers: [dynamic; MAX_FRAMES_IN_FLIGHT]ekhos_vk.Buffer
 	for _ in 0 ..< scatterBufferCount {
 		scatterBuffer := check(prepare_scatter_buffer(device, auto_cast scatterBufferSize)) or_return
 		append(&scatterBuffers, scatterBuffer)
@@ -535,12 +535,12 @@ plan_vulkan_simulator :: proc(
 	}
 	assert(pulseConvSpec.SampleWorkgroupSize <= maxComputeWorkgroupInvocations)
 
-	calcAperShaders, _ := vkField_vk.create_shaders(
+	calcAperShaders, _ := ekhos_vk.create_shaders(
 		device,
 		{
 			code = SHADER_COMPUTE_CALCULATE_APERTURE,
 			entryPoints = {{name = "main", stage = .COMPUTE}},
-			specializationInfo = {vkField_vk.create_specialization_info(calcAperSpec)},
+			specializationInfo = {ekhos_vk.create_specialization_info(calcAperSpec)},
 		},
 		{},
 		{{stageFlags = {.COMPUTE}, size = size_of(vkCoalescePushData)}},
@@ -549,12 +549,12 @@ plan_vulkan_simulator :: proc(
 		context.temp_allocator,
 	) or_return
 
-	measAperShaders, _ := vkField_vk.create_shaders(
+	measAperShaders, _ := ekhos_vk.create_shaders(
 		device,
 		{
 			code = SHADER_COMPUTE_MEASURE_APERTURE,
 			entryPoints = {{name = "main", stage = .COMPUTE}, {name = "main", stage = .COMPUTE}},
-			specializationInfo = {vkField_vk.create_specialization_info(measAperSpecTx), vkField_vk.create_specialization_info(measAperSpecRcv)},
+			specializationInfo = {ekhos_vk.create_specialization_info(measAperSpecTx), ekhos_vk.create_specialization_info(measAperSpecRcv)},
 		},
 		{},
 		{{stageFlags = {.COMPUTE}, size = size_of(vkCoalescePushData)}},
@@ -563,12 +563,12 @@ plan_vulkan_simulator :: proc(
 		context.temp_allocator,
 	) or_return
 
-	coalAperShaders, _ := vkField_vk.create_shaders(
+	coalAperShaders, _ := ekhos_vk.create_shaders(
 		device,
 		{
 			code = SHADER_COMPUTE_COALESCE_APERTURE,
 			entryPoints = {{name = "main", stage = .COMPUTE}, {name = "main", stage = .COMPUTE}},
-			specializationInfo = {vkField_vk.create_specialization_info(coalAperSpecTx), vkField_vk.create_specialization_info(coalAperSpecRcv)},
+			specializationInfo = {ekhos_vk.create_specialization_info(coalAperSpecTx), ekhos_vk.create_specialization_info(coalAperSpecRcv)},
 		},
 		{},
 		{{stageFlags = {.COMPUTE}, size = size_of(vkCoalescePushData)}},
@@ -577,12 +577,12 @@ plan_vulkan_simulator :: proc(
 		context.temp_allocator,
 	) or_return
 
-	pulseConvShaders, _ := vkField_vk.create_shaders(
+	pulseConvShaders, _ := ekhos_vk.create_shaders(
 		device,
 		{
 			code = SHADER_COMPUTE_PULSE_ECHO_CONVOLVE,
 			entryPoints = {{name = "main", stage = .COMPUTE}},
-			specializationInfo = {vkField_vk.create_specialization_info(pulseConvSpec)},
+			specializationInfo = {ekhos_vk.create_specialization_info(pulseConvSpec)},
 		},
 		{},
 		{{stageFlags = {.COMPUTE}, size = size_of(vkPulseConvPushData)}},
@@ -590,12 +590,12 @@ plan_vulkan_simulator :: proc(
 		"Pulse Echo Convolution",
 		context.temp_allocator,
 	) or_return
-	temporalShaders, _ := vkField_vk.create_shaders(
+	temporalShaders, _ := ekhos_vk.create_shaders(
 		device,
 		{
 			code = SHADER_COMPUTE_TEMPORAL_RESPONSE,
 			entryPoints = {{name = "main", stage = .COMPUTE}},
-			specializationInfo = {vkField_vk.create_specialization_info(temporalSpec)},
+			specializationInfo = {ekhos_vk.create_specialization_info(temporalSpec)},
 		},
 		{},
 		{{stageFlags = {.COMPUTE}, size = size_of(vkTemporalPushData)}},
@@ -666,7 +666,7 @@ simulate_vulkan :: proc(
 	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
 
 	scatterBatchSize := simulator.info.scattererBatchSize
-	dataBufferAddress := vkField_vk.get_buffer_address(device, resources.dataBuffer.main)
+	dataBufferAddress := ekhos_vk.get_buffer_address(device, resources.dataBuffer.main)
 	header := resources.dataBufferHeader
 	scatterUploadCapacity := int(resources.scatterBuffers[0].size / auto_cast size_of(Scatter))
 	scatterWindowBatchCount := max(1, scatterUploadCapacity / int(scatterBatchSize))
@@ -688,12 +688,12 @@ simulate_vulkan :: proc(
 		windowBatchCount := (windowEnd - windowOffset + int(scatterBatchSize) - 1) / int(scatterBatchSize)
 		commandBufferCount := (windowBatchCount + SCATTER_BATCHES_PER_COMMAND_BUFFER - 1) / SCATTER_BATCHES_PER_COMMAND_BUFFER
 		computeCommandBuffers := check(
-			vkField_vk.get_command_buffers(device, &simulator.computeCommandPool, commandBufferCount, allocator = context.temp_allocator),
+			ekhos_vk.get_command_buffers(device, &simulator.computeCommandPool, commandBufferCount, allocator = context.temp_allocator),
 		) or_return
-		transferCommandBuffers: []vkField_vk.CommandBuffer
+		transferCommandBuffers: []ekhos_vk.CommandBuffer
 		if hasTransferQueue {
 			transferCommandBuffers = check(
-				vkField_vk.get_command_buffers(device, &simulator.transferCommandPool, commandBufferCount, allocator = context.temp_allocator),
+				ekhos_vk.get_command_buffers(device, &simulator.transferCommandPool, commandBufferCount, allocator = context.temp_allocator),
 			) or_return
 		}
 		slotComputeTimelineValues: [MAX_FRAMES_IN_FLIGHT]u64
@@ -703,17 +703,17 @@ simulate_vulkan :: proc(
 			ringIndex := commandBufferIndex % len(resources.scatterBuffers)
 			if slotComputeTimelineValues[ringIndex] > 0 {
 				timelineWait.value[0] = slotComputeTimelineValues[ringIndex]
-				check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
+				check(ekhos_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
 			}
 			scatterBuffer := resources.scatterBuffers[ringIndex]
 			windowData := scatterData[commandStart * size_of(Scatter):commandEnd * size_of(Scatter)]
-			copy(vkField_vk.get_buffer_mapped_data(scatterBuffer)[:len(windowData)], windowData)
+			copy(ekhos_vk.get_buffer_mapped_data(scatterBuffer)[:len(windowData)], windowData)
 
 			if hasTransferQueue {
 				transferCommandBuffer := transferCommandBuffers[commandBufferIndex]
-				vkField_vk.cmd_begin(transferCommandBuffer, true) or_return
-				vkField_vk.cmd_begin_label(transferCommandBuffer, "Scatter Upload")
-				vkField_vk.cmd_pipeline_barrier(
+				ekhos_vk.cmd_begin(transferCommandBuffer, true) or_return
+				ekhos_vk.cmd_begin_label(transferCommandBuffer, "Scatter Upload")
+				ekhos_vk.cmd_pipeline_barrier(
 					transferCommandBuffer,
 					{},
 					{
@@ -732,7 +732,7 @@ simulate_vulkan :: proc(
 				for transferScatterOffset := commandStart; transferScatterOffset < commandEnd; transferScatterOffset += auto_cast scatterBatchSize {
 					transferScatterBatchEnd := min(transferScatterOffset + auto_cast scatterBatchSize, commandEnd)
 					transferScatterUploadSize: vk.DeviceSize = auto_cast ((transferScatterBatchEnd - transferScatterOffset) * size_of(Scatter))
-					vkField_vk.cmd_copy_buffer(
+					ekhos_vk.cmd_copy_buffer(
 						transferCommandBuffer,
 						scatterBuffer,
 						resources.dataBuffer.main,
@@ -746,10 +746,10 @@ simulate_vulkan :: proc(
 						},
 					)
 				}
-				vkField_vk.cmd_end_label(transferCommandBuffer)
-				vkField_vk.cmd_end(transferCommandBuffer) or_return
+				ekhos_vk.cmd_end_label(transferCommandBuffer)
+				ekhos_vk.cmd_end(transferCommandBuffer) or_return
 				simulator.transferTimelineValue += 1
-				vkField_vk.queue_submit(
+				ekhos_vk.queue_submit(
 					transferQueue,
 					{transferCommandBuffer},
 					{},
@@ -758,10 +758,10 @@ simulate_vulkan :: proc(
 			}
 
 			commandBuffer = computeCommandBuffer
-			vkField_vk.cmd_begin(commandBuffer, true) or_return
-			vkField_vk.cmd_begin_label(commandBuffer, "Scatter Batch")
+			ekhos_vk.cmd_begin(commandBuffer, true) or_return
+			ekhos_vk.cmd_begin_label(commandBuffer, "Scatter Batch")
 			if !hasTransferQueue {
-				vkField_vk.cmd_pipeline_barrier(
+				ekhos_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
 					{
@@ -779,7 +779,7 @@ simulate_vulkan :: proc(
 				)
 			}
 			if hasTransferQueue {
-				vkField_vk.cmd_pipeline_barrier(
+				ekhos_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
 					{
@@ -799,7 +799,7 @@ simulate_vulkan :: proc(
 
 			for scatterOffset := commandStart; scatterOffset < commandEnd; scatterOffset += auto_cast scatterBatchSize {
 				if scatterOffset > windowOffset && !hasTransferQueue {
-					vkField_vk.cmd_pipeline_barrier(
+					ekhos_vk.cmd_pipeline_barrier(
 						commandBuffer,
 						{},
 						{
@@ -819,7 +819,7 @@ simulate_vulkan :: proc(
 				if !hasTransferQueue {
 					scatterBatchEnd := min(scatterOffset + auto_cast scatterBatchSize, len(scatters))
 					scatterUploadSize: vk.DeviceSize = auto_cast ((scatterBatchEnd - scatterOffset) * size_of(Scatter))
-					vkField_vk.cmd_copy_buffer(
+					ekhos_vk.cmd_copy_buffer(
 						commandBuffer,
 						scatterBuffer,
 						resources.dataBuffer.main,
@@ -832,7 +832,7 @@ simulate_vulkan :: proc(
 							},
 						},
 					)
-					vkField_vk.cmd_pipeline_barrier(
+					ekhos_vk.cmd_pipeline_barrier(
 						commandBuffer,
 						{},
 						{
@@ -850,7 +850,7 @@ simulate_vulkan :: proc(
 					)
 				}
 
-				vkField_vk.cmd_begin_label(commandBuffer, "Calculate Aperture")
+				ekhos_vk.cmd_begin_label(commandBuffer, "Calculate Aperture")
 				dispatch_vk_calculate_aperture(
 					commandBuffer,
 					simulator,
@@ -862,8 +862,8 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
-				vkField_vk.cmd_end_label(commandBuffer)
-				vkField_vk.cmd_pipeline_barrier(
+				ekhos_vk.cmd_end_label(commandBuffer)
+				ekhos_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
 					{
@@ -879,7 +879,7 @@ simulate_vulkan :: proc(
 					},
 					{},
 				)
-				vkField_vk.cmd_begin_label(commandBuffer, "Measure Aperture")
+				ekhos_vk.cmd_begin_label(commandBuffer, "Measure Aperture")
 				dispatch_vk_measure_aperture(
 					commandBuffer,
 					simulator,
@@ -892,8 +892,8 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
-				vkField_vk.cmd_end_label(commandBuffer)
-				vkField_vk.cmd_pipeline_barrier(
+				ekhos_vk.cmd_end_label(commandBuffer)
+				ekhos_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
 					{
@@ -909,7 +909,7 @@ simulate_vulkan :: proc(
 					},
 					{},
 				)
-				vkField_vk.cmd_begin_label(commandBuffer, "Coalesce Aperture")
+				ekhos_vk.cmd_begin_label(commandBuffer, "Coalesce Aperture")
 				dispatch_vk_coalesce_aperture(
 					commandBuffer,
 					simulator,
@@ -922,8 +922,8 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
-				vkField_vk.cmd_end_label(commandBuffer)
-				vkField_vk.cmd_pipeline_barrier(
+				ekhos_vk.cmd_end_label(commandBuffer)
+				ekhos_vk.cmd_pipeline_barrier(
 					commandBuffer,
 					{},
 					{
@@ -939,7 +939,7 @@ simulate_vulkan :: proc(
 					},
 					{},
 				)
-				vkField_vk.cmd_begin_label(commandBuffer, "Pulse Echo Convolution")
+				ekhos_vk.cmd_begin_label(commandBuffer, "Pulse Echo Convolution")
 				dispatch_vk_pulse_echo_convolution(
 					commandBuffer,
 					simulator,
@@ -953,15 +953,15 @@ simulate_vulkan :: proc(
 					scatterBatchSize,
 					scatterOffset,
 				) or_return
-				vkField_vk.cmd_end_label(commandBuffer)
+				ekhos_vk.cmd_end_label(commandBuffer)
 			}
 
-			vkField_vk.cmd_end_label(commandBuffer)
-			vkField_vk.cmd_end(commandBuffer) or_return
-			scatterComputeWaits: []vkField_vk.SemaphoreBarrier
+			ekhos_vk.cmd_end_label(commandBuffer)
+			ekhos_vk.cmd_end(commandBuffer) or_return
+			scatterComputeWaits: []ekhos_vk.SemaphoreBarrier
 			if hasTransferQueue do scatterComputeWaits = {{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.COMPUTE_SHADER}}}
 			simulator.computeTimelineValue += 1
-			vkField_vk.queue_submit(
+			ekhos_vk.queue_submit(
 				simulator.queue,
 				{commandBuffer},
 				scatterComputeWaits,
@@ -993,9 +993,9 @@ simulate_vulkan :: proc(
 		timelineWait,
 		hasTransferQueue,
 	) or_return
-	vkField_vk.cmd_begin(commandBuffer, true) or_return
-	vkField_vk.cmd_begin_label(commandBuffer, "Readback Response")
-	vkField_vk.cmd_pipeline_barrier(
+	ekhos_vk.cmd_begin(commandBuffer, true) or_return
+	ekhos_vk.cmd_begin_label(commandBuffer, "Readback Response")
+	ekhos_vk.cmd_pipeline_barrier(
 		commandBuffer,
 		{},
 		{
@@ -1012,25 +1012,25 @@ simulate_vulkan :: proc(
 		{},
 	)
 
-	downloadBuffer: vkField_vk.Buffer
-	if buffer, bufferOk := resources.responseBuffer.staging.(vkField_vk.Buffer); bufferOk {
-		vkField_vk.cmd_download_from_buffer(commandBuffer, resources.responseBuffer.main, buffer)
+	downloadBuffer: ekhos_vk.Buffer
+	if buffer, bufferOk := resources.responseBuffer.staging.(ekhos_vk.Buffer); bufferOk {
+		ekhos_vk.cmd_download_from_buffer(commandBuffer, resources.responseBuffer.main, buffer)
 		downloadBuffer = buffer
 	} else {
 		downloadBuffer = resources.responseBuffer.main
 	}
-	vkField_vk.cmd_end_label(commandBuffer)
-	vkField_vk.cmd_end(commandBuffer) or_return
+	ekhos_vk.cmd_end_label(commandBuffer)
+	ekhos_vk.cmd_end(commandBuffer) or_return
 	simulator.computeTimelineValue += 1
-	vkField_vk.queue_submit(
+	ekhos_vk.queue_submit(
 		simulator.queue,
 		{commandBuffer},
 		{},
 		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
 	) or_return
 	timelineWait.value[0] = simulator.computeTimelineValue
-	check(vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
-	vkField_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
+	check(ekhos_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT))) or_return
+	ekhos_vk.read_from_buffer(downloadBuffer, slice.to_bytes(response))
 	vk.DeviceWaitIdle(device.device) or_return
 	return
 }
@@ -1040,27 +1040,27 @@ destroy_vulkan_simulator_resources :: proc(simulator: ^vkSimulator) {
 
 	switch resources in simulator.simulationResources {
 	case vkPulseEchoSimulationResources:
-		vkField_vk.destroy_shader(device, resources.calcAperShader)
-		vkField_vk.destroy_shader(device, resources.measAperShaderTx)
-		vkField_vk.destroy_shader(device, resources.measAperShaderRcv)
-		vkField_vk.destroy_shader(device, resources.coalAperShaderTx)
-		vkField_vk.destroy_shader(device, resources.coalAperShaderRcv)
-		vkField_vk.destroy_shader(device, resources.pulseConvShader)
-		vkField_vk.destroy_shader(device, resources.temporalShader)
+		ekhos_vk.destroy_shader(device, resources.calcAperShader)
+		ekhos_vk.destroy_shader(device, resources.measAperShaderTx)
+		ekhos_vk.destroy_shader(device, resources.measAperShaderRcv)
+		ekhos_vk.destroy_shader(device, resources.coalAperShaderTx)
+		ekhos_vk.destroy_shader(device, resources.coalAperShaderRcv)
+		ekhos_vk.destroy_shader(device, resources.pulseConvShader)
+		ekhos_vk.destroy_shader(device, resources.temporalShader)
 		release_staged_buffer(device, resources.dataBuffer)
 		for scatterBuffer in resources.scatterBuffers {
-			vkField_vk.release_buffer(device, scatterBuffer)
+			ekhos_vk.release_buffer(device, scatterBuffer)
 		}
 		release_staged_buffer(device, resources.responseBuffer)
 		release_staged_buffer(device, resources.temporalBuffer)
-		vkField_vk.release_buffer(device, resources.temporalOutputBuffer)
+		ekhos_vk.release_buffer(device, resources.temporalOutputBuffer)
 		simulator.simulationResources = {}
 	}
 
-	release_staged_buffer :: proc(device: vkField_vk.Device, buffer: vkStagableBuffer) {
-		vkField_vk.release_buffer(device, buffer.main)
+	release_staged_buffer :: proc(device: ekhos_vk.Device, buffer: vkStagableBuffer) {
+		ekhos_vk.release_buffer(device, buffer.main)
 		if buffer, bufferOk := buffer.staging.?; bufferOk {
-			vkField_vk.release_buffer(device, buffer)
+			ekhos_vk.release_buffer(device, buffer)
 		}
 	}
 }
@@ -1071,26 +1071,26 @@ prepare_vk_simulation :: proc(
 	initialDataBuffer: []byte,
 	initialTemporalBuffer: []byte,
 ) -> (
-	commandBuffer: vkField_vk.CommandBuffer,
-	timelineWait: #soa[]vkField_vk.WaitSemaphore,
+	commandBuffer: ekhos_vk.CommandBuffer,
+	timelineWait: #soa[]ekhos_vk.WaitSemaphore,
 	hasTransferQueue: bool,
 	result: vk.Result,
 ) {
 	device := simulator.device
-	transferQueue: vkField_vk.Queue
+	transferQueue: ekhos_vk.Queue
 	transferQueue, hasTransferQueue = simulator.transferQueue.?
 
-	commandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
+	commandBuffer = ekhos_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
 	if hasTransferQueue {
-		transferCommandBuffer := vkField_vk.get_command_buffer(device, &simulator.transferCommandPool) or_return
-		vkField_vk.cmd_begin(transferCommandBuffer, true) or_return
-		vkField_vk.cmd_begin_label(transferCommandBuffer, "Initial Upload")
-		vkField_vk.cmd_upload(transferCommandBuffer, initialDataBuffer, resources.dataBuffer.main, resources.dataBuffer.staging.? or_else {})
-		vkField_vk.cmd_upload(transferCommandBuffer, initialTemporalBuffer, resources.temporalBuffer.main, resources.temporalBuffer.staging.? or_else {})
-		vkField_vk.cmd_end_label(transferCommandBuffer)
-		vkField_vk.cmd_end(transferCommandBuffer) or_return
+		transferCommandBuffer := ekhos_vk.get_command_buffer(device, &simulator.transferCommandPool) or_return
+		ekhos_vk.cmd_begin(transferCommandBuffer, true) or_return
+		ekhos_vk.cmd_begin_label(transferCommandBuffer, "Initial Upload")
+		ekhos_vk.cmd_upload(transferCommandBuffer, initialDataBuffer, resources.dataBuffer.main, resources.dataBuffer.staging.? or_else {})
+		ekhos_vk.cmd_upload(transferCommandBuffer, initialTemporalBuffer, resources.temporalBuffer.main, resources.temporalBuffer.staging.? or_else {})
+		ekhos_vk.cmd_end_label(transferCommandBuffer)
+		ekhos_vk.cmd_end(transferCommandBuffer) or_return
 		simulator.transferTimelineValue += 1
-		vkField_vk.queue_submit(
+		ekhos_vk.queue_submit(
 			transferQueue,
 			{transferCommandBuffer},
 			{},
@@ -1098,14 +1098,14 @@ prepare_vk_simulation :: proc(
 		) or_return
 	}
 
-	vkField_vk.cmd_begin(commandBuffer, true) or_return
-	vkField_vk.cmd_begin_label(commandBuffer, "Initialize Buffers")
-	vkField_vk.cmd_clear_buffer(commandBuffer, resources.responseBuffer.main)
+	ekhos_vk.cmd_begin(commandBuffer, true) or_return
+	ekhos_vk.cmd_begin_label(commandBuffer, "Initialize Buffers")
+	ekhos_vk.cmd_clear_buffer(commandBuffer, resources.responseBuffer.main)
 	if !hasTransferQueue {
-		vkField_vk.cmd_upload(commandBuffer, initialDataBuffer, resources.dataBuffer.main, resources.dataBuffer.staging.? or_else {})
-		vkField_vk.cmd_upload(commandBuffer, initialTemporalBuffer, resources.temporalBuffer.main, resources.temporalBuffer.staging.? or_else {})
+		ekhos_vk.cmd_upload(commandBuffer, initialDataBuffer, resources.dataBuffer.main, resources.dataBuffer.staging.? or_else {})
+		ekhos_vk.cmd_upload(commandBuffer, initialTemporalBuffer, resources.temporalBuffer.main, resources.temporalBuffer.staging.? or_else {})
 	}
-	vkField_vk.cmd_pipeline_barrier(
+	ekhos_vk.cmd_pipeline_barrier(
 		commandBuffer,
 		{},
 		{
@@ -1139,28 +1139,28 @@ prepare_vk_simulation :: proc(
 		},
 		{},
 	)
-	vkField_vk.cmd_end_label(commandBuffer)
-	vkField_vk.cmd_end(commandBuffer) or_return
-	computeWaits: []vkField_vk.SemaphoreBarrier
+	ekhos_vk.cmd_end_label(commandBuffer)
+	ekhos_vk.cmd_end(commandBuffer) or_return
+	computeWaits: []ekhos_vk.SemaphoreBarrier
 	if hasTransferQueue {
 		computeWaits = {{semaphore = simulator.transferTimeline, value = simulator.transferTimelineValue, stageMask = {.COMPUTE_SHADER}}}
 	}
 	simulator.computeTimelineValue += 1
-	vkField_vk.queue_submit(
+	ekhos_vk.queue_submit(
 		simulator.queue,
 		{commandBuffer},
 		computeWaits,
 		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
 	) or_return
-	timelineWait = make(#soa[]vkField_vk.WaitSemaphore, 1, context.temp_allocator)
+	timelineWait = make(#soa[]ekhos_vk.WaitSemaphore, 1, context.temp_allocator)
 	timelineWait.sempahore[0] = auto_cast simulator.computeTimeline
 	timelineWait.value[0] = simulator.computeTimelineValue
-	vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
-	vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
+	ekhos_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
+	ekhos_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
 	if hasTransferQueue {
-		vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
+		ekhos_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
 	}
-	commandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
+	commandBuffer = ekhos_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
 	return
 }
 
@@ -1172,20 +1172,20 @@ run_vk_temporal_pass :: proc(
 	receiveChannels: []ReceiveChannel,
 	impulses: []TransducerImpulse,
 	excitations: []Excitation,
-	commandBuffer: vkField_vk.CommandBuffer,
-	timelineWait: #soa[]vkField_vk.WaitSemaphore,
+	commandBuffer: ekhos_vk.CommandBuffer,
+	timelineWait: #soa[]ekhos_vk.WaitSemaphore,
 	hasTransferQueue: bool,
 ) -> (
-	resultCommandBuffer: vkField_vk.CommandBuffer,
+	resultCommandBuffer: ekhos_vk.CommandBuffer,
 	result: vk.Result,
 ) {
 	device := simulator.device
 	shaderStage: vk.ShaderStageFlags = {.COMPUTE}
 	temporalShader := resources.temporalShader
 	maxSampleChunkSize: i32 = 1024
-	vkField_vk.cmd_begin(commandBuffer, true) or_return
-	vkField_vk.cmd_begin_label(commandBuffer, "Temporal Response")
-	vkField_vk.cmd_pipeline_barrier(
+	ekhos_vk.cmd_begin(commandBuffer, true) or_return
+	ekhos_vk.cmd_begin_label(commandBuffer, "Temporal Response")
+	ekhos_vk.cmd_pipeline_barrier(
 		commandBuffer,
 		{},
 		{
@@ -1202,8 +1202,8 @@ run_vk_temporal_pass :: proc(
 		{},
 	)
 	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &shaderStage, &temporalShader)
-	temporalAddress := vkField_vk.get_buffer_address(device, resources.temporalBuffer.main)
-	responseAddress := vkField_vk.get_buffer_address(device, resources.responseBuffer.main)
+	temporalAddress := ekhos_vk.get_buffer_address(device, resources.temporalBuffer.main)
+	responseAddress := ekhos_vk.get_buffer_address(device, resources.responseBuffer.main)
 	for transmission, transmissionIndex in transmissions {
 		for receiveChannel, receiveChannelIndex in receiveChannels {
 			impulseLength := response_length(impulses, transmission.impulse)
@@ -1211,13 +1211,13 @@ run_vk_temporal_pass :: proc(
 			receiveImpulseLength := response_length(impulses, receiveChannel.impulse)
 			for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += maxSampleChunkSize {
 				sampleChunkCount := min(maxSampleChunkSize, settings.sampleCount - sampleOffset)
-				vkField_vk.cmd_push_constants(
+				ekhos_vk.cmd_push_constants(
 					commandBuffer,
 					simulator.pipelineLayout,
 					shaderStage,
 					vkTemporalPushData {
 						response = responseAddress,
-						temporalOutput = vkField_vk.get_buffer_address(device, resources.temporalOutputBuffer),
+						temporalOutput = ekhos_vk.get_buffer_address(device, resources.temporalOutputBuffer),
 						temporalResponses = temporalAddress,
 						lineIndex = auto_cast (transmissionIndex * len(receiveChannels) + receiveChannelIndex),
 						impulseIndex = auto_cast transmission.impulse,
@@ -1235,7 +1235,7 @@ run_vk_temporal_pass :: proc(
 			}
 		}
 	}
-	vkField_vk.cmd_pipeline_barrier(
+	ekhos_vk.cmd_pipeline_barrier(
 		commandBuffer,
 		{},
 		{
@@ -1251,33 +1251,33 @@ run_vk_temporal_pass :: proc(
 		},
 		{},
 	)
-	vkField_vk.cmd_copy_buffer(
+	ekhos_vk.cmd_copy_buffer(
 		commandBuffer,
 		resources.temporalOutputBuffer,
 		resources.responseBuffer.main,
 		{{sType = .BUFFER_COPY_2, srcOffset = 0, dstOffset = 0, size = resources.temporalOutputBuffer.size}},
 	)
-	vkField_vk.cmd_end_label(commandBuffer)
-	vkField_vk.cmd_end(commandBuffer) or_return
+	ekhos_vk.cmd_end_label(commandBuffer)
+	ekhos_vk.cmd_end(commandBuffer) or_return
 	simulator.computeTimelineValue += 1
-	vkField_vk.queue_submit(
+	ekhos_vk.queue_submit(
 		simulator.queue,
 		{commandBuffer},
 		{},
 		{{semaphore = simulator.computeTimeline, value = simulator.computeTimelineValue, stageMask = {.ALL_COMMANDS}}},
 	) or_return
 	timelineWait.value[0] = simulator.computeTimelineValue
-	vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
-	vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
+	ekhos_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
+	ekhos_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
 	if hasTransferQueue {
-		vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
+		ekhos_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
 	}
-	resultCommandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
+	resultCommandBuffer = ekhos_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
 	return
 }
 
 dispatch_vk_calculate_aperture :: proc(
-	commandBuffer: vkField_vk.CommandBuffer,
+	commandBuffer: ekhos_vk.CommandBuffer,
 	simulator: ^vkSimulator,
 	resources: vkPulseEchoSimulationResources,
 	shaderStage: vk.ShaderStageFlags,
@@ -1294,7 +1294,7 @@ dispatch_vk_calculate_aperture :: proc(
 	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &calculateApertureShader)
 	for elementOffset := 0; elementOffset < len(elements); elementOffset += GPU_CALC_ELEMENT_CHUNK_SIZE {
 		elementChunkCount := min(GPU_CALC_ELEMENT_CHUNK_SIZE, len(elements) - elementOffset)
-		vkField_vk.cmd_push_constants(
+		ekhos_vk.cmd_push_constants(
 			commandBuffer,
 			simulator.pipelineLayout,
 			shaderStage,
@@ -1316,7 +1316,7 @@ dispatch_vk_calculate_aperture :: proc(
 }
 
 dispatch_vk_measure_aperture :: proc(
-	commandBuffer: vkField_vk.CommandBuffer,
+	commandBuffer: ekhos_vk.CommandBuffer,
 	simulator: ^vkSimulator,
 	resources: vkPulseEchoSimulationResources,
 	shaderStage: vk.ShaderStageFlags,
@@ -1334,7 +1334,7 @@ dispatch_vk_measure_aperture :: proc(
 	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &measureApertureShader)
 	for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
 		elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
-		vkField_vk.cmd_push_constants(
+		ekhos_vk.cmd_push_constants(
 			commandBuffer,
 			simulator.pipelineLayout,
 			stage,
@@ -1361,7 +1361,7 @@ dispatch_vk_measure_aperture :: proc(
 	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &measureApertureShader)
 	for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
 		elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
-		vkField_vk.cmd_push_constants(
+		ekhos_vk.cmd_push_constants(
 			commandBuffer,
 			simulator.pipelineLayout,
 			stage,
@@ -1387,7 +1387,7 @@ dispatch_vk_measure_aperture :: proc(
 }
 
 dispatch_vk_coalesce_aperture :: proc(
-	commandBuffer: vkField_vk.CommandBuffer,
+	commandBuffer: ekhos_vk.CommandBuffer,
 	simulator: ^vkSimulator,
 	resources: vkPulseEchoSimulationResources,
 	shaderStage: vk.ShaderStageFlags,
@@ -1407,7 +1407,7 @@ dispatch_vk_coalesce_aperture :: proc(
 		sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
 		for elementSetOffset := 0; elementSetOffset < len(transmissions); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
 			elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(transmissions) - elementSetOffset)
-			vkField_vk.cmd_push_constants(
+			ekhos_vk.cmd_push_constants(
 				commandBuffer,
 				simulator.pipelineLayout,
 				stage,
@@ -1437,7 +1437,7 @@ dispatch_vk_coalesce_aperture :: proc(
 		sampleChunkCount := min(GPU_APERTURE_SAMPLE_CHUNK_SIZE, simulator.info.apertureSampleCount - sampleOffset)
 		for elementSetOffset := 0; elementSetOffset < len(receiveChannels); elementSetOffset += GPU_ELEMENT_SET_CHUNK_SIZE {
 			elementSetChunkCount := min(GPU_ELEMENT_SET_CHUNK_SIZE, len(receiveChannels) - elementSetOffset)
-			vkField_vk.cmd_push_constants(
+			ekhos_vk.cmd_push_constants(
 				commandBuffer,
 				simulator.pipelineLayout,
 				stage,
@@ -1464,7 +1464,7 @@ dispatch_vk_coalesce_aperture :: proc(
 }
 
 dispatch_vk_pulse_echo_convolution :: proc(
-	commandBuffer: vkField_vk.CommandBuffer,
+	commandBuffer: ekhos_vk.CommandBuffer,
 	simulator: ^vkSimulator,
 	resources: vkPulseEchoSimulationResources,
 	settings: SimulationSettings,
@@ -1481,7 +1481,7 @@ dispatch_vk_pulse_echo_convolution :: proc(
 	stage := shaderStage
 	pulseEchoShader := resources.pulseConvShader
 	vk.CmdBindShadersEXT(commandBuffer.commandBuffer, 1, &stage, &pulseEchoShader)
-	responseAddress := vkField_vk.get_buffer_address(simulator.device, resources.responseBuffer.main)
+	responseAddress := ekhos_vk.get_buffer_address(simulator.device, resources.responseBuffer.main)
 	pairCount := len(transmissions) * len(receiveChannels)
 	if pairCount == 0 do return
 	maxPairGroups := int(simulator.device.physicalDevice.properties.limits.maxComputeWorkGroupCount.y)
@@ -1490,7 +1490,7 @@ dispatch_vk_pulse_echo_convolution :: proc(
 		pairChunkCount := min(maxPairGroups, pairCount - pairOffset)
 		for sampleOffset: i32 = 0; sampleOffset < settings.sampleCount; sampleOffset += maxSampleChunkSize {
 			sampleChunkCount := min(maxSampleChunkSize, settings.sampleCount - sampleOffset)
-			vkField_vk.cmd_push_constants(
+			ekhos_vk.cmd_push_constants(
 				commandBuffer,
 				simulator.pipelineLayout,
 				stage,
@@ -1516,24 +1516,24 @@ dispatch_vk_pulse_echo_convolution :: proc(
 
 run_vk_scatter_window :: proc(
 	simulator: ^vkSimulator,
-	device: vkField_vk.Device,
-	timelineWait: #soa[]vkField_vk.WaitSemaphore,
+	device: ekhos_vk.Device,
+	timelineWait: #soa[]ekhos_vk.WaitSemaphore,
 	hasTransferQueue: bool,
 	totalScatterCommands: int,
 	scatterComputeStartValue: u64,
 	progressStopwatch: time.Stopwatch,
 	lastProgressLogTime: time.Duration,
 ) -> (
-	commandBuffer: vkField_vk.CommandBuffer,
+	commandBuffer: ekhos_vk.CommandBuffer,
 	updatedLastProgressLogTime: time.Duration,
 	result: vk.Result,
 ) {
 	windowComputeTimelineValue := simulator.computeTimelineValue
 	timelineWait.value[0] = windowComputeTimelineValue
-	vkField_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
+	ekhos_vk.wait_semaphores(device, timelineWait, auto_cast time.duration_nanoseconds(auto_cast DISPATCH_TIMEOUT)) or_return
 
 	updatedLastProgressLogTime = lastProgressLogTime
-	completedTimelineValue, timelineValueOk := vkField_vk.get_timeline_value(device, simulator.computeTimeline)
+	completedTimelineValue, timelineValueOk := ekhos_vk.get_timeline_value(device, simulator.computeTimeline)
 	if timelineValueOk {
 		completedCommands := min(int(max(completedTimelineValue, scatterComputeStartValue) - scatterComputeStartValue), totalScatterCommands)
 		fraction := f64(completedCommands) / f64(totalScatterCommands)
@@ -1558,35 +1558,35 @@ run_vk_scatter_window :: proc(
 		}
 	}
 	if hasTransferQueue {
-		vkField_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
+		ekhos_vk.reset_command_pool(device, &simulator.transferCommandPool) or_return
 	}
-	vkField_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
-	commandBuffer = vkField_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
+	ekhos_vk.reset_command_pool(device, &simulator.computeCommandPool) or_return
+	commandBuffer = ekhos_vk.get_command_buffer(device, &simulator.computeCommandPool) or_return
 	return
 }
 
-device_buffer :: proc(device: vkField_vk.Device, size: vk.DeviceSize) -> (buffer: vkField_vk.Buffer, result: vk.Result) {
-	buffer = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
-	memoryType, memoryTypeOk := vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
+device_buffer :: proc(device: ekhos_vk.Device, size: vk.DeviceSize) -> (buffer: ekhos_vk.Buffer, result: vk.Result) {
+	buffer = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
+	memoryType, memoryTypeOk := ekhos_vk.find_private_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer))
 	if !memoryTypeOk {
-		vkField_vk.destroy_buffer(device, buffer)
-		buffer = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
-		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer));
+		ekhos_vk.destroy_buffer(device, buffer)
+		buffer = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
+		if memoryType, memoryTypeOk = ekhos_vk.find_private_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer));
 		   !memoryTypeOk {
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
+	ekhos_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
 	return
 }
 
 device_buffers :: proc(
-	device: vkField_vk.Device,
+	device: ekhos_vk.Device,
 	sizes: []vk.DeviceSize,
 	alignment: vk.DeviceSize = 1,
 ) -> (
-	memory: vkField_vk.Memory,
-	buffers: []vkField_vk.Buffer,
+	memory: ekhos_vk.Memory,
+	buffers: []ekhos_vk.Buffer,
 	result: vk.Result,
 ) {
 	totalSize: vk.DeviceSize
@@ -1596,96 +1596,96 @@ device_buffers :: proc(
 		totalSize = offsets[index] + sizes[index]
 	}
 	{
-		buffer := vkField_vk.create_buffer(device, totalSize, {.STORAGE_BUFFER}) or_return
-		memoryType, memoryTypeOk := vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
+		buffer := ekhos_vk.create_buffer(device, totalSize, {.STORAGE_BUFFER}) or_return
+		memoryType, memoryTypeOk := ekhos_vk.find_private_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer))
 		if !memoryTypeOk {
-			vkField_vk.destroy_buffer(device, buffer)
-			buffer = vkField_vk.create_buffer(device, totalSize, {.STORAGE_BUFFER}) or_return
-			if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer));
+			ekhos_vk.destroy_buffer(device, buffer)
+			buffer = ekhos_vk.create_buffer(device, totalSize, {.STORAGE_BUFFER}) or_return
+			if memoryType, memoryTypeOk = ekhos_vk.find_private_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer));
 			   !memoryTypeOk {
 				return {}, {}, .ERROR_OUT_OF_HOST_MEMORY
 			}
 		}
-		vkField_vk.destroy_buffer(device, buffer)
-		memory = vkField_vk.allocate_memory(device, memoryType, totalSize) or_return
+		ekhos_vk.destroy_buffer(device, buffer)
+		memory = ekhos_vk.allocate_memory(device, memoryType, totalSize) or_return
 	}
-	buffers = make([]vkField_vk.Buffer, len(sizes))
+	buffers = make([]ekhos_vk.Buffer, len(sizes))
 	for &buffer, index in buffers {
-		buffer = vkField_vk.create_buffer(device, sizes[index], {.STORAGE_BUFFER}) or_return
-		vkField_vk.bind(device, &buffer, memory, offsets[index]) or_return
+		buffer = ekhos_vk.create_buffer(device, sizes[index], {.STORAGE_BUFFER}) or_return
+		ekhos_vk.bind(device, &buffer, memory, offsets[index]) or_return
 	}
 	return
 }
 
-prepare_stream :: proc(device: vkField_vk.Device, size: vk.DeviceSize, queueFamilyIndices: []u32 = {}) -> (buffer: vkStagableBuffer, result: vk.Result) {
+prepare_stream :: proc(device: ekhos_vk.Device, size: vk.DeviceSize, queueFamilyIndices: []u32 = {}) -> (buffer: vkStagableBuffer, result: vk.Result) {
 	sharingMode := len(queueFamilyIndices) > 0 ? vk.SharingMode.CONCURRENT : vk.SharingMode.EXCLUSIVE
-	buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}, sharingMode, queueFamilyIndices) or_return
-	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main))
+	buffer.main = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}, sharingMode, queueFamilyIndices) or_return
+	memoryType, memoryTypeOk := ekhos_vk.find_streaming_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer.main))
 	if !memoryTypeOk {
-		vkField_vk.destroy_buffer(device, buffer.main)
-		buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}, sharingMode, queueFamilyIndices) or_return
-		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main));
+		ekhos_vk.destroy_buffer(device, buffer.main)
+		buffer.main = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}, sharingMode, queueFamilyIndices) or_return
+		if memoryType, memoryTypeOk = ekhos_vk.find_private_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer.main));
 		   !memoryTypeOk {
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
+	ekhos_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
 
-	if !vkField_vk.is_mapped(buffer.main) {
-		stagingBuffer := vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
-		if memoryType, memoryTypeOk = vkField_vk.find_staging_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, stagingBuffer));
+	if !ekhos_vk.is_mapped(buffer.main) {
+		stagingBuffer := ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
+		if memoryType, memoryTypeOk = ekhos_vk.find_staging_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, stagingBuffer));
 		   !memoryTypeOk {
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
-		vkField_vk.bind_buffer_to_dedicated_memory(device, &stagingBuffer, memoryType) or_return
+		ekhos_vk.bind_buffer_to_dedicated_memory(device, &stagingBuffer, memoryType) or_return
 		buffer.staging = stagingBuffer
 	}
 	return
 }
 
-prepare_temporal_output_buffer :: proc(device: vkField_vk.Device, size: vk.DeviceSize) -> (buffer: vkField_vk.Buffer, result: vk.Result) {
-	buffer = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_SRC}) or_return
-	memoryType, memoryTypeOk := vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
+prepare_temporal_output_buffer :: proc(device: ekhos_vk.Device, size: vk.DeviceSize) -> (buffer: ekhos_vk.Buffer, result: vk.Result) {
+	buffer = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_SRC}) or_return
+	memoryType, memoryTypeOk := ekhos_vk.find_private_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer))
 	if !memoryTypeOk {
-		vkField_vk.destroy_buffer(device, buffer)
+		ekhos_vk.destroy_buffer(device, buffer)
 		return {}, .ERROR_OUT_OF_HOST_MEMORY
 	}
-	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
+	ekhos_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
 	return
 }
 
-prepare_scatter_buffer :: proc(device: vkField_vk.Device, size: vk.DeviceSize) -> (buffer: vkField_vk.Buffer, result: vk.Result) {
-	buffer = vkField_vk.create_buffer(device, size, {.TRANSFER_SRC}) or_return
-	memoryType, memoryTypeOk := vkField_vk.find_staging_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer))
+prepare_scatter_buffer :: proc(device: ekhos_vk.Device, size: vk.DeviceSize) -> (buffer: ekhos_vk.Buffer, result: vk.Result) {
+	buffer = ekhos_vk.create_buffer(device, size, {.TRANSFER_SRC}) or_return
+	memoryType, memoryTypeOk := ekhos_vk.find_staging_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer))
 	if !memoryTypeOk {
-		vkField_vk.destroy_buffer(device, buffer)
+		ekhos_vk.destroy_buffer(device, buffer)
 		return {}, .ERROR_OUT_OF_HOST_MEMORY
 	}
-	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
-	assert(vkField_vk.is_mapped(buffer))
+	ekhos_vk.bind_buffer_to_dedicated_memory(device, &buffer, memoryType) or_return
+	assert(ekhos_vk.is_mapped(buffer))
 	return
 }
 
-prepare_readback :: proc(device: vkField_vk.Device, size: vk.DeviceSize) -> (buffer: vkStagableBuffer, result: vk.Result) {
-	buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
-	memoryType, memoryTypeOk := vkField_vk.find_streaming_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main))
+prepare_readback :: proc(device: ekhos_vk.Device, size: vk.DeviceSize) -> (buffer: vkStagableBuffer, result: vk.Result) {
+	buffer.main = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_DST}) or_return
+	memoryType, memoryTypeOk := ekhos_vk.find_streaming_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer.main))
 	if !memoryTypeOk {
-		vkField_vk.destroy_buffer(device, buffer.main)
-		buffer.main = vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_SRC, .TRANSFER_DST}) or_return
-		if memoryType, memoryTypeOk = vkField_vk.find_private_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, buffer.main));
+		ekhos_vk.destroy_buffer(device, buffer.main)
+		buffer.main = ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER, .TRANSFER_SRC, .TRANSFER_DST}) or_return
+		if memoryType, memoryTypeOk = ekhos_vk.find_private_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, buffer.main));
 		   !memoryTypeOk {
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
 	}
-	vkField_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
+	ekhos_vk.bind_buffer_to_dedicated_memory(device, &buffer.main, memoryType) or_return
 
-	if !vkField_vk.is_mapped(buffer.main) {
-		readbackBuffer := vkField_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
-		if memoryType, memoryTypeOk = vkField_vk.find_readback_memory_type(device.physicalDevice, vkField_vk.get_memory_requirements(device, readbackBuffer));
+	if !ekhos_vk.is_mapped(buffer.main) {
+		readbackBuffer := ekhos_vk.create_buffer(device, size, {.STORAGE_BUFFER}) or_return
+		if memoryType, memoryTypeOk = ekhos_vk.find_readback_memory_type(device.physicalDevice, ekhos_vk.get_memory_requirements(device, readbackBuffer));
 		   !memoryTypeOk {
 			return {}, .ERROR_OUT_OF_HOST_MEMORY
 		}
-		vkField_vk.bind_buffer_to_dedicated_memory(device, &readbackBuffer, memoryType) or_return
+		ekhos_vk.bind_buffer_to_dedicated_memory(device, &readbackBuffer, memoryType) or_return
 		buffer.staging = readbackBuffer
 	}
 	return

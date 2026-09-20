@@ -1,14 +1,14 @@
 classdef Simulation < handle
 
     properties
-        SimulatorType(1,1) vkField.SimulatorType = vkField.SimulatorType.CPU;
+        SimulatorType(1,1) ekhos.SimulatorType = ekhos.SimulatorType.CPU;
         Cumulative(1,1) logical = true;
     end
 
     properties
-        CpuSettings(1,1) vkField.CpuSettings = vkField.CpuSettings();
-        GpuSettings(1,1) vkField.GpuSettings = vkField.GpuSettings();
-        Metrics(1,1) vkField.SimulatorMetrics = vkField.SimulatorMetrics();
+        CpuSettings(1,1) ekhos.CpuSettings = ekhos.CpuSettings();
+        GpuSettings(1,1) ekhos.GpuSettings = ekhos.GpuSettings();
+        Metrics(1,1) ekhos.SimulatorMetrics = ekhos.SimulatorMetrics();
     end
 
     properties
@@ -23,10 +23,10 @@ classdef Simulation < handle
     end
 
     properties
-        Elements(1,1) vkField.RectangularElementSet
-        Transmissions(1,1) vkField.TransmissionSet
-        ReceiveChannels(1,1) vkField.ReceiveChannelSet
-        Scatters(1,1) vkField.ScatterSet
+        Elements(1,1) ekhos.RectangularElementSet
+        Transmissions(1,1) ekhos.TransmissionSet
+        ReceiveChannels(1,1) ekhos.ReceiveChannelSet
+        Scatters(1,1) ekhos.ScatterSet
         Impulses(1,:) cell
         Excitations(1,:) cell
     end
@@ -34,10 +34,10 @@ classdef Simulation < handle
     methods
         function call(simulation)
             arguments
-                simulation(1,1) vkField.Simulation
+                simulation(1,1) ekhos.Simulation
             end
-            mex("matlab\vkField_lib.c", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
-            vkField_mex(simulation);
+            mex("matlab\ekhosLib.c", "matlab\ekhosLib.lib", "-g", "-R2018a", "-output", "matlab\ekhosMex");
+            ekhosMex(simulation);
         end
     end
 

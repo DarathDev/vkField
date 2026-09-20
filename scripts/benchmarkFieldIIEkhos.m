@@ -1,4 +1,4 @@
-%% Benchmark Field II against vkField CPU and GPU.
+%% Benchmark Field II against Ekhos CPU and GPU.
 % The benchmark varies physical element count, scatter count, receive-channel
 % grouping, and the number of transmissions. Results are written to a table
 % and saved as a MAT file in the figures directory.
@@ -78,14 +78,14 @@ for arrayKind = ["linear", "matrix"]
                     assert(size(fieldIIGrouped, 2) == receiveChannelCount, ...
                         "Field II grouping produced an unexpected channel count.");
 
-                    simulatorTypes = [vkField.SimulatorType.CPU, vkField.SimulatorType.GPU];
+                    simulatorTypes = [ekhos.SimulatorType.CPU, ekhos.SimulatorType.GPU];
                     simulatorTypes = simulatorTypes([runCPU, runGPU]);
                     for simulatorType = simulatorTypes
                         simulation = makeVkSimulation(...
                             arrayKind, rowCount, columnCount, scatterPositions, scatterAmplitudes, ...
                             receiveGroupSize, transmissionCount, fs, c, impulseResponse, excitation);
                         timer = tic();
-                        vkData = vkField_mex(simulation);
+                        vkData = ekhosMex(simulation);
                         wallTime = toc(timer);
                         vkData = double(vkData);
                         if ismatrix(vkData)
@@ -123,8 +123,8 @@ if writeResults
         mkdir(outputDirectory);
     end
     timestamp = string(datetime("now", "Format", "yyyyMMdd-HHmmss"));
-    writetable(results, fullfile(outputDirectory, "fieldII-vkField-benchmark-" + timestamp + ".csv"));
-    save(fullfile(outputDirectory, "fieldII-vkField-benchmark-" + timestamp + ".mat"), "results");
+    writetable(results, fullfile(outputDirectory, "fieldII-Ekhos-benchmark-" + timestamp + ".csv"));
+    save(fullfile(outputDirectory, "fieldII-Ekhos-benchmark-" + timestamp + ".mat"), "results");
 end
 
 %% Local functions
@@ -174,13 +174,13 @@ function simulation = makeVkSimulation(...
     receiveGroupSize, transmissionCount, fs, c, impulseResponse, excitation)
 elementCount = rowCount * columnCount;
 [elementPositions, elementSizes] = makeElementGeometry(arrayKind, rowCount, columnCount);
-simulation = vkField.Simulation();
+simulation = ekhos.Simulation();
 simulation.Cumulative = false;
 simulation.SamplingFrequency = fs;
 simulation.SpeedOfSound = c;
 simulation.Impulses = {single(impulseResponse)};
 simulation.Excitations = {single(excitation)};
-simulation.Elements = vkField.RectangularElementSet();
+simulation.Elements = ekhos.RectangularElementSet();
 simulation.Elements.Count = uint32(2 * elementCount);
 simulation.Elements.Positions = single([elementPositions, elementPositions]);
 simulation.Elements.Normals = repmat(single([0; 0; 1]), 1, 2 * elementCount);
@@ -188,7 +188,7 @@ simulation.Elements.Sizes = single([elementSizes, elementSizes]);
 simulation.Elements.Apodizations = ones(1, 2 * elementCount, "single");
 simulation.Elements.Delays = zeros(1, 2 * elementCount, "single");
 
-transmissions = vkField.TransmissionSet();
+transmissions = ekhos.TransmissionSet();
 transmissions.Count = uint32(transmissionCount);
 transmissions.ElementCounts = repmat(uint32(elementCount), 1, transmissionCount);
 transmissions.Indices = repmat(int32(1:elementCount), 1, transmissionCount);
@@ -199,7 +199,7 @@ transmissions.Excitation = ones(1, transmissionCount, "uint16");
 simulation.Transmissions = transmissions;
 
 receiveChannelCount = elementCount / receiveGroupSize;
-receiveChannels = vkField.ReceiveChannelSet();
+receiveChannels = ekhos.ReceiveChannelSet();
 receiveChannels.Count = uint32(receiveChannelCount);
 receiveChannels.ElementCounts = repmat(uint32(receiveGroupSize), 1, receiveChannelCount);
 receiveChannels.Indices = int32(elementCount + reshape(reshape(1:elementCount, receiveGroupSize, [])', 1, []));
@@ -208,7 +208,7 @@ receiveChannels.Delays = zeros(1, elementCount, "single");
 receiveChannels.Impulse = ones(1, receiveChannelCount, "uint16");
 simulation.ReceiveChannels = receiveChannels;
 
-simulation.Scatters = vkField.ScatterSet();
+simulation.Scatters = ekhos.ScatterSet();
 simulation.Scatters.Count = uint32(size(scatterPositions, 2));
 simulation.Scatters.Positions = single(scatterPositions);
 simulation.Scatters.Amplitudes = single(scatterAmplitudes);

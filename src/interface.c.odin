@@ -1,11 +1,11 @@
-package vkfield
+package ekhos
 
 import "base:runtime"
 import "core:fmt"
 import "core:log"
 import "core:strings"
-import "vkField:utility"
-import vkField_vk "vkField:vulkan"
+import "ekhos:utility"
+import ekhos_vk "ekhos:vulkan"
 
 @(export)
 create_cpu_simulator_c :: proc "c" (simulator: ^^Simulator, cLogger: cLogProc = nil, cAssert: cAssertProc = nil, userData: rawptr = nil) -> (ok := true) {
@@ -39,8 +39,8 @@ create_vulkan_simulator_c :: proc "c" (
 ) -> (
 	ok := true,
 ) {
-	if !vkField_vk.VKFIELD_VULKAN_INITIALIZED {
-		vkField_vk.initialize()
+	if !ekhos_vk.EKHOS_VULKAN_INITIALIZED {
+		ekhos_vk.initialize()
 	}
 	context = runtime.default_context()
 	context.logger = c_logger(context.logger, cLogger, userData)

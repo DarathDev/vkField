@@ -62,15 +62,15 @@ data = fieldII.xdc_get(rTh, 'rect');
 
 addpath("matlab\")
 
-simulator = vkField.Simulation();
+simulator = ekhos.Simulation();
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 simulator.Cumulative = true;
-simulator.SimulatorType = vkField.SimulatorType.CPU;
+simulator.SimulatorType = ekhos.SimulatorType.CPU;
 simulator.Impulses = {single(impulseResponse)};
 simulator.Excitations = {single(excitation)};
 
-simulator.Elements = vkField.RectangularElementSet();
+simulator.Elements = ekhos.RectangularElementSet();
 simulator.Elements.Count = uint32(2);
 simulator.Elements.Positions = single([reshape(diePositionT(:), 3, 1), reshape(diePositionR(:), 3, 1)]);
 simulator.Elements.Normals = single([reshape([0, 0, 1], 3, 1), reshape([0, 0, 1], 3, 1)]);
@@ -78,7 +78,7 @@ simulator.Elements.Sizes = single([reshape(dieWidthT(:), 2, 1), reshape(dieWidth
 simulator.Elements.Apodizations = single([1, 1]);
 simulator.Elements.Delays = single([0, 0]);
 
-transmissions = vkField.TransmissionSet();
+transmissions = ekhos.TransmissionSet();
 transmissions.Count = uint32(1);
 transmissions.ElementCounts = uint32(1);
 transmissions.Indices = int32(1);
@@ -88,7 +88,7 @@ transmissions.Impulse = ones(1, transmissions.Count, 'uint16');
 transmissions.Excitation = ones(1, transmissions.Count, 'uint16');
 simulator.Transmissions = transmissions;
 
-receiveChannels = vkField.ReceiveChannelSet();
+receiveChannels = ekhos.ReceiveChannelSet();
 receiveChannels.Count = uint32(1);
 receiveChannels.ElementCounts = uint32(1);
 receiveChannels.Indices = int32(2);
@@ -97,13 +97,13 @@ receiveChannels.Delays = single(0);
 receiveChannels.Impulse = ones(1, receiveChannels.Count, 'uint16');
 simulator.ReceiveChannels = receiveChannels;
 
-scatterSet = vkField.ScatterSet();
+scatterSet = ekhos.ScatterSet();
 scatterSet.Count = uint32(1);
 scatterSet.Positions = single(reshape(scatterPosition(:), 3, 1));
 scatterSet.Amplitudes = single(1);
 simulator.Scatters = scatterSet;
 
-transmitSet = vkField.RectangularElementSet();
+transmitSet = ekhos.RectangularElementSet();
 transmitSet.Count = uint32(1);
 transmitSet.Positions = single(simulator.Elements.Positions(:, transmissions.Indices(1)));
 transmitSet.Normals = single(simulator.Elements.Normals(:, transmissions.Indices(1)));
@@ -111,7 +111,7 @@ transmitSet.Sizes = single(simulator.Elements.Sizes(:, transmissions.Indices(1))
 transmitSet.Apodizations = single(simulator.Elements.Apodizations(transmissions.Indices(1)));
 transmitSet.Delays = single(simulator.Elements.Delays(transmissions.Indices(1)));
 
-receiveSet = vkField.RectangularElementSet();
+receiveSet = ekhos.RectangularElementSet();
 receiveSet.Count = uint32(1);
 receiveSet.Positions = single(simulator.Elements.Positions(:, receiveChannels.Indices(1)));
 receiveSet.Normals = single(simulator.Elements.Normals(:, receiveChannels.Indices(1)));
@@ -337,10 +337,10 @@ manualCumConvRf = conv(manualCumConvRf, single(impulseResponse))*single(dt);
 manualCumConvRf = conv(manualCumConvRf, single(impulseResponse))*single(dt);
 manualCumConvRf = conv(manualCumConvRf, single(excitation))*single(dt);
 
-%% vkField
+%% Ekhos
 
-mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
-pulseEcho = vkField_mex(simulator);
+mex("matlab\ekhosLib.cpp", "matlab\ekhosLib.lib", "-g", "-R2018a", "-output", "matlab\ekhosMex");
+pulseEcho = ekhosMex(simulator);
 vkStartTime = simulator.StartTime;
 
 pulseEcho = double(pulseEcho) * dt;
@@ -358,7 +358,7 @@ if plotting
     p1(3) = plot(ax1, manTimes*1e6, manualConvRf, '-');
     p1(4) = plot(ax1, manTimes*1e6, manualCumConvRf, '-');
     p1(5) = plot(ax1, vkTimes*1e6, pulseEcho, '-');
-    legend(ax1, "FieldII", "Manual Fraunhoffer", "Manual Fraounhoffer with Manual Convolution", "Manual Fraounhoffer Cumulative with Manual Convolution", "vkField");
+    legend(ax1, "FieldII", "Manual Fraunhoffer", "Manual Fraounhoffer with Manual Convolution", "Manual Fraounhoffer Cumulative with Manual Convolution", "Ekhos");
 
     lineWidth = 16;
     for i = 1:numel(p1)
@@ -375,7 +375,7 @@ fprintf("FieldII Energy to distance ratio %g\n", sum(abs(fullRF))/distanceRatio)
 fprintf("Fraunhoffer Energy to distance ratio %g\n", double(sum(abs(fraun)))/distanceRatio);
 fprintf("Manual Conv Energy to distance ratio %g\n", double(sum(abs(manualConvRf)))/distanceRatio);
 fprintf("Manual Cumulative Energy to distance ratio %g\n", double(sum(abs(manualCumConvRf)))/distanceRatio);
-fprintf("vkField Energy to distance ratio %g\n", double(sum(abs(pulseEcho)))/distanceRatio);
+fprintf("Ekhos Energy to distance ratio %g\n", double(sum(abs(pulseEcho)))/distanceRatio);
 
 distanceRatio = 1/(2*pi*lT)*(2*pi*lR);
 fprintf("\n\n Sim Energy Density to Distance Ratios\n")
@@ -383,13 +383,13 @@ fprintf("FieldII Energy Density to distance ratio %g\n", sum(abs(fullRF))/distan
 fprintf("Fraunhoffer Energy Density to distance ratio %g\n", double(sum(abs(fraun)))/distanceRatio);
 fprintf("Manual Conv Energy Density to distance ratio %g\n", double(sum(abs(manualConvRf)))/distanceRatio);
 fprintf("Manual Cumulative Energy Density to distance ratio %g\n", double(sum(abs(manualCumConvRf)))/distanceRatio);
-fprintf("vkField Energy Density to distance ratio %g\n", double(sum(abs(pulseEcho)))/distanceRatio);
+fprintf("Ekhos Energy Density to distance ratio %g\n", double(sum(abs(pulseEcho)))/distanceRatio);
 
 fprintf("\n\n Sim to Field II Ratios\n")
 fprintf("Fraunhoffer to FieldII ratio %g\n", double(sum(abs(fraun)))/sum(abs(fullRF)));
 fprintf("Manual Conv to FieldII ratio %g\n", double(sum(abs(manualConvRf)))/sum(abs(fullRF)));
 fprintf("Manual Cumulative to FieldII ratio %g\n", double(sum(abs(manualCumConvRf)))/sum(abs(fullRF)));
-fprintf("vkField to FieldII ratio %g\n", double(sum(abs(pulseEcho)))/sum(abs(fullRF)));
+fprintf("Ekhos to FieldII ratio %g\n", double(sum(abs(pulseEcho)))/sum(abs(fullRF)));
 
 %%% Near field (Exact Analytic) Rectangle spatial impulse
 %% Rectangle 2a wide (x) 2b long (y)

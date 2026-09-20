@@ -100,9 +100,9 @@ for caseIndex = 1:caseCount
     elementApodizations = single([1, 1]);
     elementDelays = single([0, 0]);
 
-    [cpuData, cpuStartTime] = run_vkfield(vkField.SimulatorType.CPU, elementPositions, elementNormals, elementSizes, ...
+    [cpuData, cpuStartTime] = run_ekhos(ekhos.SimulatorType.CPU, elementPositions, elementNormals, elementSizes, ...
         elementApodizations, elementDelays, scatterPosition, fs, c, impulseResponse, excitation);
-    [gpuData, gpuStartTime] = run_vkfield(vkField.SimulatorType.GPU, elementPositions, elementNormals, elementSizes, ...
+    [gpuData, gpuStartTime] = run_ekhos(ekhos.SimulatorType.GPU, elementPositions, elementNormals, elementSizes, ...
         elementApodizations, elementDelays, scatterPosition, fs, c, impulseResponse, excitation);
 
     [fieldAligned, cpuAligned, gpuAligned, compareTimes] = align_signals(...
@@ -205,8 +205,8 @@ ylabel('Case count');
 title('Distribution of Field II/CPU RMS errors');
 end
 
-function [data, startTime] = run_vkfield(simulatorType, positions, normals, sizes, apodizations, delays, scatterPosition, fs, c, impulseResponse, excitation)
-simulation = vkField.Simulation();
+function [data, startTime] = run_ekhos(simulatorType, positions, normals, sizes, apodizations, delays, scatterPosition, fs, c, impulseResponse, excitation)
+simulation = ekhos.Simulation();
 simulation.SimulatorType = simulatorType;
 simulation.Cumulative = true;
 simulation.GpuSettings.EnableDriverDebugMessages = false;
@@ -214,14 +214,14 @@ simulation.SamplingFrequency = single(fs);
 simulation.SpeedOfSound = single(c);
 simulation.Impulses = {single(impulseResponse)};
 simulation.Excitations = {single(excitation)};
-simulation.Elements = vkField.RectangularElementSet();
+simulation.Elements = ekhos.RectangularElementSet();
 simulation.Elements.Count = uint32(2);
 simulation.Elements.Positions = positions;
 simulation.Elements.Normals = normals;
 simulation.Elements.Sizes = sizes;
 simulation.Elements.Apodizations = apodizations;
 simulation.Elements.Delays = delays;
-transmission = vkField.TransmissionSet();
+transmission = ekhos.TransmissionSet();
 transmission.Count = uint32(1);
 transmission.ElementCounts = uint32(1);
 transmission.Indices = int32(1);
@@ -230,7 +230,7 @@ transmission.Delays = single(0);
 transmission.Impulse = ones(1, transmission.Count, 'uint16');
 transmission.Excitation = ones(1, transmission.Count, 'uint16');
 simulation.Transmissions = transmission;
-receiveChannel = vkField.ReceiveChannelSet();
+receiveChannel = ekhos.ReceiveChannelSet();
 receiveChannel.Count = uint32(1);
 receiveChannel.ElementCounts = uint32(1);
 receiveChannel.Indices = int32(2);
@@ -238,13 +238,13 @@ receiveChannel.Apodizations = single(1);
 receiveChannel.Delays = single(0);
 receiveChannel.Impulse = ones(1, receiveChannel.Count, 'uint16');
 simulation.ReceiveChannels = receiveChannel;
-simulation.Scatters = vkField.ScatterSet();
+simulation.Scatters = ekhos.ScatterSet();
 simulation.Scatters.Count = uint32(1);
 simulation.Scatters.Positions = single(scatterPosition);
 simulation.Scatters.Amplitudes = single(1);
-data = squeeze(double(vkField_mex(simulation)));
+data = squeeze(double(ekhosMex(simulation)));
 simulatorLabel = 'CPU';
-if simulatorType == vkField.SimulatorType.GPU
+if simulatorType == ekhos.SimulatorType.GPU
     simulatorLabel = 'GPU';
 end
 fprintf('raw %s peak=%e\n', simulatorLabel, max(abs(data), [], 'all'));
@@ -355,7 +355,7 @@ plotHandles = plot(times * 1e6, fieldData, '-', times * 1e6, cpuData, '--', time
 plotHandles(1).LineWidth = 4*3.0;
 plotHandles(2).LineWidth = 4*2.0;
 plotHandles(3).LineWidth = 4*1.0;
-legend('Field II', 'vkField CPU', 'vkField GPU');
+legend('Field II', 'Ekhos CPU', 'Ekhos GPU');
 title(sprintf('case %d scatter=[%.3f %.3f %.3f] mm tx=[%g %g %g] rx=[%g %g %g]', ...
     caseIndex, scatterPosition * 1e3, transmitPosition, receivePosition));
 xlabel('Time (us)');

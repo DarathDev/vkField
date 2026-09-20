@@ -1,12 +1,12 @@
-package vkField_utility
+package ekhos_utility
 
 import "base:intrinsics"
 import "base:runtime"
 import "core:log"
 import "core:testing"
 
-VKFIELD_IS_DEBUG :: ODIN_DEBUG
-VKFIELD_IS_RELEASE :: !ODIN_DEBUG
+EKHOS_IS_DEBUG :: ODIN_DEBUG
+EKHOS_IS_RELEASE :: !ODIN_DEBUG
 
 panic :: #force_inline proc(ok: bool, message: string, loc := #caller_location, detail: ..any) {
 	if ok do return
@@ -214,7 +214,7 @@ ensure_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #cal
 }
 
 verify_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #caller_location) -> bool where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(bool(condition), message, loc)
 	} else {
 		panic(bool(condition), message, loc)
@@ -223,7 +223,7 @@ verify_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #cal
 }
 
 confirm_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #caller_location) -> bool where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(condition), message, loc)
 	} else {
 		error(bool(condition), message, loc)
@@ -232,7 +232,7 @@ confirm_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #ca
 }
 
 assert_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #caller_location) where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(condition), message, loc)
 	} else {
 		ignore(bool(condition), message, loc)
@@ -240,7 +240,7 @@ assert_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #cal
 }
 
 check_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #caller_location) -> bool where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(bool(condition), message, loc)
 	} else {
 		warn(bool(condition), message, loc)
@@ -249,7 +249,7 @@ check_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #call
 }
 
 assume_bool_zero :: #force_inline proc(condition: $B, message := "", loc := #caller_location) where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(bool(condition), message, loc)
 	}
 }
@@ -279,7 +279,7 @@ verify_bool_one :: #force_inline proc(
 	T,
 	bool,
 ) where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(bool(ok), message, loc)
 	} else {
 		panic(bool(ok), message, loc)
@@ -296,7 +296,7 @@ confirm_bool_one :: #force_inline proc(
 	T,
 	bool,
 ) where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		error(bool(ok), message, loc)
@@ -305,7 +305,7 @@ confirm_bool_one :: #force_inline proc(
 }
 
 assert_bool_one :: #force_inline proc(value: $T, ok: $B, message := #caller_expression, loc := #caller_location) -> T where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		ignore(bool(ok), message, loc)
@@ -322,7 +322,7 @@ check_bool_one :: #force_inline proc(
 	T,
 	bool,
 ) where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(bool(ok), message, loc)
 	} else {
 		warn(bool(ok), message, loc)
@@ -331,7 +331,7 @@ check_bool_one :: #force_inline proc(
 }
 
 assume_bool_one :: #force_inline proc(value: $T, ok: $B, message := #caller_expression, loc := #caller_location) -> T where intrinsics.type_is_boolean(B) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(bool(ok), message, loc)
 	}
 	return value
@@ -381,7 +381,7 @@ verify_bool_two :: #force_inline proc(
 	B,
 	bool,
 ) where intrinsics.type_is_boolean(C) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(bool(ok), message, loc)
 	} else {
 		panic(bool(ok), message, loc)
@@ -400,7 +400,7 @@ confirm_bool_two :: #force_inline proc(
 	B,
 	bool,
 ) where intrinsics.type_is_boolean(C) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		error(bool(ok), message, loc)
@@ -409,7 +409,7 @@ confirm_bool_two :: #force_inline proc(
 }
 
 assert_bool_two :: #force_inline proc(first: $A, second: $B, ok: $C, message := "", loc := #caller_location) -> (A, B) where intrinsics.type_is_boolean(C) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		ignore(bool(ok), message, loc)
@@ -428,7 +428,7 @@ check_bool_two :: #force_inline proc(
 	B,
 	bool,
 ) where intrinsics.type_is_boolean(C) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(bool(ok), message, loc)
 	} else {
 		warn(bool(ok), message, loc)
@@ -437,7 +437,7 @@ check_bool_two :: #force_inline proc(
 }
 
 assume_bool_two :: #force_inline proc(first: $A, second: $B, ok: $C, message := "", loc := #caller_location) -> (A, B) where intrinsics.type_is_boolean(C) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(bool(ok), message, loc)
 	}
 	return first, second
@@ -504,7 +504,7 @@ verify_bool_three :: #force_inline proc(
 	C,
 	bool,
 ) where intrinsics.type_is_boolean(D) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(bool(ok), message, loc)
 	} else {
 		panic(bool(ok), message, loc)
@@ -525,7 +525,7 @@ confirm_bool_three :: #force_inline proc(
 	C,
 	bool,
 ) where intrinsics.type_is_boolean(D) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		error(bool(ok), message, loc)
@@ -545,7 +545,7 @@ assert_bool_three :: #force_inline proc(
 	B,
 	C,
 ) where intrinsics.type_is_boolean(D) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		ignore(bool(ok), message, loc)
@@ -566,7 +566,7 @@ check_bool_three :: #force_inline proc(
 	C,
 	bool,
 ) where intrinsics.type_is_boolean(D) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(bool(ok), message, loc)
 	} else {
 		warn(bool(ok), message, loc)
@@ -586,7 +586,7 @@ assume_bool_three :: #force_inline proc(
 	B,
 	C,
 ) where intrinsics.type_is_boolean(D) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(bool(ok), message, loc)
 	}
 	return first, second, third
@@ -661,7 +661,7 @@ verify_bool_four :: #force_inline proc(
 	D,
 	bool,
 ) where intrinsics.type_is_boolean(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(bool(ok), message, loc)
 	} else {
 		panic(bool(ok), message, loc)
@@ -684,7 +684,7 @@ confirm_bool_four :: #force_inline proc(
 	D,
 	bool,
 ) where intrinsics.type_is_boolean(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		error(bool(ok), message, loc)
@@ -706,7 +706,7 @@ assert_bool_four :: #force_inline proc(
 	C,
 	D,
 ) where intrinsics.type_is_boolean(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(bool(ok), message, loc)
 	} else {
 		ignore(bool(ok), message, loc)
@@ -729,7 +729,7 @@ check_bool_four :: #force_inline proc(
 	D,
 	bool,
 ) where intrinsics.type_is_boolean(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(bool(ok), message, loc)
 	} else {
 		warn(bool(ok), message, loc)
@@ -751,7 +751,7 @@ assume_bool_four :: #force_inline proc(
 	C,
 	D,
 ) where intrinsics.type_is_boolean(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(bool(ok), message, loc)
 	}
 	return first, second, third, fourth
@@ -802,7 +802,7 @@ ensure_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_lo
 }
 
 verify_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) -> E where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(cast(int)err == 0, message, loc, err)
 	} else {
 		panic(cast(int)err == 0, message, loc, err)
@@ -811,7 +811,7 @@ verify_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_lo
 }
 
 confirm_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) -> E where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -820,7 +820,7 @@ confirm_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_l
 }
 
 assert_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		ignore(cast(int)err == 0, message, loc, err)
@@ -828,7 +828,7 @@ assert_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_lo
 }
 
 check_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) -> E where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(cast(int)err == 0, message, loc, err)
 	} else {
 		warn(cast(int)err == 0, message, loc, err)
@@ -837,7 +837,7 @@ check_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_loc
 }
 
 assume_enum_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(cast(int)err == 0, message, loc, err)
 	}
 }
@@ -858,7 +858,7 @@ ensure_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_exp
 }
 
 verify_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_expression, loc := #caller_location) -> (T, E) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(cast(int)err == 0, message, loc, err)
 	} else {
 		panic(cast(int)err == 0, message, loc, err)
@@ -867,7 +867,7 @@ verify_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_exp
 }
 
 confirm_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_expression, loc := #caller_location) -> (T, E) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -876,7 +876,7 @@ confirm_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_ex
 }
 
 assert_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_expression, loc := #caller_location) -> T where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -885,7 +885,7 @@ assert_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_exp
 }
 
 check_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_expression, loc := #caller_location) -> (T, E) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(cast(int)err == 0, message, loc, err)
 	} else {
 		warn(cast(int)err == 0, message, loc, err)
@@ -894,7 +894,7 @@ check_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_expr
 }
 
 assume_enum_one :: #force_inline proc(value: $T, err: $E, message := #caller_expression, loc := #caller_location) -> T where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(cast(int)err == 0, message, loc, err)
 	}
 	return value
@@ -944,7 +944,7 @@ verify_enum_two :: #force_inline proc(
 	B,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(cast(int)err == 0, message, loc, err)
 	} else {
 		panic(cast(int)err == 0, message, loc, err)
@@ -963,7 +963,7 @@ confirm_enum_two :: #force_inline proc(
 	B,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -981,7 +981,7 @@ assert_enum_two :: #force_inline proc(
 	A,
 	B,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -1000,7 +1000,7 @@ check_enum_two :: #force_inline proc(
 	B,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(cast(int)err == 0, message, loc, err)
 	} else {
 		warn(cast(int)err == 0, message, loc, err)
@@ -1018,7 +1018,7 @@ assume_enum_two :: #force_inline proc(
 	A,
 	B,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(cast(int)err == 0, message, loc, err)
 	}
 	return first, second
@@ -1074,7 +1074,7 @@ verify_enum_three :: #force_inline proc(
 	C,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(cast(int)err == 0, message, loc, err)
 	} else {
 		panic(cast(int)err == 0, message, loc, err)
@@ -1095,7 +1095,7 @@ confirm_enum_three :: #force_inline proc(
 	C,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -1115,7 +1115,7 @@ assert_enum_three :: #force_inline proc(
 	B,
 	C,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -1136,7 +1136,7 @@ check_enum_three :: #force_inline proc(
 	C,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(cast(int)err == 0, message, loc, err)
 	} else {
 		warn(cast(int)err == 0, message, loc, err)
@@ -1156,7 +1156,7 @@ assume_enum_three :: #force_inline proc(
 	B,
 	C,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(cast(int)err == 0, message, loc, err)
 	}
 	return first, second, third
@@ -1218,7 +1218,7 @@ verify_enum_four :: #force_inline proc(
 	D,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(cast(int)err == 0, message, loc, err)
 	} else {
 		panic(cast(int)err == 0, message, loc, err)
@@ -1241,7 +1241,7 @@ confirm_enum_four :: #force_inline proc(
 	D,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -1263,7 +1263,7 @@ assert_enum_four :: #force_inline proc(
 	C,
 	D,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(cast(int)err == 0, message, loc, err)
 	} else {
 		error(cast(int)err == 0, message, loc, err)
@@ -1286,7 +1286,7 @@ check_enum_four :: #force_inline proc(
 	D,
 	E,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(cast(int)err == 0, message, loc, err)
 	} else {
 		warn(cast(int)err == 0, message, loc, err)
@@ -1308,7 +1308,7 @@ assume_enum_four :: #force_inline proc(
 	C,
 	D,
 ) where intrinsics.type_is_enum(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(cast(int)err == 0, message, loc, err)
 	}
 	return first, second, third, fourth
@@ -1344,7 +1344,7 @@ ensure_union_zero :: #force_inline proc(err: $E, message := "", loc := #caller_l
 }
 
 verify_union_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) -> E where intrinsics.type_is_union(E) && intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(err == E{}, message, loc, err)
 	} else {
 		panic(err == E{}, message, loc, err)
@@ -1358,7 +1358,7 @@ confirm_union_zero :: #force_inline proc(
 	loc := #caller_location,
 ) -> E where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1367,7 +1367,7 @@ confirm_union_zero :: #force_inline proc(
 }
 
 assert_union_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) where intrinsics.type_is_union(E) && intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1375,7 +1375,7 @@ assert_union_zero :: #force_inline proc(err: $E, message := "", loc := #caller_l
 }
 
 check_union_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) -> E where intrinsics.type_is_union(E) && intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(err == E{}, message, loc, err)
 	} else {
 		warn(err == E{}, message, loc, err)
@@ -1384,7 +1384,7 @@ check_union_zero :: #force_inline proc(err: $E, message := "", loc := #caller_lo
 }
 
 assume_union_zero :: #force_inline proc(err: $E, message := "", loc := #caller_location) where intrinsics.type_is_union(E) && intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(err == E{}, message, loc, err)
 	}
 }
@@ -1426,7 +1426,7 @@ verify_union_one :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(err == E{}, message, loc, err)
 	} else {
 		panic(err == E{}, message, loc, err)
@@ -1444,7 +1444,7 @@ confirm_union_one :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1459,7 +1459,7 @@ assert_union_one :: #force_inline proc(
 	loc := #caller_location,
 ) -> T where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1477,7 +1477,7 @@ check_union_one :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(err == E{}, message, loc, err)
 	} else {
 		warn(err == E{}, message, loc, err)
@@ -1492,7 +1492,7 @@ assume_union_one :: #force_inline proc(
 	loc := #caller_location,
 ) -> T where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(err == E{}, message, loc, err)
 	}
 	return value
@@ -1545,7 +1545,7 @@ verify_union_two :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(err == E{}, message, loc, err)
 	} else {
 		panic(err == E{}, message, loc, err)
@@ -1565,7 +1565,7 @@ confirm_union_two :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1584,7 +1584,7 @@ assert_union_two :: #force_inline proc(
 	B,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1604,7 +1604,7 @@ check_union_two :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(err == E{}, message, loc, err)
 	} else {
 		warn(err == E{}, message, loc, err)
@@ -1623,7 +1623,7 @@ assume_union_two :: #force_inline proc(
 	B,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(err == E{}, message, loc, err)
 	}
 	return first, second
@@ -1682,7 +1682,7 @@ verify_union_three :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(err == E{}, message, loc, err)
 	} else {
 		panic(err == E{}, message, loc, err)
@@ -1704,7 +1704,7 @@ confirm_union_three :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1725,7 +1725,7 @@ assert_union_three :: #force_inline proc(
 	C,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1747,7 +1747,7 @@ check_union_three :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(err == E{}, message, loc, err)
 	} else {
 		warn(err == E{}, message, loc, err)
@@ -1768,7 +1768,7 @@ assume_union_three :: #force_inline proc(
 	C,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(err == E{}, message, loc, err)
 	}
 	return first, second, third
@@ -1844,7 +1844,7 @@ verify_union_four :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		fatal(err == E{}, message, loc, err)
 	} else {
 		panic(err == E{}, message, loc, err)
@@ -1868,7 +1868,7 @@ confirm_union_four :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1891,7 +1891,7 @@ assert_union_four :: #force_inline proc(
 	D,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		panic(err == E{}, message, loc, err)
 	} else {
 		error(err == E{}, message, loc, err)
@@ -1915,7 +1915,7 @@ check_union_four :: #force_inline proc(
 	E,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_RELEASE {
+	when EKHOS_IS_RELEASE {
 		ignore(err == E{}, message, loc, err)
 	} else {
 		warn(err == E{}, message, loc, err)
@@ -1938,7 +1938,7 @@ assume_union_four :: #force_inline proc(
 	D,
 ) where intrinsics.type_is_union(E) &&
 	intrinsics.type_has_nil(E) {
-	when VKFIELD_IS_DEBUG {
+	when EKHOS_IS_DEBUG {
 		warn(err == E{}, message, loc, err)
 	}
 	return first, second, third, fourth

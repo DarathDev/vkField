@@ -72,9 +72,9 @@ tData = fieldII.xdc_get(tTh, 'rect');
 rData = fieldII.xdc_get(rTh, 'rect');
 
 
-%% vkField Simulation
+%% Ekhos Simulation
 
-simulator = vkField.Simulation();
+simulator = ekhos.Simulation();
 simulator.Cumulative = false;
 
 simulator.SamplingFrequency = fs;
@@ -82,7 +82,7 @@ simulator.SpeedOfSound = c;
 simulator.Impulses = {single(impulseResponse)};
 simulator.Excitations = {single(excitation)};
 
-simulator.Elements = vkField.RectangularElementSet();
+simulator.Elements = ekhos.RectangularElementSet();
 simulator.Elements.Count = uint32(size(tData, 2) + size(rData, 2));
 simulator.Elements.Positions = single([tData(8:10, :), rData(8:10, :)]);
 simulator.Elements.Normals = single([tangentsToNormals(tData(8:10, :)), tangentsToNormals(rData(8:10, :))]);
@@ -90,7 +90,7 @@ simulator.Elements.Sizes = single([tData(3:4, :), rData(3:4, :)]);
 simulator.Elements.Apodizations = single([tData(5, :), rData(5, :)]);
 simulator.Elements.Delays = single([tData(23, :), rData(23, :)]);
 
-transmit = vkField.TransmissionSet();
+transmit = ekhos.TransmissionSet();
 transmit.Count = uint32(1);
 transmit.ElementCounts = uint32(size(tData, 2));
 transmit.Indices = int32(1:size(tData, 2));
@@ -100,7 +100,7 @@ transmit.Impulse = ones(1, transmit.Count, 'uint16');
 transmit.Excitation = ones(1, transmit.Count, 'uint16');
 simulator.Transmissions = transmit;
 
-receiveChannels = vkField.ReceiveChannelSet();
+receiveChannels = ekhos.ReceiveChannelSet();
 receiveChannels.Count = uint32(size(rData, 2));
 receiveChannels.ElementCounts = ones(1, size(rData, 2), 'uint32');
 receiveChannels.Indices = int32(size(tData, 2) + (1:size(rData, 2)));
@@ -109,20 +109,20 @@ receiveChannels.Delays = single(rData(23, :));
 receiveChannels.Impulse = ones(1, receiveChannels.Count, 'uint16');
 simulator.ReceiveChannels = receiveChannels;
 
-simulator.Scatters = vkField.ScatterSet();
+simulator.Scatters = ekhos.ScatterSet();
 simulator.Scatters.Count = uint32(size(scatterPosition, 2));
 simulator.Scatters.Positions = single(scatterPosition);
 simulator.Scatters.Amplitudes = single(scatterAmplitude);
 
 
-mex("matlab\vkField_lib.cpp", "matlab\vkField_lib.lib", "-g", "-R2018a", "-output", "matlab\vkField_mex");
+mex("matlab\ekhosLib.cpp", "matlab\ekhosLib.lib", "-g", "-R2018a", "-output", "matlab\ekhosMex");
 vkTimer = tic();
-pulseEcho = vkField_mex(simulator);
+pulseEcho = ekhosMex(simulator);
 vkTime = toc(vkTimer);
 
 fprintf("fieldII Time == %d\n", fieldTime);
-fprintf("vkField Time == %d\n", vkTime);
-fprintf("vkField Self Time == %d\n", simulator.Metrics.SimulationTime);
+fprintf("Ekhos Time == %d\n", vkTime);
+fprintf("Ekhos Self Time == %d\n", simulator.Metrics.SimulationTime);
 fprintf("Relative Speed Up == %d\n", fieldTime / simulator.Metrics.SimulationTime);
 
 pulseEcho = double(pulseEcho) * dt;
@@ -151,7 +151,7 @@ if plotting
         hold(ax2, "off");
         p2(1) = plot(ax2, times*1e6, fullRF(:, i), '-'); hold(ax2, "on");
         p2(2) = plot(ax2, vkTimes*1e6, pulseEcho(:, i), '-');
-        legend(ax2, "FieldII", "vkField");
+        legend(ax2, "FieldII", "Ekhos");
 
         lineWidth = 16;
         for j = 1:numel(p2)

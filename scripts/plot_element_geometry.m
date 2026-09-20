@@ -6,8 +6,8 @@ figure('Name', plotTitle);
 hold on;
 plot_rectangles(fieldIITransmit, [0.1, 0.45, 0.85], [0.1, 0.25, 0.65], 'Field II transmit');
 plot_rectangles(fieldIIReceive, [0.95, 0.55, 0.1], [0.75, 0.3, 0.05], 'Field II receive');
-plot_rectangles(vkTransmitPositions, vkTransmitSizes, [0.2, 0.75, 0.3], [0.1, 0.45, 0.15], 'vkField transmit');
-plot_rectangles(vkReceivePositions, vkReceiveSizes, [0.8, 0.25, 0.8], [0.5, 0.1, 0.55], 'vkField receive');
+plot_rectangles(vkTransmitPositions, vkTransmitSizes, [0.2, 0.75, 0.3], [0.1, 0.45, 0.15], 'Ekhos transmit');
+plot_rectangles(vkReceivePositions, vkReceiveSizes, [0.8, 0.25, 0.8], [0.5, 0.1, 0.55], 'Ekhos receive');
 axis equal;
 view(3);
 grid on;
@@ -23,7 +23,7 @@ if nargin == 4
     faceColor = sizesOrFaceColor;
     edgeColor = faceColorOrEdgeColor;
     label = edgeColorOrLabel;
-    if isa(positionsOrRectData, 'vkField.RectangularElementSet')
+    if isa(positionsOrRectData, 'ekhos.RectangularElementSet')
         plot_position_rectangles(positionsOrRectData.Positions, positionsOrRectData.Sizes, ...
             faceColor, edgeColor);
     else

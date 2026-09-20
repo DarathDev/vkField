@@ -1,6 +1,6 @@
-# VkField
+# Ekhos (ɛkoʊ)
 
-This is a GPU accelerated implementation of [Field II](https://field-ii.dk) using Vulkan.
+Ekhos (pronounced like "Echos") is a simulator for [Field II](https://field-ii.dk), with CPU and Vulkan GPU backends.
 
 While it can perform simulations for arbitrary sets of rectangular and triangular elements, the current front end only has functions for easy simulations of row column arrays.
 
@@ -25,7 +25,7 @@ Note: MATLAB will crash if a debug trap is hit and no debugger is attached.
 
 ```shell
 odin run . -- -test
-./bin/release/vkField_tests
+./bin/release/ekhosTests
 ```
 
 ## Citations

@@ -1,4 +1,4 @@
-package vkfield
+package ekhos
 
 import "base:runtime"
 import "core:log"
@@ -8,7 +8,7 @@ import "core:math/linalg"
 import "core:slice"
 import "core:time"
 import rdoc "import:renderdoc"
-import utility "vkField:utility"
+import utility "ekhos:utility"
 
 @(private = "file")
 is_ok :: utility.is_ok

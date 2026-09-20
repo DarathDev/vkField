@@ -1,4 +1,4 @@
-package vkField_utility
+package ekhos_utility
 
 import "base:intrinsics"
 import "core:mem"

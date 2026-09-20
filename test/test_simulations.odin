@@ -1,12 +1,12 @@
-package vkfield_scripts
+package ekhos_scripts
 
 import "core:log"
 import "core:math"
 import "core:math/rand"
 import "core:slice"
 import "core:testing"
-import vkField "vkField:."
-import utility "vkField:utility"
+import ekhos "ekhos:."
+import utility "ekhos:utility"
 
 check :: utility.check
 is_ok :: utility.is_ok
@@ -50,12 +50,12 @@ matrixArraySimulationTest :: proc(t: ^testing.T) {
 @(test)
 temporalResponseTest :: proc(t: ^testing.T) {
 	input := []f32{1, 2, 3, 0, 0, 0, 0, 0}
-	impulses := []vkField.TransducerImpulse{{1, 2}, {1, -1}}
-	excitations := []vkField.Excitation{{0.5, 1}}
-	transmissions := []vkField.Transmission{{impulse = 1, excitation = 1}}
-	receiveChannels := []vkField.ReceiveChannel{{impulse = 2}}
+	impulses := []ekhos.TransducerImpulse{{1, 2}, {1, -1}}
+	excitations := []ekhos.Excitation{{0.5, 1}}
+	transmissions := []ekhos.Transmission{{impulse = 1, excitation = 1}}
+	receiveChannels := []ekhos.ReceiveChannel{{impulse = 2}}
 
-	vkField.apply_temporal_responses(input, i32(len(input)), 1, transmissions, receiveChannels, impulses, excitations)
+	ekhos.apply_temporal_responses(input, i32(len(input)), 1, transmissions, receiveChannels, impulses, excitations)
 	expected := []f32{0.5, 2.5, 4.5, 2.5, -4.0, -6.0, 0.0, 0.0}
 	passed := true
 	for actual, index in input {
@@ -68,38 +68,38 @@ temporalResponseTest :: proc(t: ^testing.T) {
 }
 
 compare_simulators :: proc(
-	settings: vkField.SimulationSettings,
-	transmissions: []vkField.Transmission,
-	receiveChannels: []vkField.ReceiveChannel,
-	elements: #soa[]vkField.RectangularElement,
-	scatters: []vkField.Scatter,
-	impulses: []vkField.TransducerImpulse,
-	excitations: []vkField.Excitation,
+	settings: ekhos.SimulationSettings,
+	transmissions: []ekhos.Transmission,
+	receiveChannels: []ekhos.ReceiveChannel,
+	elements: #soa[]ekhos.RectangularElement,
+	scatters: []ekhos.Scatter,
+	impulses: []ekhos.TransducerImpulse,
+	excitations: []ekhos.Excitation,
 ) -> (
 	ok := true,
 ) {
 	cpuSettings := settings
 	gpuSettings := settings
 
-	cpuSimulator, cpuOk := vkField.create_cpu_simulator()
+	cpuSimulator, cpuOk := ekhos.create_cpu_simulator()
 	if !cpuOk do return false
-	defer vkField.destroy_cpu_simulator(&cpuSimulator)
+	defer ekhos.destroy_cpu_simulator(&cpuSimulator)
 
-	gpuSimulator, gpuResult := vkField.create_vulkan_simulator(gpuSettings)
+	gpuSimulator, gpuResult := ekhos.create_vulkan_simulator(gpuSettings)
 	if gpuResult != .SUCCESS do return false
 
-	cpuSim: vkField.Simulator = cpuSimulator
-	gpuSim: vkField.Simulator = gpuSimulator
-	defer vkField.destroy_vulkan_simulator(&gpuSim.(vkField.vkSimulator))
+	cpuSim: ekhos.Simulator = cpuSimulator
+	gpuSim: ekhos.Simulator = gpuSimulator
+	defer ekhos.destroy_vulkan_simulator(&gpuSim.(ekhos.vkSimulator))
 
-	if !vkField.plan_simulation(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
-	if !vkField.plan_simulation(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
+	if !ekhos.plan_simulation(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
+	if !ekhos.plan_simulation(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations) do return false
 	if !RUN_SIMULATION do return true
 
-	cpuData, cpuSimulationOk := vkField.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
+	cpuData, cpuSimulationOk := ekhos.simulate(&cpuSim, &cpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	if !cpuSimulationOk do return false
 	defer delete(cpuData)
-	gpuData, gpuSimulationOk := vkField.simulate(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
+	gpuData, gpuSimulationOk := ekhos.simulate(&gpuSim, &gpuSettings, transmissions, receiveChannels, elements, scatters, impulses, excitations)
 	if !gpuSimulationOk do return false
 	defer delete(gpuData)
 
@@ -165,7 +165,7 @@ oneRectSimulation :: proc() -> (ok := true) {
 	utility.prof_thread_init()
 	utility.prof_scoped(#procedure)
 
-	settings := vkField.SimulationSettings {
+	settings := ekhos.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
@@ -173,59 +173,59 @@ oneRectSimulation :: proc() -> (ok := true) {
 		gpuSettings = {enableDriverDebugMessages = auto_cast (utility.PROF_MODE == .None)},
 	}
 
-	transmitElement: vkField.RectangularElement = {
+	transmitElement: ekhos.RectangularElement = {
 		position    = {0, 0, 0},
 		normal      = {0, 0, 1},
 		size        = {2.2e-4, 2.2e-4},
 		apodization = 1,
 	}
 
-	receiveElement: vkField.RectangularElement = {
+	receiveElement: ekhos.RectangularElement = {
 		position    = {0, 0, 0},
 		normal      = {0, 0, 1},
 		size        = {2.2e-4, 2.2e-4},
 		apodization = 1,
 	}
 
-	scatter: vkField.Scatter = {
+	scatter: ekhos.Scatter = {
 		position  = {-6.164e-3, 7.192e-3, 50.492e-3},
 		amplitude = 1,
 	}
 
-	elements := make(#soa[]vkField.RectangularElement, 1, context.allocator)
+	elements := make(#soa[]ekhos.RectangularElement, 1, context.allocator)
 	defer delete(elements)
 	elements[0] = transmitElement
 	elements[0].apodization = receiveElement.apodization
 
-	transmissionElements := make(#soa[]vkField.ElementSetMember, 1, context.allocator)
+	transmissionElements := make(#soa[]ekhos.ElementSetMember, 1, context.allocator)
 	defer delete(transmissionElements)
 	transmissionElements[0] = {
 		index       = 0,
 		apodization = 1,
 		delay       = 0,
 	}
-	receiveChannelElements := make(#soa[]vkField.ElementSetMember, 1, context.allocator)
+	receiveChannelElements := make(#soa[]ekhos.ElementSetMember, 1, context.allocator)
 	defer delete(receiveChannelElements)
-	receiveChannelElements[0] = vkField.ElementSetMember {
+	receiveChannelElements[0] = ekhos.ElementSetMember {
 		index       = 0,
 		apodization = 1,
 		delay       = 0,
 	}
 
-	transmissions := make([]vkField.Transmission, 1, context.allocator)
+	transmissions := make([]ekhos.Transmission, 1, context.allocator)
 	defer delete(transmissions)
 	transmissions[0] = {
 		elements = transmissionElements,
 	}
-	receiveChannels := make([]vkField.ReceiveChannel, 1, context.allocator)
+	receiveChannels := make([]ekhos.ReceiveChannel, 1, context.allocator)
 	defer delete(receiveChannels)
 	receiveChannels[0] = {
 		elements = receiveChannelElements,
 	}
 	scatters := slice.from_ptr(&scatter, 1)
 
-	impulses := []vkField.TransducerImpulse{{1, 2}, {1, -1}}
-	excitations := []vkField.Excitation{{0.5, 1}}
+	impulses := []ekhos.TransducerImpulse{{1, 2}, {1, -1}}
+	excitations := []ekhos.Excitation{{0.5, 1}}
 	transmissions[0].impulse = 1
 	transmissions[0].excitation = 1
 	receiveChannels[0].impulse = 2
@@ -245,7 +245,7 @@ linearArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	settings := vkField.SimulationSettings {
+	settings := ekhos.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
@@ -282,7 +282,7 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	elementKerf: f32 : 3e-5
 	elementPitch :: elementWidth + elementKerf
 
-	settings := vkField.SimulationSettings {
+	settings := ekhos.SimulationSettings {
 		samplingFrequency = 100e6,
 		speedOfSound = 1540,
 		cumulative = auto_cast CUMULATIVE,
@@ -306,8 +306,8 @@ matrixArraySimulation :: proc() -> (ok := true) {
 	return compare_simulators(settings, transmissions, receiveChannels, elements, scatters, nil, nil)
 }
 
-make_random_scatters :: proc(count: int, xRange, yRange, zRange: [2]f32) -> []vkField.Scatter {
-	scatters := make([]vkField.Scatter, count, context.allocator)
+make_random_scatters :: proc(count: int, xRange, yRange, zRange: [2]f32) -> []ekhos.Scatter {
+	scatters := make([]ekhos.Scatter, count, context.allocator)
 	for i in 0 ..< count {
 		x := rand.float32_range(xRange[0], xRange[1])
 		y := rand.float32_range(yRange[0], yRange[1])
@@ -320,8 +320,8 @@ make_random_scatters :: proc(count: int, xRange, yRange, zRange: [2]f32) -> []vk
 	return scatters
 }
 
-make_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f32) -> #soa[]vkField.RectangularElement {
-	elements := make(#soa[]vkField.RectangularElement, columnCount * rowCount, context.allocator)
+make_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f32) -> #soa[]ekhos.RectangularElement {
+	elements := make(#soa[]ekhos.RectangularElement, columnCount * rowCount, context.allocator)
 	index := 0
 	for row in 0 ..< rowCount {
 		for column in 0 ..< columnCount {
@@ -339,10 +339,10 @@ make_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f
 	return elements
 }
 
-make_transmit_and_receive_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f32) -> #soa[]vkField.RectangularElement {
+make_transmit_and_receive_grid_elements :: proc(columnCount, rowCount: int, pitch, size: [2]f32, z: f32) -> #soa[]ekhos.RectangularElement {
 	transmitElements := make_grid_elements(columnCount, rowCount, pitch, size, z)
 	receiveElements := make_grid_elements(columnCount, rowCount, pitch, size, z)
-	elements := make(#soa[]vkField.RectangularElement, len(transmitElements) + len(receiveElements), context.allocator)
+	elements := make(#soa[]ekhos.RectangularElement, len(transmitElements) + len(receiveElements), context.allocator)
 	for i in 0 ..< len(transmitElements) {
 		elements[i] = transmitElements[i]
 	}
@@ -354,8 +354,8 @@ make_transmit_and_receive_grid_elements :: proc(columnCount, rowCount: int, pitc
 	return elements
 }
 
-make_full_aperture_transmissions :: proc(elementCount: int) -> []vkField.Transmission {
-	transmissionElements := make(#soa[]vkField.ElementSetMember, elementCount, context.allocator)
+make_full_aperture_transmissions :: proc(elementCount: int) -> []ekhos.Transmission {
+	transmissionElements := make(#soa[]ekhos.ElementSetMember, elementCount, context.allocator)
 	for i in 0 ..< elementCount {
 		transmissionElements[i] = {
 			index       = i32(i),
@@ -363,18 +363,18 @@ make_full_aperture_transmissions :: proc(elementCount: int) -> []vkField.Transmi
 			delay       = 0,
 		}
 	}
-	transmissions := make([]vkField.Transmission, 1, context.allocator)
+	transmissions := make([]ekhos.Transmission, 1, context.allocator)
 	transmissions[0] = {
 		elements = transmissionElements,
 	}
 	return transmissions
 }
 
-make_single_element_receive_channels :: proc(elementCount, elementIndexOffset: int) -> []vkField.ReceiveChannel {
-	receiveChannels := make([]vkField.ReceiveChannel, elementCount, context.allocator)
+make_single_element_receive_channels :: proc(elementCount, elementIndexOffset: int) -> []ekhos.ReceiveChannel {
+	receiveChannels := make([]ekhos.ReceiveChannel, elementCount, context.allocator)
 	for i in 0 ..< elementCount {
-		elements := make(#soa[]vkField.ElementSetMember, 1, context.allocator)
-		elements[0] = vkField.ElementSetMember {
+		elements := make(#soa[]ekhos.ElementSetMember, 1, context.allocator)
+		elements[0] = ekhos.ElementSetMember {
 			index       = i32(elementIndexOffset + i),
 			apodization = 1,
 			delay       = 0,
@@ -386,13 +386,13 @@ make_single_element_receive_channels :: proc(elementCount, elementIndexOffset: i
 	return receiveChannels
 }
 
-make_column_receive_channels :: proc(columnCount, rowCount, elementIndexOffset: int) -> []vkField.ReceiveChannel {
-	receiveChannels := make([]vkField.ReceiveChannel, columnCount, context.allocator)
+make_column_receive_channels :: proc(columnCount, rowCount, elementIndexOffset: int) -> []ekhos.ReceiveChannel {
+	receiveChannels := make([]ekhos.ReceiveChannel, columnCount, context.allocator)
 	for column in 0 ..< columnCount {
-		elements := make(#soa[]vkField.ElementSetMember, rowCount, context.allocator)
+		elements := make(#soa[]ekhos.ElementSetMember, rowCount, context.allocator)
 		for row in 0 ..< rowCount {
 			elementIndex := elementIndexOffset + column * rowCount + row
-			elements[row] = vkField.ElementSetMember {
+			elements[row] = ekhos.ElementSetMember {
 				index       = i32(elementIndex),
 				apodization = 1,
 				delay       = 0,

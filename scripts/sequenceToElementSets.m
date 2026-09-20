@@ -28,7 +28,7 @@ assert(isequal(size(receiveApodizations), size(biasPattern)), ...
 elementWidth = array.GetWidth();
 [xGrid, yGrid] = array.GetElementPositionMatrix();
 
-elements = vkField.RectangularElementSet();
+elements = ekhos.RectangularElementSet();
 elements.Count = uint32(elementCount);
 elements.Positions = single([
 	reshape(xGrid, 1, []);
@@ -40,8 +40,8 @@ elements.Sizes = repmat(single(elementWidth([2, 1]).'), 1, elementCount);
 elements.Apodizations = ones(1, elementCount, 'single');
 elements.Delays = zeros(1, elementCount, 'single');
 
-transmissions = createArray(1, eventCount, "vkField.TransmissionSet");
-receiveChannels = createArray(1, eventCount, "vkField.ReceiveChannelSet");
+transmissions = createArray(1, eventCount, "ekhos.TransmissionSet");
+receiveChannels = createArray(1, eventCount, "ekhos.ReceiveChannelSet");
 
 lineIndices = reshape(1:elementCount, columnCount, rowCount).';
 for eventIndex = 1:eventCount

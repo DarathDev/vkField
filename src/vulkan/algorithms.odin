@@ -1,4 +1,4 @@
-package vkField_vulkan
+package ekhos_vulkan
 
 import "base:intrinsics"
 import "base:runtime"
@@ -8,14 +8,14 @@ import "core:math/bits"
 import "core:slice"
 import "core:strings"
 import vk "vendor:vulkan"
-import vkField_util "vkField:utility"
+import ekhos_util "ekhos:utility"
 
 @(private = "file")
-assume :: vkField_util.assume
+assume :: ekhos_util.assume
 @(private = "file")
-assert :: vkField_util.assert
+assert :: ekhos_util.assert
 @(private = "file")
-check :: vkField_util.check
+check :: ekhos_util.check
 
 VK_VALIDATION_LAYER_NAME :: "VK_LAYER_KHRONOS_validation"
 VK_SHADER_OBJECT_LAYER_NAME :: "VK_LAYER_KHRONOS_shader_object"
@@ -480,7 +480,7 @@ CheckPresentSupport :: #force_inline proc(physicalDevice: vk.PhysicalDevice, fam
 	when ODIN_OS == .Windows {
 		return vk.GetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, u32(familyIndex))
 	} else {
-		vkField_util.throw_not_implemented()
+		ekhos_util.throw_not_implemented()
 		return false
 	}
 }

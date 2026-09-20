@@ -98,16 +98,16 @@ end
 fieldIIRf = cat(3, fieldIIRf{:});
 fieldIITime = toc(fieldIITimer);
 
-%% vkField Simulation
-simulator = vkField.Simulation();
+%% Ekhos Simulation
+simulator = ekhos.Simulation();
 simulator.Cumulative = false;
-simulator.SimulatorType = vkField.SimulatorType.CPU;
+simulator.SimulatorType = ekhos.SimulatorType.CPU;
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 simulator.Impulses = {single(impulseResponse)};
 simulator.Excitations = {single(excitation)};
-fieldIITransmitElements = fieldIIArrayToVkFieldArray(tTh);
-fieldIIReceiveElements = fieldIIArrayToVkFieldArray(rTh);
+fieldIITransmitElements = fieldIIArrayToEkhosArray(tTh);
+fieldIIReceiveElements = fieldIIArrayToEkhosArray(rTh);
 [sequenceElements, sequenceTransmissions, sequenceReceiveChannels] = ...
     sequenceToElementSets(array, biasPattern, transmitApodization, transmitDelays, receiveApodization);
 simulator.Elements = sequenceElements;
@@ -117,7 +117,7 @@ if plotting && plotGeometry
         sequenceElements.Positions, sequenceElements.Sizes, ...
         'HERCULES physical elements');
 end
-simulator.Scatters = vkField.ScatterSet();
+simulator.Scatters = ekhos.ScatterSet();
 simulator.Scatters.Count = uint32(scatterCount);
 simulator.Scatters.Positions = single(scatterPosition);
 simulator.Scatters.Amplitudes = scatterAmplitude;
@@ -130,7 +130,7 @@ for eventIndex = 1:transmitCount
     simulator.Transmissions = sequenceTransmissions(eventIndex);
     receive = sequenceReceiveChannels(eventIndex);
     simulator.ReceiveChannels = receive;
-    vkPulseEcho{eventIndex} = vkField_mex(simulator);
+    vkPulseEcho{eventIndex} = ekhosMex(simulator);
     vkStartTime(eventIndex) = simulator.StartTime;
     vkEndTime(eventIndex) = vkStartTime(eventIndex) ...
         + size(vkPulseEcho{eventIndex}, 1) / double(fs);
@@ -142,11 +142,11 @@ end
 vkPulseEcho = cat(3, vkPulseEcho{:});
 vkTime = toc(vkTimer);
 
-fprintf("Field II samples == %d, vkField samples == %d\n", size(fieldIIRf, 1), size(vkPulseEcho, 1));
-fprintf("Field II start time == %.9g, vkField start time == %.9g\n", ...
+fprintf("Field II samples == %d, Ekhos samples == %d\n", size(fieldIIRf, 1), size(vkPulseEcho, 1));
+fprintf("Field II start time == %.9g, Ekhos start time == %.9g\n", ...
     min(fieldIIStartTime), simulator.StartTime);
 fprintf("Field II simulation time == %.6f s\n", fieldIITime);
-fprintf("vkField simulation time == %.6f s\n", vkTime);
+fprintf("Ekhos simulation time == %.6f s\n", vkTime);
 fprintf("Simulation speed-up == %.3fx\n", fieldIITime / vkTime);
 
 fieldIIData = stackEventData(fieldIIRf);
@@ -156,7 +156,7 @@ responseChannelCount = min(size(fieldIIData, 2), size(vkData, 2));
 responseMetrics = signal_metrics( ...
     vkData(1:responseSampleCount, 1:responseChannelCount), ...
     fieldIIData(1:responseSampleCount, 1:responseChannelCount));
-fprintf("Field II/vkField response correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
+fprintf("Field II/Ekhos response correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
     responseMetrics.correlation, responseMetrics.rmsErrorPercent, responseMetrics.peakRatio);
 
 fieldIIBp = bp;
@@ -216,7 +216,7 @@ vkImage = ornot.beamform(vkBp, beamformSettings);
 vkBeamformTime = toc(vkBeamformTimer);
 
 fprintf("Field II beamform time == %.6f s\n", fieldIIBeamformTime);
-fprintf("vkField beamform time == %.6f s\n", vkBeamformTime);
+fprintf("Ekhos beamform time == %.6f s\n", vkBeamformTime);
 
 if plotting
     if plotVolume
@@ -274,7 +274,7 @@ if plotting
     imagesc(imageX * 1e3, imageZ * 1e3, vkImageXZDb');
     axis image;
     clim([-40, 0]);
-    title("vkField HERCULES XZ");
+    title("Ekhos HERCULES XZ");
     xlabel("x (mm), dB");
     ylabel("z (mm)");
     colorbar;
@@ -290,7 +290,7 @@ if plotting
     imagesc(imageY * 1e3, imageZ * 1e3, vkImageYZDb');
     axis image;
     clim([-40, 0]);
-    title("vkField HERCULES YZ");
+    title("Ekhos HERCULES YZ");
     xlabel("y (mm), dB");
     ylabel("z (mm)");
     colorbar;
