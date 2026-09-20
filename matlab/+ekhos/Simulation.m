@@ -32,12 +32,12 @@ classdef Simulation < handle
     end
 
     methods
-        function call(simulation)
+        function pulseEcho = call(simulation)
             arguments
                 simulation(1,1) ekhos.Simulation
             end
-            mex("matlab\ekhosLib.c", "matlab\ekhosLib.lib", "-g", "-R2018a", "-output", "matlab\ekhosMex");
-            ekhosMex(simulation);
+            Ekhos.LoadLibraries();
+            pulseEcho = ekhosMex(simulation);
         end
     end
 
