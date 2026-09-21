@@ -1,3 +1,4 @@
+addpath("scripts");
 addpath("scripts/color");
 
 plotting = true;
@@ -66,7 +67,7 @@ simulator = ekhos.Simulation();
 simulator.SamplingFrequency = fs;
 simulator.SpeedOfSound = c;
 simulator.Cumulative = true;
-simulator.SimulatorType = ekhos.SimulatorType.CPU;
+simulator.SimulatorType = ekhos.SimulatorType.GPU;
 simulator.Impulses = {single(impulseResponse)};
 simulator.Excitations = {single(excitation)};
 
@@ -384,11 +385,23 @@ fprintf("Manual Conv Energy Density to distance ratio %g\n", double(sum(abs(manu
 fprintf("Manual Cumulative Energy Density to distance ratio %g\n", double(sum(abs(manualCumConvRf)))/distanceRatio);
 fprintf("Ekhos Energy Density to distance ratio %g\n", double(sum(abs(pulseEcho)))/distanceRatio);
 
+fprintf("\nSignal metrics against Field II\n");
+print_metrics("Fraunhoffer", fraun, fraunTimes, fullRF, times, fs);
+print_metrics("Manual convolution", manualConvRf, manTimes, fullRF, times, fs);
+print_metrics("Manual cumulative", manualCumConvRf, manTimes, fullRF, times, fs);
+print_metrics("Ekhos", pulseEcho, vkTimes, fullRF, times, fs);
+
 fprintf("\n\n Sim to Field II Ratios\n")
 fprintf("Fraunhoffer to FieldII ratio %g\n", double(sum(abs(fraun)))/sum(abs(fullRF)));
 fprintf("Manual Conv to FieldII ratio %g\n", double(sum(abs(manualConvRf)))/sum(abs(fullRF)));
 fprintf("Manual Cumulative to FieldII ratio %g\n", double(sum(abs(manualCumConvRf)))/sum(abs(fullRF)));
 fprintf("Ekhos to FieldII ratio %g\n", double(sum(abs(pulseEcho)))/sum(abs(fullRF)));
+
+function print_metrics(label, actual, actualTimes, reference, referenceTimes, samplingFrequency)
+metrics = signal_metrics_aligned(actual, actualTimes, reference, referenceTimes, samplingFrequency);
+fprintf("%s correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
+    label, metrics.correlation, metrics.rmsErrorPercent, metrics.peakRatio);
+end
 
 %%% Near field (Exact Analytic) Rectangle spatial impulse
 %% Rectangle 2a wide (x) 2b long (y)

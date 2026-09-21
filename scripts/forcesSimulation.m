@@ -150,11 +150,10 @@ fprintf("Simulation speed-up == %.3fx\n", fieldIITime / vkTime);
 
 fieldIIData = stackEventData(fieldIIRf);
 vkData = stackEventData(vkPulseEcho);
-responseSampleCount = min(size(fieldIIData, 1), size(vkData, 1));
-responseChannelCount = min(size(fieldIIData, 2), size(vkData, 2));
-responseMetrics = signal_metrics( ...
-    vkData(1:responseSampleCount, 1:responseChannelCount), ...
-    fieldIIData(1:responseSampleCount, 1:responseChannelCount));
+fieldIITimes = min(fieldIIStartTime) + (0:size(fieldIIData, 1) - 1) / double(fs);
+vkTimes = min(vkStartTime) + (0:size(vkData, 1) - 1) / double(fs);
+[responseMetrics, ~, ~, ~] = signal_metrics_aligned( ...
+    vkData, vkTimes, fieldIIData, fieldIITimes, fs);
 fprintf("Field II/Ekhos response correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
     responseMetrics.correlation, responseMetrics.rmsErrorPercent, responseMetrics.peakRatio);
 

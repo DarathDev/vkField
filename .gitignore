@@ -76,3 +76,6 @@ lib/
 # Build Executable
 build
 build.exe
+
+# Figures
+figures/

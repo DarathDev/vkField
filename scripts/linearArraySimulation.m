@@ -1,7 +1,11 @@
-addpath("matlab");
-addpath("scripts/color");
+scriptDirectory = fileparts(mfilename("fullpath"));
+repositoryDirectory = fileparts(scriptDirectory);
+addpath(fullfile(repositoryDirectory, "matlab"));
+addpath(scriptDirectory);
+addpath(fullfile(scriptDirectory, "color"));
 
-plotting = false;
+plotting = true;
+video = false;
 %% Simulation Settings
 fs = 100e6;
 c = 1540;
@@ -28,8 +32,11 @@ impulseResponse = GetImpulseResponse(fc, fs);
 excitation = sin(2*pi*(0:1/fs:cycleCount/fc)*fc);
 % excitation = 1;
 
-nScatters = 16;
-scatterPosition = rand(3, nScatters) .* [16e-3, 16e-3, 100e-3]' + [-8e-3, -8e-3, 0]';
+nScatters = 2^10;
+scatterWindow = [16e-3, 16e-3, 100e-3];
+scatterSurfaceMargin = 1e-3;
+scatterPosition = rand(3, nScatters) .* scatterWindow' - [scatterWindow(1:2) / 2, 0]';
+scatterPosition(3, :) = scatterSurfaceMargin + rand(1, nScatters) * scatterWindow(3);
 scatterAmplitude = ones(size(scatterPosition, 2), 1);
 
 diePositionT = [0, 0, 0]*1e-3;
@@ -129,7 +136,11 @@ pulseEcho = double(pulseEcho) * dt;
 % pulseEcho = fliplr(pulseEcho);
 
 vkTimes = simulator.StartTime + (0:(size(pulseEcho, 1)-1))/fs;
-if plotting
+[responseMetrics, ~, ~, ~] = signal_metrics_aligned( ...
+    pulseEcho, vkTimes, fullRF, times, fs);
+fprintf("Field II/Ekhos correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
+    responseMetrics.correlation, responseMetrics.rmsErrorPercent, responseMetrics.peakRatio);
+if plotting || video
     f1 = figure(); tl1 = tiledlayout(f1, 1, 2);
     ax1 = gobjects(1, 2);
     for j = 1:numel(ax1)
@@ -140,9 +151,11 @@ if plotting
     im1(1) = imagesc(ax1(2), 1:columnCountR, vkTimes*1e6, pulseEcho);
     colormap(f1, colorcet('L16', 'N', 256));
 
-    vw1 = VideoWriter(fullfile("figures", "linearArrayComparison" + ".mp4"), "MPEG-4");
-    vw1.FrameRate = 30;
-    vw1.open();
+    if video
+        vw1 = VideoWriter(fullfile("figures", "linearArrayComparison" + ".avi"), "Motion JPEG AVI");
+        vw1.FrameRate = 30;
+        vw1.open();
+    end
 
     f2 = figure(); ax2 = axes(f2); hold(ax2, "on");
     colororder(ax2, colorcet('L16', 'N', 2));
@@ -158,9 +171,13 @@ if plotting
             lineWidth = lineWidth * 0.50;
         end
         drawnow;
-        vw1.writeVideo(getframe(f2));
+        if video
+            vw1.writeVideo(getframe(f2));
+        end
     end
-    vw1.close();
+    if video
+        vw1.close();
+    end
 end
 
 function normals = tangentsToNormals(tangents)

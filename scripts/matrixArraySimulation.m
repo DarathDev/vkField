@@ -1,4 +1,5 @@
 addpath("matlab");
+addpath("scripts");
 addpath("scripts/color");
 
 plotting = false;
@@ -127,6 +128,10 @@ fprintf("Relative Speed Up == %d\n", fieldTime / simulator.Metrics.SimulationTim
 pulseEcho = double(pulseEcho) * dt;
 
 vkTimes = simulator.StartTime + (0:(size(pulseEcho, 1)-1))/fs;
+[responseMetrics, ~, ~, ~] = signal_metrics_aligned( ...
+    pulseEcho, vkTimes, fullRF, times, fs);
+fprintf("Field II/Ekhos correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
+    responseMetrics.correlation, responseMetrics.rmsErrorPercent, responseMetrics.peakRatio);
 
 if plotting
 
