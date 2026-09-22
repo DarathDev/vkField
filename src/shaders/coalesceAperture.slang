@@ -27,6 +27,17 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID) {
   ElementSetInfo elementSetInfo =
       CoalesceTransmissions ? pushData.transmissionInfos[elementSetInfoIndex] : pushData.getReceiveChannelInfos()[elementSetInfoIndex];
 
+  uint sampleOutputIndex = scattererIndex * (ApertureSampleCount * ElementSetCount) + elementSetIndex * ApertureSampleCount + sampleIndex;
+  int supportSampleCount = elementSetInfo.maxSample - elementSetInfo.minSample;
+  if (elementSetInfo.minSample > elementSetInfo.maxSample || sampleIndex > uint(min(int(ApertureSampleCount) - 1, supportSampleCount))) {
+    if (CoalesceTransmissions) {
+      pushData.transmissionResponses[sampleOutputIndex] = 0;
+    } else {
+      pushData.getReceiveChannelResponses()[sampleOutputIndex] = 0;
+    }
+    return;
+  }
+
   float dt = 1.f / SamplingFrequency;
   // We need to offset by the start time once
   float timeOffset = CoalesceTransmissions ? 0 : -StartTime;
@@ -48,7 +59,6 @@ void main(uint3 GlobalInvocationID: SV_DispatchThreadID) {
     sampleSum += sample * memberResponse.scale;
   }
 
-  uint sampleOutputIndex = scattererIndex * (ApertureSampleCount * ElementSetCount) + elementSetIndex * ApertureSampleCount + sampleIndex;
   if (CoalesceTransmissions) {
     pushData.transmissionResponses[sampleOutputIndex] = sampleSum;
   } else {
