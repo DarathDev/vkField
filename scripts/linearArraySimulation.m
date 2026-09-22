@@ -141,7 +141,7 @@ vkTimes = simulator.StartTime + (0:(size(pulseEcho, 1)-1))/fs;
 fprintf("Field II/Ekhos correlation == %.6f (RMS error == %.2f%%, peak ratio == %.6f)\n", ...
     responseMetrics.correlation, responseMetrics.rmsErrorPercent, responseMetrics.peakRatio);
 if plotting || video
-    f1 = figure(); tl1 = tiledlayout(f1, 1, 2);
+    f1 = figure(); tl1 = tiledlayout(f1, 1, 2, 'TileSpacing', 'none', 'Padding', 'none');
     ax1 = gobjects(1, 2);
     for j = 1:numel(ax1)
         ax1(j) = nexttile(tl1);

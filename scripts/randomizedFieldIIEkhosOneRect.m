@@ -11,22 +11,23 @@ c = 1540;
 fc = 5e6;
 cycleCount = 2;
 dt = 1 / fs;
-% impulseResponse = GetImpulseResponse(single(fc), single(fs));
-% excitation = sin(2 * pi * (0:dt:cycleCount / fc) * fc);
-impulseResponse = 1;
-excitation = 1;
+impulseResponse = GetImpulseResponse(single(fc), single(fs));
+excitation = sin(2 * pi * (0:dt:cycleCount / fc) * fc);
+rawImpulseResponse = 1;
+rawExcitation = 1;
 % impulseResponse = 1;
 % excitation = 1;
 rectangleSize = [2.2e-4; 2.2e-4];
-caseCount = 64;
+caseCount = 32;
 plotting = true;
+plotHighErrorCases = false;
 plotCorrelationThreshold = 0.99;
 originApertures = true;
 geometryTolerance = 1e-9;
 angleTolerance = 1e-6;
 
-scatterRangeMin = [-25e-3; -25e-3; 10e-3];
-scatterRangeMax = [25e-3; 25e-3; 100e-3];
+scatterRangeMin = [-10e-3; -10e-3; 10e-3];
+scatterRangeMax = [10e-3; 10e-3; 30e-3];
 
 % Fixed seed makes every reported case reproducible.
 rng(1, 'twister');
@@ -43,10 +44,15 @@ results = repmat(struct( ...
     'transmitEuler', zeros(3, 1), ...
     'receiveEuler', zeros(3, 1), ...
     'fieldCpuRmsErrorPercent', 0, ...
+    'rawFieldCpuRmsErrorPercent', 0, ...
     'compareTimes', [], ...
     'fieldAligned', [], ...
     'cpuAligned', [], ...
-    'gpuAligned', []), 1, caseCount);
+    'gpuAligned', [], ...
+    'rawCompareTimes', [], ...
+    'rawFieldAligned', [], ...
+    'rawCpuAligned', [], ...
+    'rawGpuAligned', []), 1, caseCount);
 
 for caseIndex = 1:caseCount
     scatterPosition = random_position(scatterRangeMin, scatterRangeMax);
@@ -91,6 +97,7 @@ for caseIndex = 1:caseCount
     fieldII.xdc_apodization(transmitAperture, 0, 1);
     fieldII.xdc_apodization(receiveAperture, 0, 1);
     [fieldData, fieldStartTime] = fieldII.calc_scat_multi(transmitAperture, receiveAperture, scatterPosition', 1);
+    rawFieldData = double(fieldData) / dt;
     fieldData = applyResponseFilters(double(fieldData) / dt^4, impulseResponse, excitation, dt);
     fieldTimes = fieldStartTime + (0:size(fieldData, 1) - 1) / fs;
 
@@ -104,15 +111,22 @@ for caseIndex = 1:caseCount
         elementApodizations, elementDelays, scatterPosition, fs, c, impulseResponse, excitation);
     [gpuData, gpuStartTime] = run_ekhos(ekhos.SimulatorType.GPU, elementPositions, elementNormals, elementSizes, ...
         elementApodizations, elementDelays, scatterPosition, fs, c, impulseResponse, excitation);
+    [rawCpuData, rawCpuStartTime] = run_ekhos(ekhos.SimulatorType.CPU, elementPositions, elementNormals, elementSizes, ...
+        elementApodizations, elementDelays, scatterPosition, fs, c, rawImpulseResponse, rawExcitation);
+    [rawGpuData, rawGpuStartTime] = run_ekhos(ekhos.SimulatorType.GPU, elementPositions, elementNormals, elementSizes, ...
+        elementApodizations, elementDelays, scatterPosition, fs, c, rawImpulseResponse, rawExcitation);
 
     [fieldAligned, cpuAligned, gpuAligned, compareTimes] = align_signals(...
         cpuData, cpuStartTime, gpuData, gpuStartTime, fieldData, fieldStartTime, fs);
+    [rawFieldAligned, rawCpuAligned, rawGpuAligned, rawCompareTimes] = align_signals(...
+        rawCpuData, rawCpuStartTime, rawGpuData, rawGpuStartTime, rawFieldData, fieldStartTime, fs);
     difference = cpuAligned - gpuAligned;
     cpuGpuMetrics = signal_metrics(cpuAligned, gpuAligned);
     fieldCpuDifference = cpuAligned - fieldAligned;
     fieldGpuDifference = gpuAligned - fieldAligned;
     fieldCpuMetrics = signal_metrics(cpuAligned, fieldAligned);
     fieldGpuMetrics = signal_metrics(gpuAligned, fieldAligned);
+    rawFieldCpuMetrics = signal_metrics(rawCpuAligned, rawFieldAligned);
 
     results(caseIndex).caseIndex = caseIndex;
     results(caseIndex).scatterPosition = scatterPosition;
@@ -122,10 +136,15 @@ for caseIndex = 1:caseCount
     results(caseIndex).receiveEuler = receiveEuler;
     results(caseIndex).cpuGpuMaxRelativeDifference = cpuGpuMetrics.maxRelativeDifference;
     results(caseIndex).fieldCpuRmsErrorPercent = fieldCpuMetrics.rmsErrorPercent;
+    results(caseIndex).rawFieldCpuRmsErrorPercent = rawFieldCpuMetrics.rmsErrorPercent;
     results(caseIndex).compareTimes = compareTimes;
     results(caseIndex).fieldAligned = fieldAligned;
     results(caseIndex).cpuAligned = cpuAligned;
     results(caseIndex).gpuAligned = gpuAligned;
+    results(caseIndex).rawCompareTimes = rawCompareTimes;
+    results(caseIndex).rawFieldAligned = rawFieldAligned;
+    results(caseIndex).rawCpuAligned = rawCpuAligned;
+    results(caseIndex).rawGpuAligned = rawGpuAligned;
     fprintf(['  FieldII/CPU energyRatio=%.4g peakRatio=%.4g corr=%.6f maxRelDiff=%.2f%% rmsErr=%.2f%%\n'], ...
         fieldCpuMetrics.differenceEnergyRatio, fieldCpuMetrics.peakRatio, fieldCpuMetrics.correlation, ...
         fieldCpuMetrics.maxRelativeDifference, fieldCpuMetrics.rmsErrorPercent);
@@ -144,27 +163,54 @@ for caseIndex = 1:caseCount
 end
 
 fprintf('Completed %d reproducible one-rectangle cases.\n', caseCount);
-plot_scatter_errors(results, rectangleSize);
-plot_rms_error_histogram(results);
-[~, bestCaseIndex] = min([results.fieldCpuRmsErrorPercent]);
-[~, worstCaseIndex] = max([results.fieldCpuRmsErrorPercent]);
+summaryFigure = figure('Name', 'Scatterer errors and best/worst cases', ...
+    'Units', 'pixels', 'Position', [100, 100, 990, 633]);
+summaryLayout = tiledlayout(summaryFigure, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+plot_scatter_errors(summaryLayout, results, rectangleSize);
+[~, bestCaseIndex] = min([results.rawFieldCpuRmsErrorPercent]);
+[~, worstCaseIndex] = max([results.rawFieldCpuRmsErrorPercent]);
+bestCaseAxes = nexttile(summaryLayout);
+summaryPlotHandles = plot_case(results(bestCaseIndex).rawCompareTimes, results(bestCaseIndex).rawFieldAligned, ...
+    results(bestCaseIndex).rawCpuAligned, results(bestCaseIndex).rawGpuAligned, ...
+    results(bestCaseIndex).caseIndex, results(bestCaseIndex).scatterPosition, ...
+    results(bestCaseIndex).transmitPosition, results(bestCaseIndex).receivePosition, ...
+    results(bestCaseIndex).transmitEuler, results(bestCaseIndex).receiveEuler, ...
+    bestCaseAxes, 'Best case');
+worstCaseAxes = nexttile(summaryLayout);
+plot_case(results(worstCaseIndex).rawCompareTimes, results(worstCaseIndex).rawFieldAligned, ...
+    results(worstCaseIndex).rawCpuAligned, results(worstCaseIndex).rawGpuAligned, ...
+    results(worstCaseIndex).caseIndex, results(worstCaseIndex).scatterPosition, ...
+    results(worstCaseIndex).transmitPosition, results(worstCaseIndex).receivePosition, ...
+    results(worstCaseIndex).transmitEuler, results(worstCaseIndex).receiveEuler, ...
+    worstCaseAxes, 'Worst case');
+worstCaseAxes.YAxisLocation = 'right';
 plot_case(results(bestCaseIndex).compareTimes, results(bestCaseIndex).fieldAligned, ...
     results(bestCaseIndex).cpuAligned, results(bestCaseIndex).gpuAligned, ...
     results(bestCaseIndex).caseIndex, results(bestCaseIndex).scatterPosition, ...
     results(bestCaseIndex).transmitPosition, results(bestCaseIndex).receivePosition, ...
-    results(bestCaseIndex).transmitEuler, results(bestCaseIndex).receiveEuler);
+    results(bestCaseIndex).transmitEuler, results(bestCaseIndex).receiveEuler, ...
+    nexttile(summaryLayout), 'Best case (Convolved with temporal response)');
+convolvedWorstCaseAxes = nexttile(summaryLayout);
 plot_case(results(worstCaseIndex).compareTimes, results(worstCaseIndex).fieldAligned, ...
     results(worstCaseIndex).cpuAligned, results(worstCaseIndex).gpuAligned, ...
     results(worstCaseIndex).caseIndex, results(worstCaseIndex).scatterPosition, ...
     results(worstCaseIndex).transmitPosition, results(worstCaseIndex).receivePosition, ...
-    results(worstCaseIndex).transmitEuler, results(worstCaseIndex).receiveEuler);
+    results(worstCaseIndex).transmitEuler, results(worstCaseIndex).receiveEuler, ...
+    convolvedWorstCaseAxes, 'Worst case (Convolved with temporal response)');
+convolvedWorstCaseAxes.YAxisLocation = 'right';
+summaryLegend = legend(bestCaseAxes, summaryPlotHandles, {'Field II', 'Ekhos CPU', 'Ekhos GPU'}, ...
+    'Location', 'southoutside', 'NumColumns', 3);
+summaryLegend.Layout.Tile = 'south';
+saveas(summaryFigure, fullfile('figures', 'randomizedFieldIIEkhosOneRect.png'));
+saveas(summaryFigure, fullfile('figures', 'randomizedFieldIIEkhosOneRect.fig'));
 
-function plot_scatter_errors(results, rectangleSize)
+function plot_scatter_errors(layout, results, rectangleSize)
 scatterPositions = [results.scatterPosition] * 1e3;
 rmsErrors = [results.fieldCpuRmsErrorPercent];
 rectangleSize = rectangleSize * 1e3;
 
-figure('Name', 'Scatterer RMS errors');
+axesHandle = nexttile(layout, [2 2]);
+axes(axesHandle);
 hold on;
 scatterHandle = scatter3(scatterPositions(1, :), scatterPositions(2, :), scatterPositions(3, :), ...
     64, rmsErrors, 'filled');
@@ -191,18 +237,6 @@ title('Field II/CPU RMS error by scatterer position');
 colormap(colorcet('L08', 'N', 256));
 colorbarHandle = colorbar;
 ylabel(colorbarHandle, 'RMS error (%)');
-end
-
-function plot_rms_error_histogram(results)
-rmsErrors = [results.fieldCpuRmsErrorPercent];
-histogramColorMap = colorcet('L16', 'N', 256);
-
-figure('Name', 'RMS error histogram');
-histogram(rmsErrors, 'FaceColor', histogramColorMap(round(size(histogramColorMap, 1) * 0.65), :));
-grid on;
-xlabel('Field II/CPU RMS error (%)');
-ylabel('Case count');
-title('Distribution of Field II/CPU RMS errors');
 end
 
 function [data, startTime] = run_ekhos(simulatorType, positions, normals, sizes, apodizations, delays, scatterPosition, fs, c, impulseResponse, excitation)
@@ -337,7 +371,7 @@ cpuAligned = interp1(cpuStartTime + (0:size(cpuData, 1) - 1) / fs, cpuData, time
 gpuAligned = interp1(gpuStartTime + (0:size(gpuData, 1) - 1) / fs, gpuData, times, 'linear', 0);
 end
 
-function plot_case(times, fieldData, cpuData, gpuData, caseIndex, scatterPosition, transmitPosition, receivePosition, transmitEuler, receiveEuler)
+function plotHandles = plot_case(times, fieldData, cpuData, gpuData, caseIndex, scatterPosition, transmitPosition, receivePosition, transmitEuler, receiveEuler, axesHandle, plotSubtitle)
 times = times(:);
 fieldData = fieldData(:);
 cpuData = cpuData(:);
@@ -349,15 +383,32 @@ cpuData = cpuData(1:sampleCount);
 gpuData = gpuData(1:sampleCount);
 fprintf('plot case=%d peak FieldII=%e CPU=%e GPU=%e\n', caseIndex, ...
     max(abs(fieldData)), max(abs(cpuData)), max(abs(gpuData)));
-figure('Name', sprintf('One rectangle case %d', caseIndex));
+if nargin < 11
+    figure('Name', sprintf('One rectangle case %d', caseIndex));
+    axesHandle = gca;
+end
+axes(axesHandle);
 colororder(colorcet('L16', 'N', 4));
 plotHandles = plot(times * 1e6, fieldData, '-', times * 1e6, cpuData, '--', times * 1e6, gpuData, ':');
 plotHandles(1).LineWidth = 4*3.0;
 plotHandles(2).LineWidth = 4*2.0;
 plotHandles(3).LineWidth = 4*1.0;
-legend('Field II', 'Ekhos CPU', 'Ekhos GPU');
-title(sprintf('case %d scatter=[%.3f %.3f %.3f] mm tx=[%g %g %g] rx=[%g %g %g]', ...
-    caseIndex, scatterPosition * 1e3, transmitPosition, receivePosition));
+if nargin >= 11
+    signalValues = [fieldData; cpuData; gpuData];
+    signalValues = signalValues(isfinite(signalValues));
+    signalMinimum = min(signalValues);
+    signalMaximum = max(signalValues);
+    signalMargin = max((signalMaximum - signalMinimum) * 0.08, eps(max(abs([signalMinimum, signalMaximum]))));
+    ylim(axesHandle, [signalMinimum - signalMargin, signalMaximum + signalMargin]);
+end
+if nargin >= 11
+    legend(axesHandle, 'off');
+else
+    legend('Field II', 'Ekhos CPU', 'Ekhos GPU');
+end
+if nargin >= 12
+    subtitle(axesHandle, plotSubtitle);
+end
 xlabel('Time (us)');
 end
 

@@ -8,6 +8,7 @@ ornot.LoadLibraries();
 
 plotting = true;
 plotGeometry = false;
+combinePlots = true;
 
 fs = single(50e6);
 c = single(1540);
@@ -15,12 +16,12 @@ fc = single(5e6);
 cycleCount = 2;
 transmitFNumber = single(1);
 
-rowCount = 32;
-columnCount = 32;
+rowCount = 128;
+columnCount = 128;
 elementWidth = single([2.2e-4, 2.2e-4]);
 elementKerf = single([3e-5, 3e-5]);
 
-[scatterX, scatterZ] = meshgrid(5e-3, linspace(20e-3, 100e-3, 20));
+[scatterX, scatterZ] = meshgrid(1e-3*(-10:5:10), linspace(20e-3, 100e-3, 20));
 scatterCount = numel(scatterX);
 scatterPosition = [
     scatterX(:).';
@@ -186,7 +187,7 @@ vkBp.time_offset = single(bp.time_offset - simulator.StartTime);
 vkBp.data = single(vkData * (1 / double(fs)) * 1e30);
 
 beamformSettings = ornot.BeamformSettings();
-xRange = [-8, 8] * 1e-3;
+xRange = [-15, 15] * 1e-3;
 zRange = [15, 105] * 1e-3;
 resolution = [512, 1024];
 beamformSettings.regions = ornot.Region.CreateXZPlane(resolution, xRange, zRange);
@@ -215,25 +216,38 @@ if plotting
     imageZ = linspace(zRange(1), zRange(2), size(fieldIIImage{1}, 2));
     fieldIIImageDb = 20*log10(abs(fieldIIImage{1}) / max(abs(fieldIIImage{1}), [], 'all'));
     vkImageDb = 20*log10(abs(vkImage{1}) / max(abs(vkImage{1}), [], 'all'));
-    figure();
+    if combinePlots
+        figure('Name', 'FORCES - Field II and Ekhos', 'Position', [100, 100, 605, 650]);
+        tiledLayout = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+        fieldIIAxes = nexttile(tiledLayout);
+        ekhosAxes = nexttile(tiledLayout);
+    else
+        fieldIIFigure = figure('Name', 'FORCES - Field II', 'Position', [100, 100, 605, 650]);
+        fieldIIAxes = axes(fieldIIFigure);
+        ekhosFigure = figure('Name', 'FORCES - Ekhos', 'Position', [800, 100, 605, 650]);
+        ekhosAxes = axes(ekhosFigure);
+    end
+
+    axes(fieldIIAxes);
     colormap(gray);
-    tiledlayout(1, 2, 'TileSpacing', 'none', 'Padding', 'none');
-    nexttile();
     imagesc(imageX * 1e3, imageZ * 1e3, fieldIIImageDb');
     axis image;
     clim([-40, 0]);
-    title("Field II FORCES");
+    title("FORCES - Field II");
     xlabel("x (mm), dB");
     ylabel("z (mm)");
     colorbar('westoutside');
-    nexttile();
+
+    axes(ekhosAxes);
+    colormap(gray);
     imagesc(imageX * 1e3, imageZ * 1e3, vkImageDb');
     axis image;
     clim([-40, 0]);
-    title("Ekhos FORCES");
+    title("FORCES - Ekhos");
     xlabel("x (mm), dB");
     set(gca, 'YColor', 'none');
     colorbar;
+    saveas(gcf, fullfile(repoDirectory, "figures", "forcesComparison.png"));
 end
 
 function data = stackEventData(eventData)

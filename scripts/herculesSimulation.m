@@ -15,16 +15,16 @@ c = single(1540);
 fc = single(5e6);
 cycleCount = 2;
 
-rowCount = 32;
-columnCount = 32;
+rowCount = 128;
+columnCount = 128;
 elementWidth = single([2.2e-4, 2.2e-4]);
 elementKerf = single([3e-5, 3e-5]);
 
-[scatterX, scatterZ] = meshgrid(0, linspace(20e-3, 100e-3, 20));
+[scatterX, scatterY, scatterZ] = ndgrid(1e-3*(-10:5:10), 1e-3*(-10:5:10), linspace(20e-3, 80e-3, 16));
 scatterCount = numel(scatterX);
 scatterPosition = [
     scatterX(:).';
-    zeros(1, scatterCount);
+    scatterY(:).';
     scatterZ(:).'
     ];
 scatterAmplitude = ones(scatterCount, 1, 'single');
@@ -219,7 +219,34 @@ fprintf("Ekhos beamform time == %.6f s\n", vkBeamformTime);
 
 if plotting
     if plotVolume
-        volumeViewer(abs(vkImage{1}));
+        volume = abs(vkImage{1});
+        volume = volume / max(volume, [], 'all');
+
+        volumeRegion = beamformSettings.regions(1);
+        volumeTransform = volumeRegion.das_voxel_transform;
+        volumeTransform(1:3, 4) = volumeTransform(1:3, 4) * 1e3;
+        volumeTransform(1:3, 1:3) = diag(1e3 * diag(volumeTransform(1:3, 1:3))' ...
+            ./ double(volumeRegion.output_points));
+
+        volumeFigure = figure('Position', [100, 100, 800, 800]);
+        volumeView = viewer3d(volumeFigure);
+        volumeView.BackgroundColor = [0, 0.3290, 0.5290];
+        volumeView.GradientColor = [0, 0.5610, 1];
+        volumeView.BackgroundGradient = 1;
+        volumeView.Lighting = 1;
+        volumeView.RenderingQuality = "high";
+        volumeView.Interactions = "none";
+
+        volumeTransform = affinetform3d(volumeTransform);
+        volumeObject = volshow(permute(volume, [2, 1, 3]), ...
+            Parent=volumeView, Transformation=volumeTransform);
+        volumeObject.RenderingStyle = 'CinematicRendering';
+        volumeObject.SpecularReflectance = 0.5;
+
+        volumeView.CameraTarget = [0, 0, mean(zRange) * 1e3];
+        volumeView.CameraPosition = [0, 75, 90];
+        volumeView.CameraUpVector = [0, 0, 1];
+        volumeView.CameraZoom = 1.4;
     end
 
     planeResolution = uint16([128, 512]);
@@ -258,14 +285,15 @@ if plotting
     fprintf("HERCULES XZ image correlation == %.6f; YZ image correlation == %.6f\n", ...
         xzMetrics.correlation, yzMetrics.correlation);
 
-    figure();
+    figure('Position', [100, 100, 1800, 650]);
     colormap(gray);
     tiledlayout(1, 4, 'TileSpacing', 'none', 'Padding', 'none');
+    sgtitle('HERCULES');
     nexttile();
     imagesc(imageX * 1e3, imageZ * 1e3, fieldIIImageXZDb');
     axis image;
     clim([-40, 0]);
-    title("Field II HERCULES XZ");
+    title("Field II XZ");
     xlabel("x (mm), dB");
     ylabel("z (mm)");
     colorbar;
@@ -273,7 +301,7 @@ if plotting
     imagesc(imageX * 1e3, imageZ * 1e3, vkImageXZDb');
     axis image;
     clim([-40, 0]);
-    title("Ekhos HERCULES XZ");
+    title("Ekhos XZ");
     xlabel("x (mm), dB");
     ylabel("z (mm)");
     colorbar;
@@ -281,7 +309,7 @@ if plotting
     imagesc(imageY * 1e3, imageZ * 1e3, fieldIIImageYZDb');
     axis image;
     clim([-40, 0]);
-    title("Field II HERCULES YZ");
+    title("Field II YZ");
     xlabel("y (mm), dB");
     ylabel("z (mm)");
     colorbar;
@@ -289,7 +317,7 @@ if plotting
     imagesc(imageY * 1e3, imageZ * 1e3, vkImageYZDb');
     axis image;
     clim([-40, 0]);
-    title("Ekhos HERCULES YZ");
+    title("Ekhos YZ");
     xlabel("y (mm), dB");
     ylabel("z (mm)");
     colorbar;

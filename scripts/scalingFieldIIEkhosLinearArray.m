@@ -148,7 +148,7 @@ if plotting
     plotTimes = plotData.times * 1e6;
     comparisonFigure = figure('Name', sprintf('Linear array comparison, %d scatterers', plotScatterCount));
     colormap(comparisonFigure, colorcet('L16', 'N', 256));
-    tiledlayout(1, 3);
+    tiledlayout(1, 3, 'TileSpacing', 'none', 'Padding', 'none');
     nexttile;
     imagesc(1:columnCount, plotTimes, plotData.field);
     title('Field II');
