@@ -117,7 +117,7 @@ simulate_cpu :: proc(
 				transmissionSampleRange: SampleRange = {max(i32), min(i32)}
 				for element in transmission.elements {
 					elementImpulse := scatterElementImpulses[element.index]
-					elementImpulse.rect += element.delay / samplingFrequency
+					elementImpulse.rect += element.delay * samplingFrequency
 					elementImpulse.scale *= element.apodization
 					if elementImpulse.scale == 0 do continue
 
@@ -132,7 +132,7 @@ simulate_cpu :: proc(
 
 				for element in transmission.elements {
 					elementImpulse := scatterElementImpulses[element.index]
-					elementImpulse.rect += element.delay / samplingFrequency
+					elementImpulse.rect += element.delay * samplingFrequency
 					elementImpulse.scale *= element.apodization
 
 					if elementImpulse.scale == 0 do continue
@@ -185,7 +185,7 @@ simulate_cpu :: proc(
 						receiveChannelSampleRange: SampleRange = {max(i32), min(i32)}
 						for element in receiveChannel.elements {
 							elementImpulse := scatterElementImpulses[element.index]
-							elementImpulse.rect += element.delay / samplingFrequency
+							elementImpulse.rect += element.delay * samplingFrequency
 							elementImpulse.scale *= element.apodization
 							// One of the impulse responses needs to be offset by the start time
 							elementImpulse.rect -= startTime * samplingFrequency
@@ -206,7 +206,7 @@ simulate_cpu :: proc(
 						utility.prof_begin("Receive Channel Sampling")
 						for element in receiveChannel.elements {
 							elementImpulse := scatterElementImpulses[element.index]
-							elementImpulse.rect += element.delay / samplingFrequency
+							elementImpulse.rect += element.delay * samplingFrequency
 							elementImpulse.scale *= element.apodization
 							// One of the impulse responses needs to be offset by the start time
 							elementImpulse.rect -= startTime * samplingFrequency
