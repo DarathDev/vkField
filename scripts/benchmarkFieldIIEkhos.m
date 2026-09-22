@@ -22,6 +22,7 @@ matrixReceiveGroupSizes = 1;
 scatterCounts = 2.^(7:18);
 transmissionCounts = [1];
 repetitions = 1;
+minimumCorrelation = 0.98;
 
 runCPU = true;
 runGPU = true;
@@ -79,7 +80,7 @@ for arrayKind = ["linear", "matrix"]
                         arrayKind, elementCount, receiveGroupSize, scatterCount, transmissionCount);
 
                     for repetitionIndex = 1:repetitions
-                        [fieldIIData, fieldIITime, fieldIIChannelCount] = runFieldII(...
+                        [fieldIIData, fieldIITime, fieldIIChannelCount, fieldIIStartTimes, transmitGeometry, receiveGeometry] = runFieldII(...
                             arrayKind, rowCount, columnCount, scatterPositions, scatterAmplitudes, ...
                             transmissionCount, impulseResponse, excitation);
                         if arrayKind == "linear"
@@ -94,7 +95,7 @@ for arrayKind = ["linear", "matrix"]
                         simulatorTypes = simulatorTypes([runCPU, runGPU]);
                         for simulatorType = simulatorTypes
                             simulation = makeVkSimulation(...
-                                arrayKind, rowCount, columnCount, scatterPositions, scatterAmplitudes, ...
+                                transmitGeometry, receiveGeometry, scatterPositions, scatterAmplitudes, ...
                                 receiveGroupSize, transmissionCount, simulatorType, fs, c, impulseResponse, excitation);
                             timer = tic();
                             vkData = simulation.call();
@@ -104,15 +105,23 @@ for arrayKind = ["linear", "matrix"]
                                 vkData = reshape(vkData, size(vkData, 1), size(vkData, 2), 1);
                             end
                             vkData = vkData * (1 / double(fs));
+                            fieldIIDataScaled = fieldIIGrouped * (1 / double(fs));
+                            outputCorrelation = compareSimulationOutputs(...
+                                fieldIIDataScaled, fieldIIStartTimes, vkData, ...
+                                simulation.StartTime, fs);
+                            assert(outputCorrelation >= minimumCorrelation, ...
+                                "Field II and %s outputs have correlation %.4f, below the %.2f threshold.", ...
+                                string(simulatorType), outputCorrelation, minimumCorrelation);
 
                             row = table(string(arrayKind), string(simulatorType), elementCount, ...
                                 receiveGroupSize, receiveChannelCount, scatterCount, transmissionCount, ...
                                 fieldIIChannelCount, fieldIITime, wallTime, simulation.Metrics.SimulationTime, ...
+                                outputCorrelation, ...
                                 size(fieldIIGrouped, 1), size(vkData, 1), repetitionIndex, ...
                                 "VariableNames", {"arrayKind", "simulator", "elementCount", ...
                                 "receiveGroupSize", "receiveChannelCount", "scatterCount", ...
                                 "transmissionCount", "fieldIIChannelCount", "fieldIISeconds", ...
-                                "wallSeconds", "simulationSeconds", "fieldIISampleCount", ...
+                                "wallSeconds", "simulationSeconds", "outputCorrelation", "fieldIISampleCount", ...
                                 "vkSampleCount", "repetition"});
                             results = [results; row]; %#ok<AGROW>
 
@@ -147,7 +156,7 @@ positions = [
     ];
 end
 
-function [data, elapsed, channelCount] = runFieldII(...
+function [data, elapsed, channelCount, startTimes, transmitGeometry, receiveGeometry] = runFieldII(...
     arrayKind, rowCount, columnCount, scatterPositions, scatterAmplitudes, ...
     transmissionCount, impulseResponse, excitation)
 if strcmp(arrayKind, "linear")
@@ -170,11 +179,14 @@ else
     fieldII.xdc_apodization(tAperture, 0, reshape(ones(columnCount, rowCount)', 1, []));
     fieldII.xdc_apodization(rAperture, 0, reshape(ones(columnCount, rowCount)', 1, []));
 end
+    transmitGeometry = fieldII.xdc_get(tAperture, 'rect');
+    receiveGeometry = fieldII.xdc_get(rAperture, 'rect');
 
 fieldIIData = cell(transmissionCount, 1);
+startTimes = zeros(transmissionCount, 1);
 timer = tic();
 for transmissionIndex = 1:transmissionCount
-    [fieldIIData{transmissionIndex}, ~] = ...
+    [fieldIIData{transmissionIndex}, startTimes(transmissionIndex)] = ...
     fieldII.calc_scat_multi(tAperture, rAperture, double(scatterPositions'), double(scatterAmplitudes));
 end
 elapsed = toc(timer);
@@ -186,13 +198,37 @@ for transmissionIndex = 1:transmissionCount
 end
 end
 
+function minimumCorrelation = compareSimulationOutputs(...
+    fieldIIData, fieldIIStartTimes, vkData, vkStartTime, samplingFrequency)
+transmissionCount = min(size(fieldIIData, 3), size(vkData, 3));
+correlations = zeros(transmissionCount, 1);
+for transmissionIndex = 1:transmissionCount
+    fieldIITimes = fieldIIStartTimes(transmissionIndex) + ...
+        (0:size(fieldIIData, 1) - 1) / double(samplingFrequency);
+    vkTimes = double(vkStartTime) + ...
+        (0:size(vkData, 1) - 1) / double(samplingFrequency);
+    bestCorrelation = -1;
+    for sampleOffset = -4:4
+        shiftedVkTimes = vkTimes + sampleOffset / double(samplingFrequency);
+        commonStart = max(fieldIITimes(1), shiftedVkTimes(1));
+        commonEnd = min(fieldIITimes(end), shiftedVkTimes(end));
+        commonTimes = (commonStart:1 / double(samplingFrequency):commonEnd)';
+        vkAligned = interp1(shiftedVkTimes, vkData(:, :, transmissionIndex), commonTimes, 'linear');
+        fieldIIAligned = interp1(fieldIITimes, fieldIIData(:, :, transmissionIndex), commonTimes, 'linear');
+        metrics = signal_metrics(vkAligned, fieldIIAligned);
+        bestCorrelation = max(bestCorrelation, metrics.correlation);
+    end
+    correlations(transmissionIndex) = bestCorrelation;
+end
+minimumCorrelation = min(correlations);
+end
+
 function simulation = makeVkSimulation(...
-    arrayKind, rowCount, columnCount, scatterPositions, scatterAmplitudes, ...
+    transmitGeometry, receiveGeometry, scatterPositions, scatterAmplitudes, ...
     receiveGroupSize, transmissionCount, simulatorType, fs, c, impulseResponse, excitation)
-elementCount = rowCount * columnCount;
-[elementPositions, elementSizes] = makeElementGeometry(arrayKind, rowCount, columnCount);
+elementCount = size(transmitGeometry, 2);
 simulation = ekhos.Simulation();
-simulation.Cumulative = false;
+simulation.Cumulative = true;
 simulation.SimulatorType = simulatorType;
 simulation.SamplingFrequency = fs;
 simulation.SpeedOfSound = c;
@@ -200,18 +236,19 @@ simulation.Impulses = {single(impulseResponse)};
 simulation.Excitations = {single(excitation)};
 simulation.Elements = ekhos.RectangularElementSet();
 simulation.Elements.Count = uint32(2 * elementCount);
-simulation.Elements.Positions = single([elementPositions, elementPositions]);
-simulation.Elements.Normals = repmat(single([0; 0; 1]), 1, 2 * elementCount);
-simulation.Elements.Sizes = single([elementSizes, elementSizes]);
-simulation.Elements.Apodizations = ones(1, 2 * elementCount, "single");
-simulation.Elements.Delays = zeros(1, 2 * elementCount, "single");
+simulation.Elements.Positions = single([transmitGeometry(8:10, :), receiveGeometry(8:10, :)]);
+simulation.Elements.Normals = single([tangentsToNormals(transmitGeometry(8:10, :)), ...
+    tangentsToNormals(receiveGeometry(8:10, :))]);
+simulation.Elements.Sizes = single([transmitGeometry(3:4, :), receiveGeometry(3:4, :)]);
+simulation.Elements.Apodizations = single([transmitGeometry(5, :), receiveGeometry(5, :)]);
+simulation.Elements.Delays = single([transmitGeometry(23, :), receiveGeometry(23, :)]);
 
 transmissions = ekhos.TransmissionSet();
 transmissions.Count = uint32(transmissionCount);
 transmissions.ElementCounts = repmat(uint32(elementCount), 1, transmissionCount);
 transmissions.Indices = repmat(int32(1:elementCount), 1, transmissionCount);
-transmissions.Apodizations = ones(1, transmissionCount * elementCount, "single");
-transmissions.Delays = zeros(1, transmissionCount * elementCount, "single");
+transmissions.Apodizations = repmat(single(transmitGeometry(5, :)), 1, transmissionCount);
+transmissions.Delays = repmat(single(transmitGeometry(23, :)), 1, transmissionCount);
 transmissions.Impulse = ones(1, transmissionCount, "uint16");
 transmissions.Excitation = ones(1, transmissionCount, "uint16");
 simulation.Transmissions = transmissions;
@@ -220,9 +257,10 @@ receiveChannelCount = elementCount / receiveGroupSize;
 receiveChannels = ekhos.ReceiveChannelSet();
 receiveChannels.Count = uint32(receiveChannelCount);
 receiveChannels.ElementCounts = repmat(uint32(receiveGroupSize), 1, receiveChannelCount);
-receiveChannels.Indices = int32(elementCount + reshape(reshape(1:elementCount, receiveGroupSize, [])', 1, []));
-receiveChannels.Apodizations = ones(1, elementCount, "single");
-receiveChannels.Delays = zeros(1, elementCount, "single");
+receiveChannels.Indices = int32(elementCount + makeReceiveIndices(...
+    receiveGeometry, receiveGroupSize));
+receiveChannels.Apodizations = single(receiveGeometry(5, :));
+receiveChannels.Delays = single(receiveGeometry(23, :));
 receiveChannels.Impulse = ones(1, receiveChannelCount, "uint16");
 simulation.ReceiveChannels = receiveChannels;
 
@@ -232,17 +270,30 @@ simulation.Scatters.Positions = single(scatterPositions);
 simulation.Scatters.Amplitudes = single(scatterAmplitudes);
 end
 
-function [positions, sizes] = makeElementGeometry(arrayKind, rowCount, columnCount)
-if strcmp(arrayKind, "linear")
-    [xGrid, yGrid] = meshgrid(((0:columnCount - 1) - (columnCount - 1) / 2) * (2.2e-4 + 3e-5), ...
-        ((0:rowCount - 1) - (rowCount - 1) / 2) * (2.2e-4 + 3e-5));
-    positions = [reshape(xGrid, 1, []); reshape(yGrid, 1, []); zeros(1, rowCount * columnCount)];
-else
-    [xGrid, yGrid] = meshgrid(((0:columnCount - 1) - (columnCount - 1) / 2) * (2.2e-4 + 3e-5), ...
-        ((0:rowCount - 1) - (rowCount - 1) / 2) * (2.2e-4 + 3e-5));
-    positions = [reshape(xGrid, 1, []); reshape(yGrid, 1, []); zeros(1, rowCount * columnCount)];
+function normals = tangentsToNormals(tangents)
+normals = [tangents(2, :)./sqrt(1 + tangents(2, :).^2);
+    tangents(1, :)./sqrt(1 + tangents(1, :).^2);
+    sqrt(1 - (tangents(1, :).^2).*(tangents(2, :).^2))./sqrt(1 + tangents(1, :).^2)./sqrt(1 + tangents(2, :).^2)];
 end
-sizes = repmat(single([2.2e-4; 2.2e-4]), 1, size(positions, 2));
+
+function indices = makeReceiveIndices(receiveGeometry, receiveGroupSize)
+if receiveGroupSize == 1
+    indices = 1:size(receiveGeometry, 2);
+    return;
+end
+xPositions = receiveGeometry(8, :);
+uniqueXPositions = unique(xPositions, "stable");
+indices = zeros(1, numel(uniqueXPositions) * receiveGroupSize);
+writeIndex = 1;
+for xPosition = uniqueXPositions
+    group = find(abs(xPositions - xPosition) < eps(max(abs(xPosition), 1)));
+    if numel(group) ~= receiveGroupSize
+        error("Expected %d receive subelements at x=%g, found %d.", ...
+            receiveGroupSize, xPosition, numel(group));
+    end
+    indices(writeIndex:writeIndex + receiveGroupSize - 1) = group;
+    writeIndex = writeIndex + receiveGroupSize;
+end
 end
 
 function grouped = groupSignals(data, groupSize)
